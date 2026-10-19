@@ -1,0 +1,3 @@
+[submodule "sea"]
+	path = sea
+	url = https://github.com/frgmt0/Sea.git
