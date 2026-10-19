@@ -1,0 +1,6 @@
+# Test fixtures are byte-exact (CRLF must survive commit); do not normalize them.
+tests/**/*.in  -text
+tests/**/*.out -text
+tests/**/*.err -text
+tests/**/*.bas -text
+tests/**/*.ir  -text
