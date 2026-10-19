@@ -1,3 +1,5 @@
+[![CI](https://github.com/frgmt0/Baysick/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/frgmt0/Baysick/actions/workflows/ci.yml)
+
 # Baysick
 
 Baysick is a faithful re-implementation of **Dartmouth BASIC, First Edition (1964)** — the

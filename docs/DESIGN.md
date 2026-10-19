@@ -193,10 +193,28 @@ Driver messages (stderr, exact text, `%s` substituted, `%d` decimal):
 | 4 | `baysick: out of memory` |
 | — | `baysick: temporary files kept in %s` (informational, with `--keep-temps`) |
 
+Details:
+
+* `cannot determine macOS SDK path` also covers `xcrun` itself failing to start (spawn
+  error), exiting non-zero, printing nothing, and an SDK path that fails validation (§4.5).
+* A tool killed by signal *n* is reported as `'%s' failed with exit status %d` with
+  status 128+*n* (e.g. 143 for SIGTERM).
+* A write failure on standard output under `--emit-ir` (no `-o`) is
+  `baysick: cannot write '<stdout>': %s`, exit 2.
+* The compiler ignores `SIGPIPE` (`signal(SIGPIPE, SIG_IGN)` first thing in `_main`), so a
+  closed stdout/stderr makes `write` fail with `EPIPE` instead of killing the process. Spawned
+  tools get `SIGPIPE` reset to its default action (`POSIX_SPAWN_SETSIGDEF`).
+* **Cleanup before diagnostics:** once the temporary directory exists, every failure path
+  removes it (unless `--keep-temps`) *before* writing its message: tool failure, `cannot run`,
+  `cannot write` for `prog.s`, `internal error` and `out of memory` (`_drv_fatal` / `_drv_oom`
+  use the path recorded in driver state, `_drv_tmp_dir` / `_drv_tmp_asm` / `_drv_tmp_obj` in
+  `toolchain.s`). A failing diagnostic write therefore can never leak the directory.
+
 ### 4.3 Default-mode steps
 
-1. Read the input file completely (`open`/`fstat`/`read`). Files over 1 MiB are still read; the
-   frontend reports `PROGRAM TOO LONG`.
+1. Read the input file (`open`/`fstat`/`read`) to EOF, but at most `LIM_SOURCE_BYTES` + 1
+   bytes: reading stops there, the frontend sees a length over the limit and reports
+   `PROGRAM TOO LONG` (so `baysick /dev/zero` fails fast instead of exhausting memory).
 2. `_ir_module_new`, `_fe_compile`. On error print the BASIC message, exit 1.
 3. `_ir_verify`; failure → internal error.
 4. `BKD_EMIT(module, outbuf)`.
@@ -204,8 +222,10 @@ Driver messages (stderr, exact text, `%s` substituted, `%d` decimal):
    `/tmp` if `TMPDIR` is unset or empty). Files: `prog.s`, `prog.o` (suffixes from the
    descriptor).
 6. Write `prog.s`; spawn the assembler argv, then the linker argv (placeholders substituted,
-   §5.2) with `posix_spawnp`, inheriting stdin/stdout/stderr; `waitpid`. Non-zero status →
-   exit 3 after cleanup.
+   §5.2) with `posix_spawnp`, inheriting stdin/stdout/stderr and the environment **with every
+   `SDKROOT=` entry removed** (the SDK reaches `ld` explicitly through `-syslibroot`, so a stray
+   `SDKROOT` can never reach the `/usr/bin` xcrun shims); `waitpid`. Non-zero status → cleanup,
+   then the message, exit 3.
 7. Unless `--keep-temps`: unlink the files, `rmdir` the directory.
 
 ### 4.4 Locating the runtime library
@@ -222,8 +242,14 @@ If the file does not exist (`access(R_OK)` fails) → exit 3.
 
 `PH_SDK` is `$SDKROOT` if set and non-empty; otherwise the first line of the standard output of
 `xcrun --show-sdk-path` (spawned with stdout redirected to a pipe via
-`posix_spawn_file_actions_adddup2`; trailing LF removed). Failure → exit 3. The SDK path is only
-computed if a template contains `PH_SDK`.
+`posix_spawn_file_actions_adddup2`; trailing LF removed; same `SDKROOT`-free environment and
+`SIGPIPE` reset as the other tools, §4.3). Whichever source it came from, the path is
+**validated**: `access("<sdk>/SDKSettings.plist", R_OK)` or, failing that,
+`access("<sdk>/SDKSettings.json", R_OK)` must succeed. Any failure (xcrun cannot be spawned,
+exits non-zero, prints nothing, or validation fails) → `baysick: cannot determine macOS SDK
+path`, exit 3, before `as` or `ld` is spawned. The SDK path is only computed if a template
+contains `PH_SDK`; the `as` spawn is protected regardless because `SDKROOT` is never passed to
+any tool.
 
 ## 5. Backend interface
 
@@ -393,8 +419,8 @@ All AAPCS64. "Error" means `_bsk_err(code)` is called and the function does not 
 | `_bsk_aref2` | x0 desc, d0 i, d1 j | x0 addr | both subscripts checked; address of (ri, rj) |
 | `_bsk_gosub_push` | x0 code address | — | depth 1024 → error 39 |
 | `_bsk_gosub_pop` | — | x0 code address | empty → error 33 |
-| `_bsk_end` | — | noreturn | pending-line newline, flush stdout, `exit(0)` |
-| `_bsk_err` | w0 code | noreturn | pending-line newline, flush stdout, write `<MESSAGE> IN <_bsk_curline>` + LF to fd 2, `exit(1)` (code 34 exits 0) |
+| `_bsk_end` | — | noreturn | pending-line newline, flush stdout, `exit(0)`; `exit(1)` instead if a stdout write failed earlier (`_bsk_rt_broken`) |
+| `_bsk_err` | w0 code | noreturn | precondition: code is a run-time error code (ERR_* 32..39); any other code exits 1 with no message. Pending-line newline, flush stdout, write `<MESSAGE> IN <_bsk_curline>` + LF to fd 2, `exit(1)` (code 34 exits 0, unless a stdout write failed earlier, then 1) |
 
 The comparison in `_bsk_aref*` is done on the rounded double before conversion to an integer, so
 huge or negative subscripts can never wrap. Stdout is written with `write(1, …)`; the buffer is

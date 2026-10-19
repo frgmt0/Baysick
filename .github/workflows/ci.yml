@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  macos-arm64:
+    # macos-14 is an Apple Silicon (arm64) runner with a stable Xcode CLT
+    # toolchain (as, ld, ar, xcrun). Baysick targets macOS/arm64 and the
+    # Makefile passes -mmacosx-version-min=11.0, which any current SDK supports.
+    # Pinned to macos-14 rather than a -latest label so toolchain changes
+    # happen on our schedule, not GitHub's.
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain info
+        run: |
+          uname -m
+          xcrun --show-sdk-path
+          as --version
+
+      - name: Check include files
+        run: make check-includes
+
+      - name: Build
+        run: make
+
+      - name: Test
+        # tests/run.sh creates its temp dir with mktemp and removes it on exit,
+        # so there is nothing left over to upload; build/ is the useful artifact.
+        run: make test
+
+      - name: Upload build directory on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-macos-arm64
+          path: build/
+          if-no-files-found: ignore

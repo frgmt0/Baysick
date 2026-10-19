@@ -226,7 +226,7 @@ raised `OVERFLOW`), all six relations behave as in mathematics.
 | Function | Result | Errors |
 |----------|--------|--------|
 | `SIN(X)` `COS(X)` `TAN(X)` | libm `sin cos tan` of X radians | OVERFLOW if not finite |
-| `ATN(X)` | libm `atan(X)`, radians in (−π/2, π/2) | — |
+| `ATN(X)` | libm `atan(X)`, radians in (−π/2, π/2) | — (result always finite) |
 | `EXP(X)` | libm `exp(X)` | OVERFLOW (e.g. `EXP(710)`) |
 | `ABS(X)` | `|X|` | — |
 | `LOG(X)` | libm `log(|X|)` ([M64] p. 11) | `X = 0` → `LOG OF ZERO` |
@@ -511,6 +511,13 @@ Examples (field shown between brackets; `·` = space):
 calling statement). **Baysick decision:** running out of data is the normal way 1964 programs
 finished ([M64] p. 7: "the program is assumed to be done"), so it exits 0, but the message is
 still written to stderr so it is visible. Programs never read stdin.
+
+**Baysick decision:** if writing stdout fails (any `write` error other than `EINTR`, or a write
+that transfers 0 bytes), the runtime silently discards all further stdout output and the
+program's exit status becomes **1** even after END, STOP or OUT OF DATA (a run-time error
+still exits 1 and its stderr message is still written); nothing extra is printed. Rationale:
+output was lost, so success must not be reported, and stderr stays reserved for BASIC errors.
+(A closed pipe normally raises `SIGPIPE`, which ends the process before this applies.)
 
 ### 10.1 Compiler diagnostics
 
