@@ -5,15 +5,33 @@ observable behaviour of compiled programs (standard output bytes, standard error
 status). Where this document and any other document disagree, this one wins for language
 behaviour; `docs/IR.md` wins for IR details; `docs/DESIGN.md` wins for module boundaries and ABI.
 
-Baysick implements **Dartmouth BASIC, First Edition** (first run 1 May 1964). Sections marked
-**Baysick decision:** are places where the 1964 behaviour is unknown, impractical on a modern
-machine, or deliberately extended; each states the choice and why.
+Baysick implements **Dartmouth BASIC, Second Edition** as documented in the manual of
+1 October 1964 ([M64]): the fifteen statements of the First Edition (first run 1 May 1964), the
+Second Edition's zero-based subscripts and `;` packing, and the Second Edition's **MAT** matrix
+statements (§7.14). Sections marked **Baysick decision:** are places where the 1964 behaviour is
+unknown, impractical on a modern machine, or deliberately extended; each states the choice and
+why.
+
+**Edition and language level.** [M64] *is* the Second Edition manual (Dartmouth's
+"version 2" manual of October 1964, [W]; bitsavers files the same document as
+`dartmouth/dtss/196410_BASIC.pdf`). It documents subscripts from 0 (p. 36–38) and the `;`
+packed format (p. 34–35) — both Second Edition changes, already part of Baysick — and, in
+chapter IV "Card BASIC" (p. 50–52), the MAT statements. There is therefore exactly one language
+level and **no `--edition` flag**: MAT is always accepted. **Baysick decision**, rationale: a
+statement beginning with `MAT` was `ILLEGAL INSTRUCTION` before, so every program that compiled
+before compiles to the same program and prints the same bytes; a flag would only select between
+two spellings of the same error. The other CARDBASIC differences of [M64] §4.2–4.3 (`'` for `"`,
+`EQU`/`LSS`/… relations, a 5-8 multiple punch for `;`, an unnumbered data deck after END, the
+`PAGE` statement, line-printer widths) are artefacts of punched cards and the line printer, not of
+the language, and are not implemented (`PAGE` is `ILLEGAL INSTRUCTION`).
 
 ## 0. Sources
 
 | Ref | Source |
 |-----|--------|
-| [M64] | *BASIC — A Manual for BASIC, the elementary algebraic language designed for use with the Dartmouth Time Sharing System*, Dartmouth College Computation Center, 1 October 1964. Scan: <https://alandix.com/wp-content/uploads/2021/07/BASIC_Oct64.pdf>. Catalog entry: <https://exhibits.library.dartmouth.edu/s/OnSolidGround/item/89>. This is the earliest widely available printing of the First Edition manual; it documents the language as implemented in 1964 (the May 1964 typescript is not publicly scanned). Page numbers below are the manual's own. |
+| [M64] | *BASIC — A Manual for BASIC, the elementary algebraic language designed for use with the Dartmouth Time Sharing System*, Dartmouth College Computation Center, 1 October 1964. Scan: <https://alandix.com/wp-content/uploads/2021/07/BASIC_Oct64.pdf>. Catalog entry: <https://exhibits.library.dartmouth.edu/s/OnSolidGround/item/89>. This is the Second Edition ("version 2") manual, also at <https://www.bitsavers.org/pdf/dartmouth/dtss/196410_BASIC.pdf>; it is the earliest widely available printing and documents the language as implemented in 1964 (the May 1964 First Edition typescript is not publicly scanned). Page numbers below are the manual's own. |
+| [M68] | *BASIC*, 4th Edition, Dartmouth College Computation Center, January 1968. Scan: <https://www.bitsavers.org/pdf/dartmouth/dtss/196801_BASIC_4th_Edition.pdf>. §2.6 "Matrices" (p. 53–62) and §2.8 "Error Messages" (p. 70–74). Used for MAT details that [M64]'s one-page summary leaves open; every use is labelled. |
+| [W] | Wikipedia, "Dartmouth BASIC" (edition history; cites Kurtz, "BASIC", *History of Programming Languages I*, ACM 1981, p. 526, for the October 1964 Second Edition and CARDBASIC's MAT). Secondary source: used only for dates and edition names, not for semantics. |
 | [E55] | ECMA-55 *Minimal BASIC* (1978), used only where [M64] is silent, to pick a well-known convention. |
 
 Key facts taken directly from [M64] and therefore *not* Baysick decisions:
@@ -36,7 +54,21 @@ Key facts taken directly from [M64] and therefore *not* Baysick decisions:
   remain (p. 34–35);
 * error message wording and the `<MESSAGE> IN <line>` format (p. 23–24, 53–54);
 * a READ with no data left ends the program (p. 7, 27);
-* a line typed again replaces the old one; a line number alone deletes the line (p. 21).
+* a line typed again replaces the old one; a line number alone deletes the line (p. 21);
+* MAT ([M64] §4.4, p. 51–52): `MAT READ A(M,N)`, `MAT PRINT A`, `MAT C = A + B`, `A - B`,
+  `A * B`, `ZER(M,N)`, `CON(M,N)`, `IDN(N)`, `TRN(A)`, `INV(A)`, `(K)*A` ("note parentheses");
+  dimensions may be formulas; a list in a MAT statement is a column vector and MAT PRINT prints
+  vectors as rows; `MAT PRINT A;` prints in the packed format.
+
+Facts taken from [M68] (1968) where [M64] is silent, adopted as Baysick rules: MAT ignores row 0
+and column 0 and numbers rows and columns from 1 (p. 54); without DIM a matrix may have up to 10
+rows and 10 columns (p. 54); ZER/CON/IDN with or without new dimensions, and `MAT B = A`
+(p. 53–58); redimensioning is limited by the storage `(b1+1)·(b2+1)` of the DIM and reinterprets
+the stored numbers (p. 55–56); the separator after each matrix in MAT PRINT selects its format
+(p. 53, 56); `MAT A = A + B` and `MAT A = (K)*A` are legal (p. 58–59); a dimension mismatch is the
+run-time error `DIMENSION ERROR` (p. 73). Not adopted from [M68]: `DET` and `NUM` (they do not
+exist in [M64]), `MAT INPUT` (no INPUT in this edition), and the 1968 compile errors for
+`MAT A = A * B` / `MAT A = TRN(A)` (Baysick computes them correctly instead, §7.14.4).
 
 ---
 
@@ -87,10 +119,10 @@ line number (the *statement text*).
 
 ## 3. Statements and keyword recognition
 
-3.1. The statement text must begin with one of the fifteen keywords, tested **in this order** as
+3.1. The statement text must begin with one of the sixteen keywords, tested **in this order** as
 a prefix of the statement text:
 
-`LET PRINT END READ DATA GOTO IF FOR NEXT GOSUB RETURN DEF DIM REM STOP`
+`LET PRINT END READ DATA GOTO IF FOR NEXT GOSUB RETURN DEF DIM REM STOP MAT`
 
 No keyword is a prefix of another, so the order only matters for documentation. The first match
 determines the statement; the remaining text is parsed by that statement's grammar (§7). If none
@@ -287,8 +319,8 @@ READ target { "," target }
 ```
 Each target receives the next DATA value (§7.5) in order. For array targets the subscripts are
 evaluated immediately before that element's value is taken. If no value remains, the program
-ends with `OUT OF DATA IN n` on stderr and **exit status 0** (§10). A program containing READ but
-no DATA values → compile error `NO DATA`.
+ends with `OUT OF DATA IN n` on stderr and **exit status 0** (§10). A program containing READ or
+MAT READ but no DATA values → compile error `NO DATA`.
 
 ### 7.5 DATA
 ```
@@ -401,21 +433,282 @@ Sets the upper bound of each subscript (lower bound is always 0). DIM is a compi
 declaration: it applies to the whole program regardless of where it appears ([M64] p. 38;
 Baysick decision for "regardless of position"). Arrays not mentioned in a DIM have bound 10 in
 each subscript. The dimensionality (list/table) of a letter is fixed by its first appearance in
-ascending line order (DIM or use).
+ascending line order (DIM or use); a `MAT READ X(e)` / `MAT READ X(e,f)` target counts as a use
+as a list / table, every other MAT reference names the whole array and fixes nothing. A letter
+whose dimensionality is still unknown after the whole program (it appears only as a bare name in
+MAT statements) is a **table with bounds 10, 10** ([M68] p. 54: "matrices up to 10 rows and 10
+columns").
+
+The bounds given by DIM (or the default 10) are the *initial* bounds and fix the array's
+**storage**: `(b1+1)·(b2+1)` elements for a table, `b1+1` for a list. MAT statements may change
+the *current* bounds within that storage (redimensioning, §7.14.3).
 
 Errors: not a single letter → `ILLEGAL VARIABLE`; other syntax → `INCORRECT FORMAT`; bound with
 more than 7 digits or more than **1 000 000** elements → `DIMENSION TOO LARGE IN n`; second DIM of
 the same letter → `DUPLICATE DIMENSION IN n`; dimensionality conflict → `ILLEGAL VARIABLE IN n`.
 
 **Subscripts at run time:** a subscript value `s` is converted to the integer
-`floor(s + 0.5)` (round half up, as [E55]); it must lie in `0..bound`, else
-`SUBSCRIPT ERROR IN n`. Elements are stored row-major.
+`floor(s + 0.5)` (round half up, as [E55]); it must lie in `0..bound`, where *bound* is the
+**current** bound (the DIM/default bound until a MAT statement redimensions the array), else
+`SUBSCRIPT ERROR IN n`. Elements are stored row-major with the current row length: element
+`(i, j)` of a table whose current second bound is `c` is storage element `i·(c+1) + j`; element
+`i` of a list is storage element `i`.
 
 ### 7.12 REM
 `REM` followed by anything. No effect.
 
 ### 7.13 STOP
 `STOP` with nothing after it. Terminates the run exactly like END ([M64] p. 45).
+
+### 7.14 MAT (matrix statements)
+
+The Second Edition's matrix statements ([M64] §4.4, p. 51–52; details from [M68] §2.6 where
+labelled). Every MAT statement operates on whole arrays.
+
+#### 7.14.1 Matrices and vectors
+
+* A **table** whose current bounds (§7.11) are `r, c` is the `r × c` matrix of its elements
+  `(i, j)`, `1 ≤ i ≤ r`, `1 ≤ j ≤ c`. Row 0 and column 0 are not part of the matrix: MAT
+  statements never read or assign them ([M68] p. 54: "the MAT instructions ignore these").
+  **Baysick decision:** [M64] p. 51 says CARDBASIC matrices "must start with component 1
+  (not 0)" because CARDBASIC arrays had no element 0; Baysick keeps element 0 (its arrays are
+  the teletype language's, [M64] p. 38) and adopts the [M68] convention.
+* A **list** whose current bound is `n` is the `n × 1` matrix (column vector) of its elements
+  `1 … n` ([M64] p. 52: "MAT READ A(7) will read a 7-component column vector"). Element 0 is not
+  part of it. A list can only hold matrices with one column.
+* A matrix with a zero dimension (only possible through `DIM X(0)`, `DIM X(0, n)` or
+  `DIM X(n, 0)`) cannot be used: a MAT statement that needs its current shape (any operand; the
+  target of MAT READ, ZER, CON or IDN without dimensions; a MAT PRINT item) stops with
+  `DIMENSION ERROR`.
+
+#### 7.14.2 Grammar and compile-time errors
+
+On the compacted statement text (spaces are insignificant, §2):
+
+```
+mat-statement := "MAT" ( mat-read | mat-print | mat-assign )
+mat-read      := "READ" mat-target { "," mat-target }
+mat-target    := name [ "(" expression [ "," expression ] ")" ]
+mat-print     := "PRINT" name { sep name } [ sep ]           sep := "," | ";"
+mat-assign    := name "=" rhs
+rhs           := name                                         copy
+               | name ( "+" | "-" | "*" ) name                sum, difference, product
+               | "(" expression ")" "*" name                  scalar multiple
+               | ( "ZER" | "CON" ) [ "(" expression [ "," expression ] ")" ]
+               | "IDN" [ "(" expression ")" ]
+               | ( "TRN" | "INV" ) "(" name ")"
+name          := letter                                       not followed by a digit
+```
+
+Recognition: after `MAT`, text starting with `READ` is a MAT READ, else text starting with
+`PRINT` is a MAT PRINT, else it is an assignment (so `MAT R = …` and `MAT P = …` are
+assignments). In `rhs`, the names `ZER`, `CON`, `IDN` are recognised first, then `TRN` and `INV`
+when immediately followed by `(`, then `(`, then a name. Only one operation is allowed per
+statement ([M68] p. 58: `MAT D = A + B - C` "is illegal"), and the constant multiple needs its
+parentheses ([M64] p. 52: "note parentheses").
+
+| Error | When |
+|-------|------|
+| `ILLEGAL VARIABLE` | a name is required and the text there is not a letter (`MAT = A`, `MAT READ`, `MAT PRINT A,,B`), or is a letter followed by a digit (`MAT C = A1 + B`); a `MAT READ` target's dimensionality conflicts with the letter's (§4.2, e.g. `DIM A(5)` and `MAT READ A(2,2)`) |
+| `INCORRECT FORMAT` | `=` missing after the target; a right-hand side not of the forms above (`MAT C = 2*A`, `MAT C = SIN(A)`, `MAT D = A + B - C`, `MAT C = (2)A`, `MAT C = TRN A`, `MAT C = A(1)`); `)` missing after the name in TRN/INV; anything other than `,`, `;` or end of line after a MAT PRINT name (`MAT PRINT A(1)`); text left over at the end; `MATRIX = 1` (an assignment to `R` whose `=` is missing) |
+| `ILLEGAL FORMULA` | inside a dimension list or IDN's argument list exactly as in a subscript list (§5.2): a missing `)`, a third dimension, a second argument to IDN; inside `( expression )` of the scalar multiple as for a parenthesised expression; any other §5 error in an expression |
+| `FORMULA TOO COMPLEX`, `ILLEGAL CONSTANT` | as in any expression (the `(` of a dimension list, of IDN's argument and of the scalar multiple count toward the depth limit, §5.1) |
+| `NO DATA` | MAT READ (or READ) present, no DATA values (§7.4) |
+
+#### 7.14.3 Dimensions and redimensioning
+
+**Dimension arguments** (MAT READ targets, ZER, CON, IDN) are evaluated left to right when the
+statement executes and converted like subscripts (§7.11): `d = floor(x + 0.5)`. A value with
+`x < 0.5` (so `d < 1`) → `DIMENSION ERROR`. `ZER(r)` / `CON(r)` / `MAT READ X(r)` mean the shape
+`r × 1`; `IDN(n)` means `n × n`.
+
+**Redimensioning** a target X to a shape `r × c` (`r, c ≥ 1`) requires, with *S* the storage of X
+(§7.11: `(b1+1)·(b2+1)` elements of the DIM or default bounds):
+
+* X a list: `c = 1` and `r + 1 ≤ S`;
+* X a table: `(r + 1)·(c + 1) ≤ S` ([M68] p. 56: "although the zero rows and columns are ignored
+  in MAT instructions they play a role in determining dimension limits");
+
+otherwise `DIMENSION ERROR`. The effect is only that the current bounds become `r` (list) or
+`r, c` (table, row length `c + 1`). **No stored number is moved, cleared or converted**: the
+storage is reinterpreted with the new row length, exactly the "relocation" of [M68] p. 56 (after
+`LET M(1,0) = 1` and `MAT READ M(2,2)` on a 10 × 10 table, `M(1,0)` is 0, because it is now
+storage element 3). Elements in row 0 and column 0 under the new shape hold whatever that
+storage held. Ordinary subscripts are checked against the current bounds afterwards.
+
+Redimensioning happens in: MAT READ with dimensions; ZER, CON, IDN with arguments; and every
+assignment of a computed result (copy, `+`, `-`, `*`, `(K)*`, TRN, INV), which gives the target
+the result's shape. `ZER`, `CON`, `IDN` and `MAT READ X` without dimensions use X's current
+shape. Example ([M68] p. 55): with `DIM M(20,7)` (storage 21·8 = 168), `MAT M = ZER(15,7)` fits
+(16·8 = 128) but `MAT M = ZER(16,10)` (17·11 = 187) stops with `DIMENSION ERROR`.
+
+#### 7.14.4 Statements
+
+**MAT READ** `X1, X2, …`: for each target in order: its dimension arguments are evaluated and
+the target is redimensioned (if it has them), then its elements receive the next DATA values row
+by row — `(1,1) … (1,c), (2,1) …` — or `1 … n` for a list. Running out of data ends the program
+exactly like READ (`OUT OF DATA IN n`, exit 0; §7.4); the elements read before stay stored.
+
+**MAT PRINT**: §7.14.5.
+
+**ZER, CON**: dimension arguments (if any) evaluated and the target redimensioned; then every
+element of the target's matrix is set to 0 (ZER) or 1 (CON).
+**IDN**: the argument (if any) evaluated and the target redimensioned to `n × n`; the target's
+current shape must be square (else `DIMENSION ERROR`); then diagonal elements are set to 1 and
+the others to 0.
+
+**Assignments with operands**, in this order:
+
+1. The scalar expression of `(K)*A`, if any, is evaluated.
+2. Every operand must have a usable shape (§7.14.1) and the operands must conform, else
+   `DIMENSION ERROR`:
+
+   | Form | Requirement | Result shape |
+   |------|-------------|--------------|
+   | `MAT B = A` | — | shape of A |
+   | `MAT C = A + B`, `MAT C = A - B` | A and B have the same shape | that shape |
+   | `MAT C = A * B` | columns of A = rows of B | rows of A × columns of B |
+   | `MAT C = (K)*A` | — | shape of A |
+   | `MAT C = TRN(A)` | — | columns of A × rows of A |
+   | `MAT C = INV(A)` | A square | shape of A |
+
+   A list operand is `n × 1`, so `MAT W = A * V` (A `m × n`, V a list of n) gives an `m × 1`
+   result that fits a list, and `MAT T = TRN(V)` gives a `1 × n` table.
+3. The target must be able to take the result shape (§7.14.3), else `DIMENSION ERROR`.
+4. The result is computed from the operands' values **as if into a separate temporary**:
+   the target may also be an operand (`MAT A = A * A`, `MAT A = TRN(A)`, `MAT B = INV(B)`,
+   `MAT A = A + B` all give the mathematically intended result). Element arithmetic: `+`, `-`
+   and `(K)*` are one IEEE operation per element (`a + b`, `a − b`, `K·a`); copy and TRN copy
+   values exactly; the product is defined in §7.14.7; INV in §7.14.6.
+5. If any result element is ±infinity or NaN → `OVERFLOW` (§5.4).
+6. The target is redimensioned to the result shape and receives the result.
+
+Only elements of the target's (new) matrix are assigned; row 0, column 0 and scalar variables
+are never changed by a MAT statement. A run-time error leaves the program stopped, so a partly
+assigned target is never observable.
+
+**Baysick decision (aliasing):** [M64] says nothing; [M68] p. 59 warns that `MAT A = A * B`
+"will result in nonsense", and its error list (p. 72) rejects `MAT A = A * B` and
+`MAT A = TRN(A)` at compile time (`ILLEGAL MAT MULTIPLE`, `ILLEGAL MAT TRANSPOSE`). Baysick
+computes them correctly instead; every program the 1968 system accepted behaves identically.
+
+#### 7.14.5 MAT PRINT layout
+
+MAT PRINT uses the §8 column logic and the §9 number format. Each item is printed **zoned** if
+the separator right after it is `,` or there is none, **packed** if it is `;` ([M68] p. 53, 56:
+`MAT PRINT A, B; C` prints A and C "in the regular format" and B "closely packed"; [M64] p. 52).
+For each item, in order:
+
+1. If it is not the first item of the statement: newline (so one empty line separates two
+   matrices of the same statement).
+2. If `col ≠ 0`: newline (a matrix always starts on a new line).
+3. A table `r × c`: for each row `i = 1 … r`: for each `j = 1 … c`, a §8 number item for element
+   `(i, j)` (including the "fewer than 12 columns left" rule), followed — if `j < c` — by the §8
+   `,` rule (zoned) or the §8 `;`-after-a-number rule (packed); after the row, newline.
+   A list of n elements is printed as **one row** of n numbers ([M64] p. 52: "MAT PRINT prints
+   all vectors as row-vectors, for convenience").
+
+A statement therefore always ends at column 0; a trailing separator selects the format of the
+last item and does not continue the line. Zoned rows hold five numbers per line and continue on
+the next line ([M68] p. 56: "five components to a line"); every row starts on a new line.
+
+Example — the [M68] p. 60 program `MATRIX` (A is `2 × 3`, B is `3 × 3`):
+
+```
+40 MAT C = A + A
+50 MAT PRINT C;
+60 MAT C = A*B
+70 PRINT
+75 PRINT "A*B =",
+80 MAT PRINT C
+```
+
+prints (`·` = space; nothing is printed after the last visible character of a line):
+
+```
+·2·····4·····6
+·8·····10····12
+
+A*B·=
+-2·············-2·············-3
+-2·············-5·············-9
+```
+
+**Baysick decisions:** (a) [M68] p. 60 shows the rows of one matrix on consecutive lines; how
+the matrices of one statement were separated is not shown; Baysick separates them with one empty
+line. (b) In the same run the packed row reads ` 2  4  6` — a number field that ends exactly on a
+multiple of three is followed directly by the next. Baysick applies its §8 `;` rule ("next
+multiple of three strictly to the right", which reproduces [M64] p. 35 exactly) to MAT PRINT as
+well, so packed fields are spaced as in PRINT. (c) [M68] prints a list as a column unless a
+separator follows it; Baysick follows [M64] (always a row).
+
+#### 7.14.6 INV
+
+`MAT C = INV(A)` computes the inverse of the `n × n` matrix A by **Gauss–Jordan elimination with
+partial pivoting**, exactly as follows (W is a working copy of A, X starts as the identity; both
+`n × n`; all values doubles):
+
+```
+m   := max |A(i,j)|                    over all i, j
+tol := (n · 2^-52) · m                 (n · 2^-52 is exact; one rounding)
+for p = 1 .. n:
+    r := p;  best := |W(p,p)|
+    for i = p+1 .. n:
+        if |W(i,p)| > best:  r := i;  best := |W(i,p)|
+    if best <= tol:  stop with SINGULAR MATRIX
+    if r ≠ p:  exchange rows p and r of W, and rows p and r of X
+    d := W(p,p)
+    if d is ±infinity or NaN:  stop with OVERFLOW
+    for j = p+1 .. n:  W(p,j) := W(p,j) / d
+    for j = 1 .. n:    X(p,j) := X(p,j) / d
+    for i = 1 .. n, i ≠ p:
+        f := W(i,p)
+        for j = p+1 .. n:  W(i,j) := W(i,j) - f·W(p,j)
+        for j = 1 .. n:    X(i,j) := X(i,j) - f·X(p,j)
+result := X                            (then the §7.14.4 OVERFLOW check)
+```
+
+Every operation is one IEEE-754 double operation rounded to nearest: `/` is a true division (not
+a multiplication by `1/d`), and `f·W(p,j)` is rounded before the subtraction (**no fused
+multiply-add**). Ties in the pivot search go to the smallest row index. Columns `1 … p` of W are
+never read after step p. The result is therefore **bit-identical on every target and kernel
+variant**, except that the sign of a zero result element is unspecified (an implementation may
+skip any update whose product `f·y` is zero).
+
+**Baysick decision (singular matrices):** [M64] gives neither the method nor the behaviour for a
+singular matrix. [M68] p. 59–60 does not stop and sets `DET` to 0 — but `DET` is not part of the
+Second Edition, so a program could not detect the failure; Baysick stops with
+`SINGULAR MATRIX IN n` (exit 1). The tolerance is relative to the largest element so that a
+singular matrix whose elimination leaves only rounding residue is still reported: for
+`1,2,3 / 4,5,6 / 7,8,9` the last pivot is about −7.8·10⁻¹⁶ against `tol` ≈ 6.0·10⁻¹⁵. The price:
+an invertible matrix whose pivots fall below `n·2⁻⁵²` times its largest element (e.g.
+`1E-20, 0 / 0, 1`) is reported singular too. For the 1968 manual's 4 × 4 Hilbert example
+(p. 61–62, test `mat_inv_hilbert`) Baysick prints `16.`, `-120.`, `240.`, … (the exact inverse
+is integral; the trailing point shows the computed values are not exactly integers), where the
+1968 run shows `16.0001`, `-120.001`, `240.003`, …; the difference reflects the precision of the
+1968 machine's arithmetic (an inference: [M68] does not describe its algorithm).
+
+#### 7.14.7 Matrix product and reproducibility
+
+`MAT C = A * B` sets `C(i,j) = Σ_k A(i,k)·B(k,j)`. The sum is evaluated in an **unspecified
+order** and may use fused multiply-add: each element is the exact sum rounded with at most k
+roundings, so `|ĉ − c| ≤ γ_k · Σ_k |A(i,k)·B(k,j)|` with `γ_k = k·u / (1 − k·u)`, `u = 2⁻⁵³`. For
+a given target and kernel variant (DESIGN.md §6.6) the result is a deterministic function of the
+operand values and shapes — never of addresses, alignment, timing or earlier statements.
+Consequently:
+
+* when every product and every partial sum is exactly representable (for example integers with
+  `Σ_k |A(i,k)·B(k,j)| ≤ 2⁵³`, or such values scaled by a common power of two), the product is
+  exact and identical on every target and variant — the test corpus uses only such products;
+* otherwise results may differ in the last bits between targets or variants (and so, rarely,
+  in the sixth printed digit or in `16` versus `16.`); whether `OVERFLOW` is raised for a
+  product whose partial sums come within a factor k of the overflow threshold may also differ.
+
+**Every other MAT result** (MAT READ, MAT PRINT, ZER, CON, IDN, copy, TRN, `+`, `-`, `(K)*`,
+INV) is bit-identical on every target and variant (INV: up to the sign of zero elements).
+**Baysick decision:** the product is the only operation whose speed depends on reassociation
+(register blocking and FMA), and the only one whose rounding is not a discrete decision; INV's
+pivot choices and singularity test are discrete, so INV is pinned.
 
 ## 8. PRINT output
 
@@ -445,6 +738,7 @@ teletype shows none either).
 * **end of the PRINT statement**: if the last element is not `,` or `;`, newline. `PRINT` alone
   prints an empty line.
 * The column state persists across PRINT statements (a trailing separator continues the line).
+* MAT PRINT (§7.14.5) prints through these same rules.
 * **At program termination** (END, STOP, OUT OF DATA, or any run-time error): if `col ≠ 0`, a
   newline is written to stdout; then stdout is flushed. Run-time error text goes to stderr after
   this flush.
@@ -528,7 +822,7 @@ The compiler stops at the **first** error, determined in this order:
 2. **Statements** in ascending line-number order; within a statement, left to right. All
    per-statement errors (syntax, constants, `END IS NOT LAST`, `NOT MATCH WITH FOR`,
    `TOO MANY LOOPS`, `TOO MUCH DATA`, `TOO MANY LABELS`, DIM errors, `DUPLICATE FUNCTION`,
-   array dimensionality conflicts, `FORMULA TOO COMPLEX`).
+   array dimensionality conflicts, `FORMULA TOO COMPLEX`, MAT syntax errors of §7.14.2).
 3. **Whole program**, in this order: `FOR WITHOUT NEXT`; `NO END INSTRUCTION`; `NO DATA`;
    `UNDEFINED NUMBER` (first offending reference in ascending line order); `UNDEFINED FUNCTION`
    (first reference in ascending line order, DEF bodies included at their DEF line);
@@ -584,8 +878,13 @@ Run-time:
 | 37 | `LOG OF ZERO` | 1 | `LOG(0)` (Baysick) |
 | 38 | `OVERFLOW` | 1 | non-finite arithmetic or builtin result (Baysick) |
 | 39 | `TOO MANY GOSUBS` | 1 | 1025th pending GOSUB (Baysick) |
+| 40 | `DIMENSION ERROR` | 1 | MAT: operands do not conform, a dimension argument below 1, a result or new shape that does not fit the target's storage, a list given more than one column, a matrix with a zero dimension, IDN of a non-square matrix (§7.14; text from [M68] p. 73) |
+| 41 | `SINGULAR MATRIX` | 1 | MAT INV: a pivot not larger than the tolerance (§7.14.6) (Baysick) |
 
 1964 messages not used by Baysick: `CUT PROGRAM OR DIMS` (storage is not limited the 1964 way).
+MAT syntax errors use the existing compile-time messages (§7.14.2); the [M68] messages
+`ILLEGAL MAT FUNCTION`, `ILLEGAL MAT TRANSPOSE`, `ILLEGAL MAT MULTIPLE` and
+`INCORRECT NUMBER OF SUBSCRIPTS` are not used.
 
 ## 12. Limits
 
@@ -601,6 +900,7 @@ Run-time:
 | FOR statements | 1000 | TOO MANY LOOPS |
 | parenthesis depth | 32 | FORMULA TOO COMPLEX |
 | elements per array | 1 000 000 | DIMENSION TOO LARGE |
+| MAT matrix shape | within the array's storage (§7.14.3); square matrices up to 999 × 999 | DIMENSION ERROR |
 | pending GOSUBs | 1024 | TOO MANY GOSUBS |
 
 The 1964 limits ([M64] Appendix B: 300 data, 26 FORs, 1500 array elements, …) are relaxed
@@ -626,3 +926,16 @@ because they reflected GE-225 core memory, not the language.
     `FORMULA TOO COMPLEX`, `TOO MANY GOSUBS` are Baysick messages.
 15. `^` uses `pow(|a|, b)`, so integer powers are exact where IEEE allows (the GE-225 printed
     `4.` for `2↑2`; Baysick prints `4`).
+16. One language level, no `--edition` flag: MAT is always accepted; CARDBASIC card/printer
+    conventions (`PAGE`, `EQU`, `'`, data decks) are not implemented.
+17. MAT follows [M68] where [M64] is silent: row/column 0 ignored, default 10 × 10, ZER/CON/IDN
+    with or without dimensions, `MAT B = A`, redimensioning within the DIM storage by
+    reinterpretation, per-item MAT PRINT format, `DIMENSION ERROR`; letters used only in MAT are
+    10 × 10 tables.
+18. MAT PRINT prints a list as one row ([M64]), separates the matrices of one statement by an
+    empty line, and spaces packed numbers with the §8 `;` rule.
+19. MAT results are computed as if into a temporary, so the target may be an operand.
+20. INV: pinned Gauss–Jordan with partial pivoting; `SINGULAR MATRIX` (fatal) when a pivot is
+    ≤ `n·2⁻⁵²·max|a|`; no `DET`.
+21. Matrix product: unspecified summation order, FMA allowed, deterministic per target and
+    kernel variant; every other MAT result is bit-identical everywhere.

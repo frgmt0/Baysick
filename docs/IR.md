@@ -39,7 +39,7 @@ A **Module** (`IRM_*`, 2192 bytes) holds:
 | `NSLOTS` | number of global variable cells = 286 + 2·NFORS |
 | strings | table of PRINT literals `s0, s1, …` (`IRS_*`: pointer + length, no NUL) |
 | data | the DATA block: `NDATA` doubles as raw IEEE bits, in program order |
-| arrays | 26 entries `IRA_*` (letter A…Z): `DIMS` 0 (unused) / 1 / 2, bounds `B1`, `B2` |
+| arrays | 26 entries `IRA_*` (letter A…Z): `DIMS` 0 (unused) / 1 / 2, bounds `B1`, `B2` (the initial bounds; they fix the storage `(B1+1)·(B2+1)`; MAT statements may change the run-time shape within it, LANGUAGE.md §7.14.3) |
 | funcs | 27 entries `IRF_*`: index 0 = `main`, index 1+L = `FN` letter L; `PRESENT` = 0 if absent |
 
 A **Function** (`IRF_*`) holds a linear array of instructions, its temp count, and a label table
@@ -53,7 +53,7 @@ label per program line plus internal labels; FN functions have no labels.
 | temp | u32 index `0..NTEMPS-1` | `t<n>` |
 | slot | u32 in `IRI_X`: `0..285` user scalars, `286+2k` LIMIT of FOR k, `287+2k` STEP of FOR k | `A`, `X7`, `%lim3`, `%step3` |
 | label | u32 id in `IRI_X` (or `IRI_IMM` for gosub's return label) | `@<line>` for a line label, `L<id>` for an internal label |
-| array | u32 letter 0..25 in `IRI_X` | `A` … `Z` |
+| array | u32 letter 0..25 in `IRI_X`; MAT opcodes also in `IRI_A` / `IRI_B` (§3.1) | `A` … `Z` |
 | function | u32 letter 0..25 in `IRI_X` | `FNA` … `FNZ` |
 | string | u32 id in `IRI_X` | `s<n>` |
 | constant | u64 IEEE-754 bits in `IRI_IMM` | `0x` + 16 uppercase hex digits |
@@ -105,12 +105,37 @@ Each instruction is a 32-byte record (`IRI_*`). "Run-time line" means the value 
 | `prnl` 39 | — | `prnl` | PRINT end-of-statement newline |
 | `end` 40 | — | `end` | normal termination (END) |
 | `stop` 41 | — | `stop` | normal termination (STOP); identical behaviour to `end` |
+| `matredim` 42 | X=array, A=temp, B=temp or none | `matredim A, t0, t1` / `matredim V, t0` | redimension X to A × B (B none: A × 1) per LANGUAGE.md §7.14.3; A, B are rounded like subscripts; DIMENSION ERROR |
+| `matread` 43 | X | `matread A` | MAT READ of X with its current shape (OUT OF DATA termination) |
+| `matprint` 44 | X, IMM=mode | `matprint A, zoned` / `matprint A, packed` | print X per LANGUAGE.md §7.14.5 steps 2–3; IMM = `MATPR_ZONED` 0 / `MATPR_PACKED` 1 |
+| `matzer` 45 `matcon` 46 | X | `matzer A` | every element of X's current matrix := 0 / 1 |
+| `matidn` 47 | X | `matidn A` | X := identity of its current (square) shape; DIMENSION ERROR if not square |
+| `matcopy` 48 | X, A=array | `matcopy B, A` | X := matrix A (redimensions X) |
+| `matadd` 49 `matsub` 50 `matmul` 51 | X, A=array, B=array | `matadd C, A, B` | X := A + B / A − B / A · B (LANGUAGE.md §7.14.4, §7.14.7) |
+| `matscale` 52 | X, A=temp, B=array | `matscale C, t3, A` | X := (A) · matrix B |
+| `mattrn` 53 `matinv` 54 | X, A=array | `mattrn B, A` | X := transpose / inverse of matrix A (§7.14.6) |
 
 Placement rules (checked by the verifier, §6): `param` and `ret` occur only in FN functions;
-`line`, `label`, `jmp`, `jcmp`, `jfor`, `gosub`, `return`, `read`, `pr*`, `end`, `stop`, `stv` to a
-FOR slot occur only in `main`. Every FN function ends with `ret`; `main` ends with `end` (because
+`line`, `label`, `jmp`, `jcmp`, `jfor`, `gosub`, `return`, `read`, `pr*`, `mat*`, `end`, `stop`,
+`stv` to a FOR slot occur only in `main`. Every FN function ends with `ret`; `main` ends with `end` (because
 END must be the last line). Instructions after an unconditional transfer (`jmp`, `return`, `end`,
 `stop`, `ret`) up to the next label are reachable only through labels, as usual.
+
+### 3.1 MAT opcodes
+
+Opcodes 42–54 implement the Second Edition MAT statements (LANGUAGE.md §7.14). Each is one call
+into the runtime (DESIGN.md §6.5), which owns all shape checks, redimensioning, aliasing,
+overflow checks and errors; the IR only names arrays and scalar temps. Field kinds differ per
+opcode: in `matcopy`, `matadd`, `matsub`, `matmul`, `mattrn`, `matinv` the `A` (and `B`) fields
+hold **array letters** (0..25), not temps; `matscale` has a temp in `A` (the scalar) and an
+array letter in `B`; `matredim` has temps in `A` and `B` (`B` = `IR_NONE` for a one-argument
+shape). `X` is always the target array. `DST` and `C` are `IR_NONE` in every MAT opcode; `IMM`
+is 0 except in `matprint`. A MAT statement never defines a temp. The text forms print array
+letters as `A` … `Z` and temps as `t<n>`, operands in field order (`X`, then `A`, then `B`).
+
+Arrays named by MAT opcodes may be lists or tables (the runtime treats a list as an `n × 1`
+matrix); a letter that appears only in MAT statements is a table with `B1 = B2 = 10` in the array
+table (LANGUAGE.md §7.11).
 
 ## 4. Canonical lowering (frontend → IR)
 
@@ -166,6 +191,17 @@ label), then:
 | `READ x1, x2, …` | for each target in order: [subscripts i (, j)]; `tN = read`; then `stv v, tN` or `ast1 L, ti, tN` or `ast2 L, ti, tj, tN` |
 | `END` | `end` |
 | `STOP` | `stop` |
+| `MAT READ X1, X2, …` | for each target in order: if it has dimensions `(r)` or `(r, c)`: r; [c;] `matredim X, tr` or `matredim X, tr, tc`; then `matread X` |
+| `MAT PRINT X1 s1 X2 s2 …` | for each item in order: `prnl` if it is not the first item; `matprint X, packed` if the separator after it is `;`, else `matprint X, zoned` |
+| `MAT X = Y` | `matcopy X, Y` |
+| `MAT X = Y + Z` / `- Z` / `* Z` | `matadd X, Y, Z` / `matsub X, Y, Z` / `matmul X, Y, Z` |
+| `MAT X = (e) * Y` | e; `matscale X, te, Y` |
+| `MAT X = ZER` / `CON` | `matzer X` / `matcon X` |
+| `MAT X = ZER(r)` / `CON(r)` | r; `matredim X, tr`; `matzer X` / `matcon X` |
+| `MAT X = ZER(r, c)` / `CON(r, c)` | r; c; `matredim X, tr, tc`; `matzer X` / `matcon X` |
+| `MAT X = IDN` | `matidn X` |
+| `MAT X = IDN(n)` | n; `matredim X, tn, tn`; `matidn X` |
+| `MAT X = TRN(Y)` / `INV(Y)` | `mattrn X, Y` / `matinv X, Y` |
 | `FOR v = a TO b [STEP c]` (FOR index k) | see below |
 | `NEXT v` (closing FOR k) | see below |
 
@@ -232,6 +268,8 @@ G17 := the value formatted exactly as C printf("%.17g")
 * `funcs=` counts present functions (main + defined FNs). Functions are dumped `main` first, then
   FNA…FNZ in letter order, skipping absent ones.
 * `const` lines end with `" ; " G17` like data lines.
+* MAT opcodes print as in §3 (`matprint A, zoned`, `matscale C, t3, A`, …); see
+  `tests/ir/mat_ops.ir` for every form.
 * Operand separators are `", "` exactly as in the §3 text forms; `=` has one space on each side.
 
 Example (`tests/ir/let_print.bas`):
@@ -288,12 +326,15 @@ endfunc
 The driver runs the verifier on every module before dumping or emitting; a failure is an
 internal error (exit 4). Checks:
 
-1. Every opcode is `< OP_COUNT`; field usage matches §3 (unused fields are `IR_NONE`/0).
-2. Every temp operand is `< NTEMPS` and is defined by an earlier instruction in the same function.
+1. Every opcode is `< OP_COUNT`; field usage matches §3 and §3.1 (unused fields are
+   `IR_NONE`/0; `matprint` IMM is 0 or 1; `matredim` B may be `IR_NONE`, A may not).
+2. Every temp operand (a field whose kind is temp for that opcode, §3.1) is `< NTEMPS` and is
+   defined by an earlier instruction in the same function.
 3. Every label referenced by `jmp/jcmp/jfor/gosub` (both labels) is `< NLABELS` and is defined by
    exactly one `line`/`label` in `main`; every label id is defined exactly once.
 4. Slots are `< NSLOTS`; array letters refer to arrays with `DIMS` ≠ 0 and the right
-   dimensionality (`ald1/ast1` ↔ 1, `ald2/ast2` ↔ 2); string ids `< NSTRINGS`; `callfn` targets
+   dimensionality (`ald1/ast1` ↔ 1, `ald2/ast2` ↔ 2; MAT opcodes accept either, in every
+   array-kind field); string ids `< NSTRINGS`; `callfn` targets
    are present FN functions.
 5. Placement rules of §3; `main` ends with `end`; each FN function ends with `ret`.
 6. `NSLOTS == 286 + 2*NFORS`; every array with `DIMS ≠ 0` has `(B1+1)*(B2+1) <= 1 000 000`.
@@ -312,6 +353,10 @@ interface for the descriptor and §Runtime ABI for the calls). A minimal, correc
    entry listed in DESIGN.md, store `DST`. Labels become local assembler labels.
 4. `line` stores IMM to `_bsk_curline`. `gosub` pushes the *address* of the return label via
    `_bsk_gosub_push` and jumps; `return` calls `_bsk_gosub_pop` and jumps indirectly to the result.
+5. Each MAT opcode is one call: the address of each named array's descriptor in an argument
+   register (target first), the temp operands in floating-point argument registers, the
+   `matprint` mode as an integer (DESIGN.md §6.5). The descriptor's `RTA_CAP` field must hold
+   `(B1+1)·(B2+1)`, and the descriptor must be writable (MAT rewrites the current bounds).
 
 Nothing else is needed; all language rules live in the runtime or are explicit opcodes.
 

@@ -1,0 +1,3 @@
+10 DIM V(10)
+20 MAT V = ZER(3,2)
+30 END

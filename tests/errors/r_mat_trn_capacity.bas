@@ -1,0 +1,4 @@
+10 DIM A(2,5), B(3,3)
+20 MAT A = CON
+30 MAT B = TRN(A)
+40 END

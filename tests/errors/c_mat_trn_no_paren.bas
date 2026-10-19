@@ -1,0 +1,2 @@
+10 MAT C = TRN A
+20 END

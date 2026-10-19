@@ -1,0 +1,5 @@
+10 DIM A(2,3), B(2,3)
+20 MAT A = CON
+30 MAT B = CON
+40 MAT C = A * B
+50 END

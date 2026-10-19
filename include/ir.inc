@@ -56,7 +56,40 @@
 .equ OP_PRNL,       39  /*  - */
 .equ OP_END,        40  /*  - */
 .equ OP_STOP,       41  /*  - */
+// MAT opcodes (Second Edition matrix statements, IR.md 3.1). Array letters
+// 0..25 are in X (target) and, where listed, in A / B (array operands).
+.equ OP_MATREDIM,   42  /*  X=array, A=rows temp, B=cols temp or IR_NONE */
+.equ OP_MATREAD,    43  /*  X=array */
+.equ OP_MATPRINT,   44  /*  X=array, IMM=MATPR_ZONED or MATPR_PACKED */
+.equ OP_MATZER,     45  /*  X=array */
+.equ OP_MATCON,     46  /*  X=array */
+.equ OP_MATIDN,     47  /*  X=array */
+.equ OP_MATCOPY,    48  /*  X=target array, A=source array */
+.equ OP_MATADD,     49  /*  X=target array, A=array, B=array */
+.equ OP_MATSUB,     50  /*  X=target array, A=array, B=array */
+.equ OP_MATMUL,     51  /*  X=target array, A=array, B=array */
+.equ OP_MATSCALE,   52  /*  X=target array, A=scalar temp, B=array */
+.equ OP_MATTRN,     53  /*  X=target array, A=source array */
+.equ OP_MATINV,     54  /*  X=target array, A=source array */
+
+// MAT PRINT layout (IRI_IMM of OP_MATPRINT; also the w1 argument of
+// _bsk_mat_print, DESIGN.md 6.5)
+.equ MATPR_ZONED,   0   /* "MAT PRINT A," or last item: 15-column zones */
+.equ MATPR_PACKED,  1   /* "MAT PRINT A;": packed (';' rule) */
+
+// Contract staging switch (DESIGN.md 2.2). 0: the First Edition counts the
+// current modules are built with. 1: the MAT contract (opcodes 0..54).
+// Build with `make BSK_MAT=1` during the MAT implementation phase; the
+// integration step deletes the switch and keeps only the BSK_MAT_CONTRACT=1
+// values.
+.ifndef BSK_MAT_CONTRACT
+.equ BSK_MAT_CONTRACT, 0
+.endif
+.if BSK_MAT_CONTRACT
+.equ OP_COUNT,      55
+.else
 .equ OP_COUNT,      42
+.endif
 
 // ---- Relation codes (u16 IRI_REL, OP_JCMP only; 0 otherwise) ------------
 .equ REL_NONE,      0
@@ -89,7 +122,8 @@
 .equ IRI_B,         12  /* u32 operand temp, or IR_NONE */
 .equ IRI_C,         16  /* u32 operand temp, or IR_NONE */
 .equ IRI_X,         20  /* u32 aux: slot / label / array letter / string id / fn letter, or IR_NONE */
-.equ IRI_IMM,       24  /* u64 constant bits / BASIC line number / return label id, else 0 */
+                        // MAT opcodes also hold array letters in IRI_A / IRI_B (IR.md 3.1)
+.equ IRI_IMM,       24  /* u64 constant bits / BASIC line number / return label id / MATPR_*, else 0 */
 .equ IRI_SIZE,      32
 .equ IRI_SHIFT,     5   /* log2(IRI_SIZE) */
 
@@ -103,6 +137,8 @@
 .equ IRA_B1,        4   /* u32 upper bound of first subscript (default 10) */
 .equ IRA_B2,        8   /* u32 upper bound of second subscript (0 for lists) */
 .equ IRA_FLAGS,     12  /* u32 bit 0 = bounds set by a DIM statement */
+                        // B1/B2 are the INITIAL bounds; MAT may change the
+                        // run-time shape within (B1+1)*(B2+1) elements.
 .equ IRA_SIZE,      16
 .equ IRA_FLAG_DIMMED, 1
 

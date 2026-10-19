@@ -1,0 +1,2 @@
+10 MAT READ A
+20 END

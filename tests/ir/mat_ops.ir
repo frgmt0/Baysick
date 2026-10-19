@@ -1,0 +1,71 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=1 strings=0 data=9
+array A dims=2 b1=3 b2=3
+array B dims=2 b1=10 b2=10
+array C dims=2 b1=10 b2=10
+array V dims=1 b1=3
+data d0 0x3FF0000000000000 ; 1
+data d1 0x4000000000000000 ; 2
+data d2 0x4008000000000000 ; 3
+data d3 0x4010000000000000 ; 4
+data d4 0x4014000000000000 ; 5
+data d5 0x4018000000000000 ; 6
+data d6 0x401C000000000000 ; 7
+data d7 0x4020000000000000 ; 8
+data d8 0x4022000000000000 ; 9
+func main temps=11 labels=18
+  line 10
+  line 20
+  t0 = const 0x4000000000000000 ; 2
+  t1 = ldv N
+  t2 = const 0x3FF0000000000000 ; 1
+  t3 = add t1, t2
+  matredim A, t0, t3
+  matread A
+  matread V
+  line 30
+  matprint A, zoned
+  prnl
+  matprint V, packed
+  prnl
+  matprint A, zoned
+  line 40
+  matadd C, A, A
+  line 50
+  matsub C, A, C
+  line 60
+  matmul C, A, A
+  line 70
+  t4 = const 0x4000000000000000 ; 2
+  t5 = ldv K
+  t6 = mul t4, t5
+  matscale C, t6, C
+  line 80
+  mattrn B, A
+  line 90
+  matinv B, C
+  line 100
+  matcopy B, C
+  line 110
+  t7 = const 0x4008000000000000 ; 3
+  matredim V, t7
+  matzer V
+  line 120
+  t8 = const 0x4000000000000000 ; 2
+  t9 = const 0x4000000000000000 ; 2
+  matredim C, t8, t9
+  matcon C
+  line 130
+  t10 = const 0x4000000000000000 ; 2
+  matredim B, t10, t10
+  matidn B
+  line 140
+  matzer C
+  line 150
+  matcon V
+  line 160
+  matidn B
+  line 170
+  line 180
+  end
+endfunc

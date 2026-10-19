@@ -1,0 +1,2 @@
+10 MAT C = SIN(A)
+20 END

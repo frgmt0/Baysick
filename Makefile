@@ -5,6 +5,7 @@
 #   make                  build build/baysick and build/libbaysickrt.a
 #   make test             build, then run tests/run.sh
 #   make check-includes   assemble the contract include files (layout assertions)
+#   make BSK_MAT=1 ...    build/test with the MAT contract switch on (DESIGN.md 2.2)
 #   make cross-pack       pack the x86_64-linux test bundle into build/x86_64-linux-bundle
 #   make cross            pack and run the bundle on a Linux host (tests/cross.sh)
 #   make clean            remove build/
@@ -18,6 +19,12 @@ AR      := ar
 BUILD   := build
 
 ASFLAGS := -arch arm64 -mmacosx-version-min=11.0 -I include
+# MAT contract staging (docs/DESIGN.md section 2.2): `make BSK_MAT=1 ...`
+# assembles everything with BSK_MAT_CONTRACT=1 (OP_COUNT 55, KW_COUNT 16).
+# Objects do not record the setting: run `make clean` when switching.
+ifeq ($(BSK_MAT),1)
+ASFLAGS += -Wa,-defsym,BSK_MAT_CONTRACT=1
+endif
 # Evaluated only when a link actually happens (recursive variable).
 SDK      = $(if $(SDKROOT),$(SDKROOT),$(shell xcrun --show-sdk-path))
 LDFLAGS  = -lSystem -syslibroot $(SDK) -e _main -arch arm64 -platform_version macos 11.0 11.0

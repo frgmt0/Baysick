@@ -1,0 +1,2 @@
+10 MAT PRINT A(1)
+20 END

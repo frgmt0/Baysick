@@ -1,0 +1,4 @@
+10 DIM A(2,3)
+20 MAT A = CON
+30 MAT B = INV(A)
+40 END

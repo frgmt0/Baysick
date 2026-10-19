@@ -1,0 +1,3 @@
+10 DIM A(2,3)
+20 MAT A = IDN
+30 END

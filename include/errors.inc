@@ -49,9 +49,11 @@
 .equ ERR_LOG_OF_ZERO,           37  /* "LOG OF ZERO"            (Baysick addition) */
 .equ ERR_OVERFLOW,              38  /* "OVERFLOW"               (Baysick addition) */
 .equ ERR_TOO_MANY_GOSUBS,       39  /* "TOO MANY GOSUBS"        (Baysick addition) */
+.equ ERR_DIMENSION_ERROR,       40  /* "DIMENSION ERROR"        (MAT; 1968 manual text) */
+.equ ERR_SINGULAR_MATRIX,       41  /* "SINGULAR MATRIX"        (MAT INV; Baysick addition) */
 
 .equ ERR_FIRST_RUNTIME,         32
-.equ ERR_TABLE_SIZE,            40  /* valid indices 0..39; unused entries are 0 */
+.equ ERR_TABLE_SIZE,            42  /* valid indices 0..41; unused entries are 0 */
 
 // ---------------------------------------------------------------------
 // BSK_EMIT_ERRMSG_TABLE name
@@ -78,6 +80,7 @@
     .quad 0, 0, 0, 0, 0, 0, 0
     .quad \name\()_m32, \name\()_m33, \name\()_m34, \name\()_m35
     .quad \name\()_m36, \name\()_m37, \name\()_m38, \name\()_m39
+    .quad \name\()_m40, \name\()_m41
 \name\()_m1:  .asciz "ILLEGAL CONSTANT"
 \name\()_m2:  .asciz "ILLEGAL FORMULA"
 \name\()_m3:  .asciz "ILLEGAL RELATION"
@@ -110,6 +113,8 @@
 \name\()_m37: .asciz "LOG OF ZERO"
 \name\()_m38: .asciz "OVERFLOW"
 \name\()_m39: .asciz "TOO MANY GOSUBS"
+\name\()_m40: .asciz "DIMENSION ERROR"
+\name\()_m41: .asciz "SINGULAR MATRIX"
     .p2align 3
 .endm
 

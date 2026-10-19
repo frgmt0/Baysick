@@ -1,0 +1,3 @@
+10 MAT A = ZER(2,2)
+20 MAT B = INV(A)
+30 END
