@@ -120,11 +120,15 @@ src/runtime_x86_64_linux/rt_ksse2_gemm.s SSE2 GEMM
 src/runtime_x86_64_linux/rt_ksse2_elem.s SSE2 add/sub/scale/copy/fill
 src/runtime_x86_64_linux/rt_ksse2_trn.s  SSE2 blocked transpose
 src/runtime_x86_64_linux/rt_ksse2_inv.s  pinned Gauss-Jordan inverse, SSE2 row updates
+src/runtime_x86_64_linux/rt_kavx2_gemm.s AVX2+FMA GEMM: packing, 6x8 micro-kernel with 12 ymm accumulators
+src/runtime_x86_64_linux/rt_kavx2_elem.s AVX2 copy/fill and the finite-check helper (add/sub/scale: sse2 kernels, §6.6.3)
+src/runtime_x86_64_linux/rt_kavx2_trn.s  AVX2 blocked transpose, 4x4 in-register tiles
+src/runtime_x86_64_linux/rt_kavx2_inv.s  pinned Gauss-Jordan inverse, AVX2 4-wide row updates (4x12 micro-kernel)
 bench/                                   BENCH: harness, peak loops, programs, scripts (BENCH.md)
 ```
 
 Future kernel variants add files named `rt_k<variant>_*.s` in the runtime directory
-(`rt_ksme_gemm.s`, `rt_kavx2_gemm.s`, …) and one record in the variant table (§6.6.7).
+(`rt_ksme_gemm.s`, …) and one record in the variant table (§6.6.7).
 
 Dependencies (who calls whom): driver → frontend, ir, backend (via descriptor); frontend → ir
 builder, `_drv_alloc`, libc `_strtod`; backends → `_ob_*`, `_drv_alloc` (read the Module
@@ -916,9 +920,9 @@ Rules every implementation follows:
 The heavy arithmetic lives in **kernels**: plain routines on matrix views with no BASIC
 semantics, reached through one dispatch point chosen once at startup from the CPU's features. A
 **variant** is a set of kernels for one instruction-set level. Required now: **`neon`**
-(arm64-macos baseline, Advanced SIMD) and **`sse2`** (x86_64-linux baseline). Documented future
-examples: **`sme`** (Apple M4 and later: SME with FEAT_SME_F64F64) and **`avx2`** (x86_64 with
-AVX2 and FMA3). Adding a variant touches only the runtime directory of its target (§6.6.7).
+(arm64-macos baseline, Advanced SIMD) and **`sse2`** (x86_64-linux baseline). Implemented beyond the baselines:
+**`avx2`** (x86_64 with AVX2 and FMA3). Documented future example: **`sme`** (Apple M4 and later:
+SME with FEAT_SME_F64F64). Adding a variant touches only the runtime directory of its target (§6.6.7).
 
 #### 6.6.1 Kernel interface
 
@@ -956,8 +960,8 @@ runtime.inc):
 | `KF_A64_SME` | arm64-macos | `sysctlbyname("hw.optional.arm.FEAT_SME", &v, &len, NULL, 0) == 0 && v == 1` (32-bit `v`) |
 | `KF_A64_SME2` | arm64-macos | same with `"hw.optional.arm.FEAT_SME2"` |
 | `KF_A64_SME_F64F64` | arm64-macos | same with `"hw.optional.arm.FEAT_SME_F64F64"` |
-| `KF_X64_AVX2` | x86_64-linux | `CPUID.(EAX=7,ECX=0):EBX[5]`, and OS support: `CPUID.1:ECX[27]` (OSXSAVE) and `XGETBV(ECX=0)` bits 1 and 2 both set |
-| `KF_X64_FMA` | x86_64-linux | `CPUID.1:ECX[12]`, with the same OS-support test |
+| `KF_X64_AVX2` | x86_64-linux | `CPUID.(EAX=7,ECX=0):EBX[5]`, and `CPUID.1:ECX[28]` (AVX), and OS support: `CPUID.1:ECX[27]` (OSXSAVE) and `XGETBV(ECX=0)` bits 1 and 2 both set |
+| `KF_X64_FMA` | x86_64-linux | `CPUID.1:ECX[12]` and `CPUID.1:ECX[28]` (AVX), with the same OS-support test |
 
 A missing sysctl key or a failing call means "absent". (The development Mac, an M2 Pro, reports
 `FEAT_SME = 0`, `FEAT_SME_F64F64 = 0`; Apple M4 and later report SME with F64F64.) A new
@@ -987,10 +991,10 @@ table order. The MAT layer calls only the trampolines (or reads the current reco
 
 | Variant | Target | `KV_REQUIRES` | Status | Specialises |
 |---------|--------|---------------|--------|-------------|
+| `avx2` | x86_64-linux | `KF_X64_AVX2 \| KF_X64_FMA` | implemented | GEMM (FMA, class R); copy, fill, trn (256-bit, class E); inv (4-wide, class E). add, sub, scale use the `sse2` kernels: Haswell lowers the core clock while 256-bit FP arithmetic runs, which costs the memory-bound 256-bit versions more than the width gains |
 | `neon` | arm64-macos | 0 | **required now** (baseline) | all |
 | `sme` | arm64-macos | `KF_A64_SME \| KF_A64_SME_F64F64` | future | GEMM (FMOPA outer products into ZA tiles) |
 | `sse2` | x86_64-linux | 0 | **required now** (baseline) | all |
-| `avx2` | x86_64-linux | `KF_X64_AVX2 \| KF_X64_FMA` | future | GEMM (FMA), optionally the class-E kernels |
 
 #### 6.6.4 Determinism rules (all variants)
 
@@ -1022,18 +1026,27 @@ table order. The MAT layer calls only the trampolines (or reads the current reco
   * `sse2`: at least 8 accumulator registers (`MR × NR = 4 × 4`; 4 × 6 if the registers allow),
     `mulpd` + `addpd` (no FMA in SSE2). Starting points (Haswell, 32 KiB L1D, 256 KiB L2):
     KC = 256, MC = 96, NC = 2048.
+  * `avx2`: `MR × NR = 6 × 8` with 12 `ymm` accumulators, B packed 8 wide (two `ymm` per row of the
+    micro-panel), A values broadcast with `vbroadcastsd`, `vfmadd231pd` (FMA, class R);
+    KC = 256, MC = 72, NC = 2048.
   * For tiny products (`m·n·k ≤ 32768`) an unpacked, still vectorised path is allowed.
 * **add, sub, scale, copy, fill** — row loop × contiguous inner loop of 2-wide vectors, unrolled
   to at least 4 vectors per iteration, scalar tail; the finite check fused into the same pass.
 * **trn** — cache-blocked (e.g. 32 × 32 element blocks) with in-register tile transposes
   (`neon`: `zip1`/`zip2` on `.2d` building 2 × 2 or 4 × 4 tiles; `sse2`: `unpcklpd`/`unpckhpd`).
+  The `avx2` transpose uses 4 × 4 register tiles in 32 × 32 blocks (`vinsertf128` loads, then
+  `vunpcklpd`/`vunpckhpd`).
 * **inv** — the §7.14.6 algorithm with the pivot-row division and the row updates vectorised
   2-wide over `j` (`fdiv`/`divpd`; `fmul` then `fsub` / `mulpd` then `subpd`; never `fmla`).
   The row updates may use a delayed or blocked schedule (the x86_64 runtime updates in panels of
   16 pivot columns with a register-blocked micro-kernel), provided every element receives exactly
   the pinned operations in the pinned order (one rounded product, one rounded subtraction, true
-  divisions). Updates whose product is zero may be skipped as LANGUAGE.md §7.14.6 allows (the
-  arm64 runtime skips the products with the untouched, exactly zero columns of X).
+  divisions). Updates may be skipped when that cannot change the status or any finite result element (LANGUAGE.md §7.14.6; e.g. products with an exact zero factor on untouched columns of X). The
+  arm64 runtime uses the same panel schedule (16 pivot columns, `RT_KI_NB`) with a 4 × 8
+  register-tiled delayed update (16 accumulators, multipliers used by element), and skips only the
+  products with the untouched, exactly zero columns of X (kept in a private column order; a non-finite multiplier still reaches the result through the later update of that column).
+  The `avx2` runtime uses the `sse2` panel schedule (NB = 16) with a 4 × 12 delayed-update
+  micro-kernel (12 `ymm` accumulators); products are `vmulpd` then `vsubpd`, never FMA.
 * Benchmarks and initial goals: BENCH.md.
 
 #### 6.6.6 Static buffers
@@ -1045,8 +1058,11 @@ pages cost nothing:
 |--------|------|-------|
 | MAT result temporary | `RT_MAT_SCRATCH_ELEMS` doubles (8 MiB) | `rt_mat.s` (aliasing, §6.5) |
 | INV workspace W | `RT_KERN_INV_MAXN²` doubles (8 MiB) | inv kernel |
+| `avx2` INV workspace W | `RT_KERN_INV_MAXN²` doubles (8 MiB), separate from the `sse2` one; only touched by an `avx2` INV | `rt_kavx2_inv.s` |
+| `avx2` INV multiplier buffer | `NB` × 128 bytes = 2 KiB (the packed multipliers of one 4-row block) | `rt_kavx2_inv.s` |
 | INV index buffer `_bsk_rt_kinv_idx` (arm64) | 3 × `RT_KERN_INV_MAXN` u32 (12 KiB): row-of, unit-position and column-of bookkeeping for the column order of X | `rt_kneon_inv.s` |
-| GEMM packing buffers | runtime-private, at most 8 MiB in total | gemm kernel |
+| `sse2` / `neon` GEMM packing buffers | runtime-private, at most 8 MiB per variant | the baseline gemm kernel |
+| `avx2` GEMM packing (separate from the `sse2` buffers; at most 8 MiB per variant, about 4.14 MiB here) | Ap: `MC·KC` doubles (144 KiB); Bp: `KC·NC` doubles (4 MiB); 6 × 8 staging tile for partial C tiles (384 bytes) | `rt_kavx2_gemm.s` |
 
 #### 6.6.7 Adding a kernel
 
@@ -1060,7 +1076,7 @@ To add a variant (for example `sme` or `avx2`) or to specialise one kernel of an
    link-isolation rule. SME kernels enter streaming mode and enable ZA themselves (`smstart`), do
    not call any function while in streaming mode, use only instructions legal in streaming mode
    (Advanced SIMD is not, unless FEAT_SME_FA64), and leave with `smstop` (PSTATE.SM = 0,
-   PSTATE.ZA = 0) on every path. AVX2 kernels end with `vzeroupper`.
+   PSTATE.ZA = 0) on every path. AVX2 kernels end with `vzeroupper`. Haswell lowers the core clock while 256-bit FP arithmetic runs, so a memory-bound 256-bit kernel can be slower than the 128-bit one (and the lower clock lingers into the surrounding scalar code): measure before specialising (BENCH.md §6.1). Copy and fill are pure moves (no floating-point arithmetic, so no clock reduction) and are not separately benchmarked; `avx2` specialises them without a measurement.
 3. **Registration.** One `KV_*` record in the variant table, ahead of the baseline (order =
    preference), `KV_REQUIRES` = the bits it needs, unspecialised slots pointing at the baseline
    functions.

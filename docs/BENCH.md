@@ -21,7 +21,7 @@ links them, Baysick programs and the Baysick runtime never do.
   1. **vs vendor** — the vendor library's time for the same operation;
   2. **vs peak** — the measured peak floating-point rate of the instruction set the Baysick
      variant uses (§3.4): NEON f64 FMA peak on arm64; SSE2 `mulpd`+`addpd` peak for `sse2`
-     (and AVX2 FMA peak for a future `avx2` variant).
+     (and the AVX2 FMA peak for the `avx2` variant).
 * **On Apple M1–M3, Accelerate uses Apple's matrix hardware**, which hand-written NEON code
   cannot use, so "vs Accelerate" there is not a like-for-like contest; "vs NEON f64 peak" is the
   measure of the NEON kernel's quality. On Linux, OpenBLAS uses the best SIMD the CPU has (AVX2
@@ -119,7 +119,7 @@ independent floating-point operations with no memory traffic:
 * arm64: 24 independent accumulator chains of `fmla v.2d` — enough to cover the FMA latency on
   all four pipes of a P-core; peak = 4 flops per `fmla` × instructions / second;
 * x86_64 SSE2: 12 independent chains of `mulpd` + `addpd` pairs (2 flops per pair per lane);
-* x86_64 AVX2+FMA (only if the CPU has it, for context and for a future `avx2` variant):
+* x86_64 AVX2+FMA (only if the CPU has it, the bar for the `avx2` variant):
   12 chains of `vfmadd231pd ymm`.
 
 The peak loop runs 0.5 s after a 0.2 s warm-up; the best of 5 runs is the peak. Reported as
@@ -228,5 +228,41 @@ kernels and any later variant. "Peak" is the §3.4 measurement on the same machi
 | end-to-end | reported only | — |
 
 A future `sme` GEMM variant on M4 and later is judged against the SME f64 peak the harness then
-measures (an `fmopa`-based peak loop added with the variant) and against Accelerate; a future
-`avx2` variant against the AVX2-FMA peak and OpenBLAS.
+measures (an `fmopa`-based peak loop added with the variant) and against Accelerate.
+
+### 6.1 The `avx2` variant (x86_64-linux)
+
+Judged against the AVX2-FMA peak (§3.4) and OpenBLAS, with the same goals as the table above
+(GEMM ≥ 70 % of *its* peak for n ≥ 512, stretch 85 %), plus: every class-E kernel bit-identical
+to `sse2` (§3.2), and the variant as a whole faster than `sse2` (DESIGN.md §6.6.7, step 5).
+
+Measured with `make bench-cross` on the `desktop` host (i7-4790 Haswell, OpenBLAS 0.3.34
+single-threaded; peaks measured by the harness: `sse2` 15.9, `avx2-fma` 57.3 GFLOP/s; all
+variants validated before timing; 1-minute load 0.68 before, 1.16 after — the harness's own
+single busy thread):
+
+| n | GEMM `avx2` GFLOP/s | % of AVX2-FMA peak | % of OpenBLAS | `sse2` GFLOP/s |
+|---|---------------------|--------------------|---------------|----------------|
+| 64 | 37.9 | 66.0 | 110.5 | 13.1 |
+| 127 | 40.4 | 70.4 | 112.7 | 13.6 |
+| 128 | 41.8 | 72.9 | 102.2 | 13.9 |
+| 255 | 46.2 | 80.6 | 109.4 | 14.7 |
+| 256 | 47.3 | 82.5 | 103.0 | 14.8 |
+| 512 | 47.9 | 83.6 | 100.8 | 14.7 |
+| 1023 | 46.8 | 81.7 | 99.6 | 14.7 |
+| 1024 | 48.6 | 84.8 | 101.4 | 14.9 |
+| 2048 | 49.7 | 86.7 | 101.1 | 14.9 |
+
+GEMM goal met (worst 81.7 % of peak for n ≥ 512; the 85 % stretch is reached only at n = 2048: 86.7 %, while n = 1024 gives 84.8 %),
+at parity with OpenBLAS's Haswell kernel, 3.3× the `sse2` kernel. The peak and the `avx2` kernels
+run at the CPU's AVX frequency (3.6 GHz instead of 4.0 GHz on this machine: Haswell lowers the
+clock while 256-bit floating-point arithmetic executes), which is why `sse2` reaches a higher
+fraction of *its* peak.
+
+| Kernel | `avx2` vs `sse2` (same n) | Notes |
+|--------|---------------------------|-------|
+| transpose | +26 % (64), +79 % (256), +39 % (1024), +24 % (2048) | 4 × 4 in-register tiles; moves and shuffles only, so no AVX clock reduction |
+| copy, fill | specialised in `avx2` (256-bit) but not benchmarked | pure moves: no floating-point arithmetic, so no AVX clock reduction, and the harness has no copy/fill workload |
+| add, sub, scale | the `avx2` variant uses the `sse2` kernels (equal by construction; the table slots point at them) | a 256-bit version was +11 % (add, sub) / +15 % (scale) at n = 64 but −8 % / −5 % at n = 256 and only ±2 % from DRAM: in L2/L3 the loop is cache-bandwidth bound and Haswell's reduced clock during 256-bit FP arithmetic (4.0 → 3.6 GHz, which also lingers into the surrounding scalar code) costs more than the width gains, so it was removed |
+| INV | +40 % (100), +38 % (250), +54 % (500), +51 % (1000) | 4 × 12 delayed-update micro-kernel; 77 % of OpenBLAS at n = 100, 36 % at n = 1000 |
+| end-to-end | `e2e_gemm` 0.037 s vs 0.096 s; `e2e_inv` 0.030 s vs 0.043 s | |

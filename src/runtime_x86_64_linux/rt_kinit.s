@@ -10,14 +10,16 @@
 #   bsk_kern_trn bsk_kern_copy bsk_kern_fill bsk_kern_inv
 #
 # The variant table holds KV_* records, best variant first, baseline
-# last (KV_REQUIRES = 0). Only the baseline "sse2" exists today; a new
-# variant adds one record ahead of it (DESIGN.md 6.6.7) and nothing
-# else in this file changes: every loop below walks the table by its
-# record count.
+# last (KV_REQUIRES = 0): "avx2" (KF_X64_AVX2 | KF_X64_FMA, which
+# .Lrt_kinit_detect reports only when the OS saves the YMM state),
+# then the baseline "sse2". A new variant adds one record (DESIGN.md
+# 6.6.7) and nothing else in this file changes: every loop below walks
+# the table by its record count.
 #
 # Link isolation (DESIGN.md 6.6.1): this file references only the
-# kernel files (bsk_rt_ksse2_*) and libc (getenv), never another
-# runtime file, so bench/ can link libbaysickrt.a with its own main.
+# kernel files (bsk_rt_ksse2_*, bsk_rt_kavx2_*) and libc (getenv),
+# never another runtime file, so bench/ can link libbaysickrt.a with
+# its own main.
 #
 # The current-variant pointer is statically initialised to the
 # baseline record, so the trampolines are safe even before
@@ -26,15 +28,15 @@
 # =====================================================================
 .include "baysick.inc"
 
-.equ RT_KINIT_NVAR, 1               # records in the variant table
+.equ RT_KINIT_NVAR, 2               # records in the variant table
 
     .text
 
 # ---------------------------------------------------------------------
 # .Lrt_kinit_detect -- fill .Lrt_kinit_feat with the KF_X64_* bits.
 #   Purpose : DESIGN.md 6.6.2: AVX2 = CPUID.(7,0):EBX[5], FMA =
-#             CPUID.1:ECX[12]; each also needs OS support of the AVX
-#             state: CPUID.1:ECX[27] (OSXSAVE) and XGETBV(0) bits 1, 2.
+#             CPUID.1:ECX[12]; each also needs CPUID.1:ECX[28] (AVX)
+#             and OS support of the AVX state: CPUID.1:ECX[27] (OSXSAVE) and XGETBV(0) bits 1, 2.
 #   Inputs  : none
 #   Outputs : %rax = detected KF_* bits (also stored)
 #   Clobbers: %rax %rcx %rdx %rsi %rdi %r8
@@ -54,6 +56,8 @@
     xorl %ecx, %ecx
     cpuid                           # leaf 1: feature flags in %ecx
     movl %ecx, %edi                 # keep leaf-1 ECX
+    btl $28, %edi                   # AVX
+    jnc .Lrt_kinit_detect_done      # no AVX: no AVX2/FMA either
     btl $27, %edi                   # OSXSAVE: XGETBV usable?
     jnc .Lrt_kinit_detect_done      # no: AVX state not enabled by the OS
     xorl %ecx, %ecx
@@ -345,6 +349,18 @@ bsk_kern_features:
     .section .data.rel.ro,"aw",@progbits
     .p2align 3
 .Lrt_kinit_table:
+    # avx2: AVX2 + FMA3 with OS YMM support (DESIGN.md 6.6.2); GEMM uses
+    # FMA (class R), the other kernels are bit-identical to sse2
+    .quad .Lrt_kinit_avx2_str       # KV_NAME
+    .quad KF_X64_AVX2 | KF_X64_FMA  # KV_REQUIRES
+    .quad bsk_rt_kavx2_gemm         # KV_GEMM
+    .quad bsk_rt_ksse2_add          # KV_ADD
+    .quad bsk_rt_ksse2_sub          # KV_SUB
+    .quad bsk_rt_ksse2_scale        # KV_SCALE
+    .quad bsk_rt_kavx2_trn          # KV_TRN
+    .quad bsk_rt_kavx2_copy         # KV_COPY
+    .quad bsk_rt_kavx2_fill         # KV_FILL
+    .quad bsk_rt_kavx2_inv          # KV_INV
     # sse2: x86-64 baseline (KV_REQUIRES = 0), specialises everything
     .quad .Lrt_kinit_sse2_str       # KV_NAME
     .quad 0                         # KV_REQUIRES
@@ -362,6 +378,8 @@ bsk_kern_features:
 .endif
 
     .section .rodata
+.Lrt_kinit_avx2_str:
+    .asciz "avx2"
 .Lrt_kinit_sse2_str:
     .asciz "sse2"
 .Lrt_kinit_baseline_str:

@@ -673,9 +673,11 @@ a multiplication by `1/d`), and `f·W(p,j)` is rounded before the subtraction (*
 multiply-add**). Ties in the pivot search go to the smallest row index. Columns `1 … p` of W are
 never read after step p. The result is therefore **bit-identical on every target and kernel
 variant**, except that the sign of a zero result element is unspecified (an implementation may
-skip an update only when its product `f·y` is actually zero, i.e. one factor is zero and the other
-is finite. `f = 0` with `y = ±infinity` (or NaN) gives NaN and must not be skipped: it is performed,
-and the NaN reaches the §7.14.4 OVERFLOW check like any other non-finite result).
+skip an update only when that cannot change the status or any finite element of the result, for
+example the product `f·y` with an exact zero `y` of a column of X that no pivot row has touched
+yet. If `f` is ±infinity or NaN, such a skipped product would be NaN, so the skip is allowed only
+because that column is later updated with the same non-finite `f` and the NaN or infinity still
+reaches the result and the §7.14.4 OVERFLOW check).
 
 **Baysick decision (singular matrices):** [M64] gives neither the method nor the behaviour for a
 singular matrix. [M68] p. 59–60 does not stop and sets `DET` to 0 — but `DET` is not part of the
