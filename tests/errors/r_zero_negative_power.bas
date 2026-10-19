@@ -1,0 +1,4 @@
+10 LET Z = 0
+20 PRINT Z ^ 2
+30 PRINT Z ^ (-1)
+40 END

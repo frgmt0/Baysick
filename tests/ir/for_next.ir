@@ -1,0 +1,60 @@
+; baysick-ir 1
+module slots=290 fors=2 funcs=1 strings=0 data=0
+func main temps=19 labels=12
+  line 10
+  t0 = const 0x3FF0000000000000 ; 1
+  t1 = const 0x4008000000000000 ; 3
+  t2 = const 0x3FF0000000000000 ; 1
+  stv %lim0, t1
+  stv %step0, t2
+  jfor t0, t1, t2, L6
+  stv I, t0
+  jmp L7
+  label L6
+  t3 = sub t0, t2
+  stv I, t3
+  jmp L8
+  label L7
+  line 20
+  t4 = ldv I
+  t5 = const 0x0000000000000000 ; 0
+  t6 = const 0x3FE0000000000000 ; 0.5
+  t7 = neg t6
+  stv %lim1, t5
+  stv %step1, t7
+  jfor t4, t5, t7, L9
+  stv J, t4
+  jmp L10
+  label L9
+  t8 = sub t4, t7
+  stv J, t8
+  jmp L11
+  label L10
+  line 30
+  t9 = ldv I
+  prnum t9
+  prsemi
+  t10 = ldv J
+  prnum t10
+  prnl
+  line 40
+  t11 = ldv J
+  t12 = ldv %step1
+  t13 = add t11, t12
+  t14 = ldv %lim1
+  jfor t13, t14, t12, L11
+  stv J, t13
+  jmp L10
+  label L11
+  line 50
+  t15 = ldv I
+  t16 = ldv %step0
+  t17 = add t15, t16
+  t18 = ldv %lim0
+  jfor t17, t18, t16, L8
+  stv I, t17
+  jmp L7
+  label L8
+  line 60
+  end
+endfunc

@@ -1,0 +1,8 @@
+10 DEF FNA(X) = X * X + Y
+20 DIM B(3, 4)
+30 READ A(1), B(2, 3), Y
+40 LET C(INT(Y)) = FNA(A(1)) - FNB(1)
+50 DATA 1.5, -2, .1
+60 DEF FNB(Z) = ABS(FNA(Z)) + LOG(SQR(EXP(Z)))
+70 PRINT C(0), B(2, 3)
+80 END

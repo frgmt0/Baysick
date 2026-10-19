@@ -1,0 +1,32 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=1 strings=0 data=0
+func main temps=7 labels=9
+  line 10
+  line 20
+  t0 = ldv X
+  t1 = const 0x3FF0000000000000 ; 1
+  jcmp ne, t0, t1, @50
+  line 30
+  gosub @70, L8
+  label L8
+  line 40
+  stop
+  line 50
+  jmp @30
+  line 60
+  t2 = ldv X
+  t3 = sin t2
+  prnum t3
+  prcomma
+  t4 = ldv X
+  t5 = rnd
+  prnum t5
+  prcomma
+  t6 = rnd
+  prnum t6
+  prnl
+  line 70
+  return
+  line 80
+  end
+endfunc

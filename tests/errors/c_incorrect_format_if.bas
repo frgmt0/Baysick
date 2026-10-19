@@ -1,0 +1,3 @@
+10 LET X = 1
+20 IF X = 1 GOTO 10
+30 END

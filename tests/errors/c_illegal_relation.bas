@@ -1,0 +1,3 @@
+10 LET X = 1
+20 IF X THEN 10
+30 END

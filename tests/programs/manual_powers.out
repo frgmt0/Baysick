@@ -1,0 +1,28 @@
+THIS PROGRAM COMPUTES AND PRINTS THE NTH POWERS
+OF THE NUMBERS LESS THAN OR EQUAL TO N FOR VARIOUS
+N FROM 1 THROUGH 7.
+
+N =  1
+ 1
+
+N =  2
+ 1              4
+
+N =  3
+ 1              8              27
+
+N =  4
+ 1              16             81             256
+
+N =  5
+ 1              32             243            1024           3125
+
+
+N =  6
+ 1              64             729            4096           15625
+ 46656
+
+N =  7
+ 1              128            2187           16384          78125
+ 279936         823543
+

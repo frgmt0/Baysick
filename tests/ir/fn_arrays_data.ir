@@ -1,0 +1,65 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=3 strings=0 data=3
+array A dims=1 b1=10
+array B dims=2 b1=3 b2=4
+array C dims=1 b1=10
+data d0 0x3FF8000000000000 ; 1.5
+data d1 0xC000000000000000 ; -2
+data d2 0x3FB999999999999A ; 0.10000000000000001
+func main temps=19 labels=8
+  line 10
+  line 20
+  line 30
+  t0 = const 0x3FF0000000000000 ; 1
+  t1 = read
+  ast1 A, t0, t1
+  t2 = const 0x4000000000000000 ; 2
+  t3 = const 0x4008000000000000 ; 3
+  t4 = read
+  ast2 B, t2, t3, t4
+  t5 = read
+  stv Y, t5
+  line 40
+  t6 = ldv Y
+  t7 = int t6
+  t8 = const 0x3FF0000000000000 ; 1
+  t9 = ald1 A, t8
+  t10 = callfn FNA, t9
+  t11 = const 0x3FF0000000000000 ; 1
+  t12 = callfn FNB, t11
+  t13 = sub t10, t12
+  ast1 C, t7, t13
+  line 50
+  line 60
+  line 70
+  t14 = const 0x0000000000000000 ; 0
+  t15 = ald1 C, t14
+  prnum t15
+  prcomma
+  t16 = const 0x4000000000000000 ; 2
+  t17 = const 0x4008000000000000 ; 3
+  t18 = ald2 B, t16, t17
+  prnum t18
+  prnl
+  line 80
+  end
+endfunc
+func FNA param=X temps=5 labels=0
+  t0 = param
+  t1 = param
+  t2 = mul t0, t1
+  t3 = ldv Y
+  t4 = add t2, t3
+  ret t4
+endfunc
+func FNB param=Z temps=8 labels=0
+  t0 = param
+  t1 = callfn FNA, t0
+  t2 = abs t1
+  t3 = param
+  t4 = exp t3
+  t5 = sqr t4
+  t6 = log t5
+  t7 = add t2, t6
+  ret t7
+endfunc

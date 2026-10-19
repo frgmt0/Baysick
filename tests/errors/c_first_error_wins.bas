@@ -1,0 +1,4 @@
+30 PRINT (
+20 LET 5 = X
+10 LET X = 1
+40 END

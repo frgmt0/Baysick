@@ -1,0 +1,5 @@
+10 DIM B(2, 3)
+20 LET B(2, 3) = 1
+30 PRINT "OK SO FAR"
+40 LET X = B(-1, 0)
+50 END

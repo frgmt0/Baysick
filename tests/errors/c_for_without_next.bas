@@ -1,0 +1,3 @@
+10 FOR X = 0 TO 3
+20 PRINT X
+30 END

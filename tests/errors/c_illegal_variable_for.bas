@@ -1,0 +1,3 @@
+10 FOR A(1) = 1 TO 2
+20 NEXT A
+30 END

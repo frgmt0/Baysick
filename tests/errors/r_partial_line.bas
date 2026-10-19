@@ -1,0 +1,4 @@
+10 PRINT "PARTIAL";
+20 PRINT 1, 2,
+30 LET X = SQR(-4) / (2 - 2)
+40 END

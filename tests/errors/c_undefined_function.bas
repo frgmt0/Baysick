@@ -1,0 +1,3 @@
+10 DEF FNA(X) = X + 1
+20 PRINT FNA(1) + FNB(2)
+30 END
