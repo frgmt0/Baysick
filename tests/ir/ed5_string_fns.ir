@@ -1,0 +1,79 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=3 strings=2 data=0
+sarray M dims=2 b1=2 b2=3
+string s0 "X"
+string s1 "AB"
+sdata d0 "HELLO"
+stemps 7
+func main temps=19 labels=9
+  line 10
+  line 20
+  jmp @70
+  line 70
+  line 80
+  t0 = const 0x3FF0000000000000 ; 1
+  t1 = const 0x4000000000000000 ; 2
+  t2 = const 0x3FF0000000000000 ; 1
+  t3 = slit s1
+  t4 = scell %s1
+  sset t4, t3
+  t5 = scell %s2
+  fnarg 1, t4
+  scallfn t5, FNA, t2
+  t6 = sald2 M$, t0, t1
+  sset t6, t5
+  line 90
+  t7 = const 0x3FF0000000000000 ; 1
+  t8 = const 0x4000000000000000 ; 2
+  t9 = sald2 M$, t7, t8
+  t10 = scell %s3
+  sset t10, t9
+  t11 = scell %s4
+  scallfn t11, FNB, t10
+  prsv t11
+  t12 = const 0x4010000000000000 ; 4
+  t13 = scell %s5
+  sstr t13, t12
+  t14 = val t13
+  prnum t14
+  prnl
+  line 100
+  t15 = const 0x4000000000000000 ; 2
+  t16 = const 0x4008000000000000 ; 3
+  t17 = scell %s6
+  sread t17
+  t18 = sald2 M$, t15, t16
+  sset t18, t17
+  line 110
+  smatprint M$, zoned
+  line 120
+  line 130
+  end
+endfunc
+func FNA$ params=N,S$ temps=5 labels=0
+  t0 = param
+  t1 = sparam 1
+  t2 = len t1
+  t3 = add t0, t2
+  t4 = scell %s0
+  sstr t4, t3
+  sret t4
+endfunc
+func FNB$ params=T$ def=20 fnend=60 temps=8 labels=4
+  line 30
+  t0 = sfv
+  t1 = sparam
+  sset t0, t1
+  line 40
+  t2 = sparam
+  t3 = asc t2
+  t4 = const 0x4050400000000000 ; 65
+  jcmp eq, t3, t4, @60
+  line 50
+  t5 = sparam
+  t6 = slit s0
+  sset t5, t6
+  line 60
+  t7 = sfv
+  sret t7
+endfunc

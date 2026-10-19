@@ -1,0 +1,3 @@
+10 PRINT LEN("A")
+20 LET A$ = STR$(1) + "X"
+30 END

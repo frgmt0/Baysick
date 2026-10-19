@@ -1,0 +1,2 @@
+10 FILES "A.TXT
+20 END

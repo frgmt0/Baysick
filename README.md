@@ -55,6 +55,10 @@ with page references to the 1968 manual), `docs/IR.md` and `docs/DESIGN.md` (§2
 `tests/programs/ed4_*`, `manual4_*`, `text_*`, `tests/errors/c_ed4_*`, `r_ed4_*` and
 `tests/ir/ed4_*`.
 
+Fifth Edition (1970): specified, being implemented — sequential files (`FILES`, `PRINT #`,
+`INPUT #`, `IF END #`, `SCRATCH #`, `RESTORE #`), `LEN ASC STR$ VAL`, string `DEF` functions and
+two-dimensional string arrays (`docs/LANGUAGE.md` "The Fifth Edition", `docs/DESIGN.md` §2.4).
+
 ## Documents
 
 * `docs/LANGUAGE.md` — normative language spec (statements, MAT, number format, errors,

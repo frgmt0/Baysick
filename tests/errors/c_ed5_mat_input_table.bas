@@ -1,0 +1,3 @@
+10 DIM A$(2, 2)
+20 MAT INPUT A$
+30 END

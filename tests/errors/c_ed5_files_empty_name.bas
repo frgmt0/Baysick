@@ -1,0 +1,2 @@
+10 FILES A;
+20 END

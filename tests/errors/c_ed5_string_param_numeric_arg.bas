@@ -1,0 +1,3 @@
+10 DEF FNA(X$) = LEN(X$)
+20 PRINT FNA(5)
+30 END

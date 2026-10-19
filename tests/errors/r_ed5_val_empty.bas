@@ -1,0 +1,2 @@
+10 LET X = VAL(B$)
+20 END

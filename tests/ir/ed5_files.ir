@@ -1,0 +1,48 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=1 strings=0 data=0
+file #1 "IN.TXT"
+file #2 "out.txt"
+func main temps=12 labels=9
+  line 10
+  line 20
+  t0 = const 0x4000000000000000 ; 2
+  scratch t0
+  line 30
+  t1 = const 0x3FF0000000000000 ; 1
+  jeof t1, @70
+  line 40
+  t2 = const 0x3FF0000000000000 ; 1
+  fsel t2
+  inbeg
+  t3 = svar A$
+  fsel t2
+  insv t3
+  fsel t2
+  t4 = innum
+  stv X, t4
+  fsel t2
+  inend
+  line 50
+  t5 = const 0x4000000000000000 ; 2
+  t6 = svar A$
+  fsel t5
+  prsv t6
+  t7 = ldv X
+  fsel t5
+  prnum t7
+  fsel t5
+  prcomma
+  line 60
+  jmp @30
+  line 70
+  t8 = ldv K
+  t9 = const 0x3FF0000000000000 ; 1
+  t10 = add t8, t9
+  frestore t10
+  line 80
+  t11 = const 0x4000000000000000 ; 2
+  fsel t11
+  prnl
+  line 90
+  end
+endfunc

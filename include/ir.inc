@@ -118,7 +118,43 @@
 .equ RESTORE_NUM,   1   /* RESTORE*: numeric data block only */
 .equ RESTORE_STR,   2   /* RESTORE$: string data block only */
 
+// Fifth Edition opcodes (IR.md 3.3). New temp kind sources: OP_SCELL,
+// OP_SALD2, OP_SPARAM and OP_SFV define sref temps. String temp cells
+// (X of OP_SCELL) are static string descriptors numbered 0..NSTEMPS-1 per
+// module. OP_FSEL selects the file of the ONE print or input opcode that
+// must follow it immediately. Existing opcodes extended by the Fifth
+// Edition: OP_SMATREDIM may have B = column temp (string table);
+// OP_FNARG / OP_CALLFN may carry an sref for a string parameter.
+.equ OP_SCELL,      85  /*  DST sref, X=string temp cell 0..NSTEMPS-1 */
+.equ OP_SSTR,       86  /*  A=destination sref, B=number: the string A references := STR$(B) */
+.equ OP_LEN,        87  /*  DST, A=sref */
+.equ OP_ASC,        88  /*  DST, A=sref */
+.equ OP_VAL,        89  /*  DST, A=sref */
+.equ OP_SALD2,      90  /*  DST sref, X=string table letter, A=row, B=column */
+.equ OP_SPARAM,     91  /*  DST sref, IMM=parameter index k (a string parameter of an FN function) */
+.equ OP_SFV,        92  /*  DST sref (multi-line string FN only: its value variable FNx$) */
+.equ OP_SCALLFN,    93  /*  X=function letter, A=first argument or IR_NONE, B=result sref */
+.equ OP_SRET,       94  /*  A=sref (string FN only: return a copy of A) */
+.equ OP_FSEL,       95  /*  A=file number (the next opcode is a print or input opcode) */
+.equ OP_JEOF,       96  /*  A=file number, X=label: IF END # */
+.equ OP_SCRATCH,    97  /*  A=file number */
+.equ OP_FRESTORE,   98  /*  A=file number: RESTORE # */
+
+// Fifth Edition contract staging switch (DESIGN.md 2.2). 0: the counts and
+// layouts the current (Fourth Edition) modules are built with. 1: the
+// Fifth Edition contract. Build with `make BSK_ED5=1` during the
+// implementation phase; the integration step deletes the switch and keeps
+// only the BSK_ED5_CONTRACT=1 values. Every other constant is
+// unconditional. (Also defined, identically guarded, in tokens.inc.)
+.ifndef BSK_ED5_CONTRACT
+.equ BSK_ED5_CONTRACT, 0
+.endif
+
+.if BSK_ED5_CONTRACT
+.equ OP_COUNT,      99
+.else
 .equ OP_COUNT,      85
+.endif
 
 // ---- Relation codes (u16 IRI_REL, OP_JCMP only; 0 otherwise) ------------
 .equ REL_NONE,      0
@@ -146,6 +182,19 @@
 .equ FUNC_KIND_FN,      1           /* single-line DEF */
 .equ FUNC_KIND_FNML,    2           /* multi-line DEF ... FNEND (LANGUAGE.md 7.10) */
 
+// ---- Function kinds of the Fifth Edition (u32 per function in IRM_FNKINDS) ---
+//   bit k (k = 0..7): parameter k is a string parameter (its IRF_PARAMS entry
+//                     is then a STRING slot 0..285, e.g. X$)
+//   FNK_STRING:       the function is a string function FNx$ (LANGUAGE.md 7.10)
+.equ FNK_SPARAM0,       1           /* bit for parameter 0; parameter k is FNK_SPARAM0 << k */
+.equ FNK_SPARAMS_MASK,  0xFF        /* all string-parameter bits */
+.equ FNK_STRING,        0x100       /* string-valued function */
+
+// ---- String temp cells (OP_SCELL) ------------------------------------------
+//   Static 16-byte string descriptors (SD_*), zero-filled (empty strings),
+//   numbered 0..IRM_NSTEMPS-1 in the order the frontend allocates them
+//   (IR.md 4.1). Text form %s<n>.
+
 // ---- IR instruction record (IRI_*), 32 bytes, 8-byte aligned -------------
 .equ IRI_OP,        0   /* u16 opcode */
 .equ IRI_REL,       2   /* u16 relation code (OP_JCMP), else 0 */
@@ -169,6 +218,8 @@
 .equ IRA_B1,        4   /* u32 upper bound of first subscript (default 10) */
 .equ IRA_B2,        8   /* u32 upper bound of second subscript (0 for lists) */
 .equ IRA_FLAGS,     12  /* u32 bit 0 = bounds set by a DIM statement */
+                        // String arrays (IRM_SARRAYS): DIMS 1 = string list,
+                        // 2 = string table (Fifth Edition), B2 0 for lists.
                         // B1/B2 are the INITIAL bounds; MAT may change the
                         // run-time shape within (B1+1)*(B2+1) elements.
 .equ IRA_SIZE,      16
@@ -192,7 +243,7 @@
 .equ IRF_PARAMS,    64  /* u32[LIM_FN_PARAMS] parameter slots in order; unused entries IR_NONE */
 .equ IRF_SIZE,      96
 
-// ---- Module record (IRM_*), 3488 bytes ------------------------------------
+// ---- Module record (IRM_*), 3488 bytes (3624 with BSK_ED5_CONTRACT) -------
 .equ IRM_NFORS,     0   /* u32 number of FOR statements */
 .equ IRM_NSLOTS,    4   /* u32 = SLOT_FOR_BASE + 2*nfors */
 .equ IRM_NSTRINGS,  8   /* u32 */
@@ -208,7 +259,21 @@
 .equ IRM_NSDATA,    3472 /* u32 number of string DATA values */
 .equ IRM_CAPSDATA,  3476 /* u32 (builder private) */
 .equ IRM_SDATA,     3480 /* ptr to IRS_SIZE entries (string DATA values, program order) */
+// Fifth Edition additions. The names are defined at both switch values, but
+// the fields exist only in a 3624-byte module (BSK_ED5_CONTRACT=1). With
+// BSK_ED5_CONTRACT=0 a module is 3488 bytes and no module may read or write
+// these offsets (they lie past its end).
+.equ IRM_NSTEMPS,   3488 /* u32 number of string temp cells (OP_SCELL X < NSTEMPS) */
+.equ IRM_NFILES,    3492 /* u32 number of FILES names 0..LIM_FILES (file numbers 1..NFILES) */
+.equ IRM_FILES,     3496 /* ptr to IRS_SIZE entries: FILES names in file-number order (entry 0 = #1) */
+.equ IRM_CAPFILES,  3504 /* u32 (builder private) */
+.equ IRM_RESERVED5, 3508 /* u32 must be 0 */
+.equ IRM_FNKINDS,   3512 /* 27 x u32, inline: FNK_* bits per function index (0 for main) */
+.if BSK_ED5_CONTRACT
+.equ IRM_SIZE,      3624 /* 3512 + 27*4 = 3620, rounded up to a multiple of 8 */
+.else
 .equ IRM_SIZE,      3488
+.endif
 
 // ---------------------------------------------------------------------------
 // IR builder API (implemented in src/ir/ir_build.s). AAPCS64. All memory
@@ -237,6 +302,17 @@
 //                                          sets KIND, NPARAMS, PARAMS (rest
 //                                          IR_NONE), PARAM (= slot 0 or
 //                                          IR_NONE) and ENDLINE
+//
+// Fifth Edition additions (BSK_ED5_CONTRACT layouts):
+//  _ir_new_stemp(x0=Module*)             -> w0 = new string temp cell number
+//                                          (IRM_NSTEMPS += 1)
+//  _ir_add_file(x0=Module*, x1=bytes, w2=len) -> w0 = file number 1..
+//                                          (bytes copied; the caller checks
+//                                          LIM_FILES first)
+//  _ir_set_sarray2(x0=Module*, w1=letter, w2=b1, w3=b2, w4=flags)
+//                                          string table: DIMS=2, B1, B2, FLAGS
+//  _ir_set_fnkind(x0=Module*, w1=func index 1..26, w2=FNK_* bits)
+//                                          IRM_FNKINDS[index] := bits
 //
 // IR dumper (src/ir/ir_dump.s):
 //  _ir_dump(x0=Module*, x1=OutBuf*)         appends the canonical text dump

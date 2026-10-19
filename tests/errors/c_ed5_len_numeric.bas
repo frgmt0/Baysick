@@ -1,0 +1,2 @@
+10 PRINT LEN(5)
+20 END

@@ -1,0 +1,2 @@
+10 INPUT #0, A, B
+20 END

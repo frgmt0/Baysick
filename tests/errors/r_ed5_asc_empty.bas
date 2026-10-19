@@ -1,0 +1,3 @@
+10 PRINT ASC("Z");
+20 PRINT ASC(B$)
+30 END

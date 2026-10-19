@@ -1,0 +1,3 @@
+10 PRINT LEN("A")
+20 LET A$ = VAL("1")
+30 END

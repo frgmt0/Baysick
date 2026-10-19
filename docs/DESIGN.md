@@ -160,6 +160,28 @@ string DATA cursor; `rt_mat.s` `_bsk_smat_print`; `rt_error.s` exit status 0 for
 `rt_kinit.s` the DET cell `_bsk_rt_kinv_det` (written by every inv kernel, §6.6.1) — in both
 runtimes.
 
+Files added for the Fifth Edition features (§2.4; owners may refine the split inside their
+directory):
+
+```
+src/frontend/fe_files.s     FILES, SCRATCH, RESTORE #, PRINT #, INPUT #, IF END # (LANGUAGE.md
+                            7.21-7.26), TOO MANY FILES, the fsel lowering (IR.md 4.3)
+src/frontend/fe_sexpr.s     string expressions: STR$, LEN/ASC/VAL, string FN calls and string
+                            arguments with their temp cells, string tables (LANGUAGE.md 4.4-4.6,
+                            6.1, 7.10.1), the phase-3 kind check
+src/runtime/rt_files.s      _bsk_fsel _bsk_feof _bsk_scratch _bsk_frestore, the file table and
+                            per-file state, _bsk_rt_files_finish (termination), DESIGN.md 6.8
+src/runtime/rt_ed5.s        _bsk_len _bsk_asc _bsk_val _bsk_str _bsk_str_clear
+src/runtime_x86_64_linux/rt_files.s   bsk_fsel bsk_feof bsk_scratch bsk_frestore, file state,
+                                      bsk_rt_files_finish
+src/runtime_x86_64_linux/rt_ed5.s     bsk_len bsk_asc bsk_val bsk_str bsk_str_clear
+```
+
+`_bsk_saref2` / `bsk_saref2` lives in `rt_array.s` of each runtime. Existing runtime files gain:
+`rt_print.s` and `rt_input.s` the pending-file selection (§6.8); `rt_mat.s` string tables in
+`_bsk_smat_print`; `rt_data.s` string tables in `_bsk_smat_read`; `rt_main.s` (`_bsk_end`) and
+`rt_error.s` (`_bsk_err`) the file finishing and codes 48–55 — in both runtimes.
+
 Dependencies (who calls whom): driver → frontend, ir, backend (via descriptor); frontend → ir
 builder, `_drv_alloc`, libc `_strtod`; backends → `_ob_*`, `_drv_alloc` (read the Module
 directly through `ir.inc` offsets); ir → `_drv_alloc`, `_ob_*`; runtime → libSystem only;
@@ -183,7 +205,7 @@ changes only its own files:
 | BENCH | `bench/`, `make bench`, `make bench-cross` (BENCH.md) |
 | T | nothing new: the MAT corpus flows through `cross_pack.sh` unchanged |
 
-### 2.2 Contract counts
+### 2.2 Contract counts and the Fifth Edition staging switch
 
 The MAT contract raised `OP_COUNT` from 42 to 55 and `KW_COUNT` from 15 to 16; the Third and
 Fourth Edition contract raised the counts and record sizes again. Modules size tables by these
@@ -201,9 +223,62 @@ in one commit. The integrated values:
 | `IRF_SIZE` | 64 (`IRF_RESERVED` at 56) | 96 (`IRF_NPARAMS` 56, `IRF_ENDLINE` 60, `IRF_PARAMS` 64) |
 | `IRM_SIZE` | 2192 | 3488 (`IRM_SARRAYS` 3056, `IRM_NSDATA` 3472, `IRM_CAPSDATA` 3476, `IRM_SDATA` 3480) |
 
-Every constant in `include/*.inc` is unconditional; `tests/include_asserts.inc` checks the counts
-and layouts, and `make check-includes` assembles `tests/include_check.s` once. Integration also
-changed `--version` (§4.1).
+Integration also changed `--version` (§4.1).
+
+**Fifth Edition staging switch.** The Fifth Edition contract (§2.4) is staged the same way,
+behind `BSK_ED5_CONTRACT` (defined in `include/ir.inc` and `include/tokens.inc`, default 0):
+
+| Constant | `BSK_ED5_CONTRACT=0` (current modules) | `=1` (Fifth Edition contract) |
+|----------|----------------------------------------|-------------------------------|
+| `OP_COUNT` | 85 | 99 (`OP_FRESTORE + 1`) |
+| `KW_COUNT` | 22 | 24 (`KW_SCRATCH + 1`) |
+| `TK_COUNT` | 30 | 32 (`TK_SFN0 + 1`) |
+| `BI_COUNT` | 14 | 18 (`BI_STR + 1`) |
+| `IRM_SIZE` | 3488 | 3624 (`IRM_NSTEMPS` 3488, `IRM_NFILES` 3492, `IRM_FILES` 3496, `IRM_CAPFILES` 3504, `IRM_RESERVED5` 3508, `IRM_FNKINDS` 3512) |
+
+`IRF_SIZE` does not change (the per-function Fifth Edition data, `IRM_FNKINDS`, lives in the
+module after the existing fields, so no existing offset moves). Everything else in the contract is
+unconditional and already in effect: the new opcode, token, builtin and keyword *values*, the
+`IRM_*` offset *names* above (defined at both switch values, but the fields they name exist only
+in a 3624-byte module, i.e. with `BSK_ED5_CONTRACT=1`: with the switch 0 a module is 3488 bytes
+and no module may read or write them), `FNK_*`, `ERR_TABLE_SIZE` 56 and the new error texts (codes 31 and 48–55;
+existing modules index the table by code and check against `ERR_TABLE_SIZE`, so they print the new
+texts with no change), `LIM_FILES`, `LIM_FILE_NAME`, `RT_FILEBUF_SIZE` and the runtime names in
+`runtime.inc`. The x86_64 runtime uses none of the switched constants, so `Makefile.linux` has no
+switch.
+
+* `make BSK_ED5=1 …` assembles every compiler and runtime file with
+  `-Wa,-defsym,BSK_ED5_CONTRACT=1` (Apple `as` accepts only this spelling). Objects do not record
+  the setting: `make clean` when switching. `make BSK_ED5=1 cross` packs the bundle with the
+  switch-1 compiler.
+* `make check-includes` assembles `tests/include_check.s` with both values;
+  `tests/include_asserts.inc` checks the matching set of counts and layouts for each.
+* During implementation every compiler module (F, D, B, BX) builds and tests with
+  `make clean; make BSK_ED5=1 test`; `make test` (switch 0) keeps passing every test that passed
+  before (260 on the Mac, 159 cross), so with the switch 0 each module must build and behave
+  exactly as now. A module keeps its Fifth Edition code out of the switch-0 build itself (for
+  example `.if BSK_ED5_CONTRACT`); in particular the arm64 runtime (R) must not reference
+  `_bsk_files`/`_bsk_files_count` in the switch-0 build, because switch-0 programs do not define
+  them. The x86_64 runtime (RX) is built without any switch (`Makefile.linux`), so it declares
+  `.weak bsk_files` and `.weak bsk_files_count` and treats an undefined `bsk_files_count`
+  (address 0 under `gcc -no-pie`) as 0 files: the one x86_64 runtime then links with the programs
+  of both the switch-0 and the switch-1 compiler. Integration removes the two `.weak` lines.
+* **Integration** (one commit, like the Fourth Edition's) deletes the switch: the `=1` values
+  become plain constants, the `.if` blocks and the Makefile lines go away, `include_asserts.inc`
+  keeps only the `=1` assertions, `--version` changes (§4.1), and the two Fourth Edition error
+  tests whose text becomes legal are rewritten as LANGUAGE.md §14.1 specifies
+  (`tests/errors/c_ed4_string_table_dim`, `tests/errors/c_ed4_string_two_subscripts`: new `.bas`
+  and `.err`, the same names). With the switch on and before integration these two tests are
+  expected to fail; every other old test must pass with the switch on as well.
+* **Expected failures during staging.** Until integration the Fifth Edition corpus fails by
+  design: `tests/programs/ed5_*`, `tests/programs/manual5_*`, `tests/errors/c_ed5_*`,
+  `tests/errors/r_ed5_*` and `tests/ir/ed5_*` (with the switch 0 all of them; with the switch 1
+  those whose features are not in yet). So `sh tests/run.sh` and `make cross` exit 1 while
+  everything else passes; that is the only acceptable failure set (with the switch 1, plus the
+  two `c_ed4_*` tests above). There is no expected-failure mechanism in the scripts and no
+  switch-1 CI step: as for the Fourth Edition, the design commit and every implementation commit
+  stay **local (not pushed)** until the integration commit, so CI on the pushed branch stays
+  green.
 
 ### 2.3 Third and Fourth Edition work packages
 
@@ -226,6 +301,55 @@ Order: D and R/RX could start at once (their contracts were complete); F needed 
 functions to link, B/BX needed D's new records to read. The packages are implemented and
 integrated (§2.2). "Per-function labels" needed no builder change: `_ir_new_label` already
 allocated labels in the function it is given.
+
+### 2.4 Fifth Edition work packages
+
+LANGUAGE.md "The Fifth Edition", §4.4–§4.6, §6.1, §7.10.1, §7.11, §7.14, §7.21–§7.26, §8, §10–§14
+(files, `LEN ASC STR$ VAL`, string DEF, string tables) touch every module; each implementer
+changes only its own files. Everything builds and tests with `make clean; make BSK_ED5=1 test`
+(and `make BSK_ED5=1 cross`) until integration (§2.2); `make test` with the switch 0 keeps
+passing.
+
+| Owner | Files | Work |
+|-------|-------|------|
+| F | `src/frontend/` (new `fe_files.s`, `fe_sexpr.s`; changes in `fe_scan.s`, `fe_expr.s`, `fe_str.s`, `fe_def.s`, `fe_stmt.s`, `fe_mat.s`, `fe_input.s`, `fe_compile.s`) | keywords `FILES SCRATCH` (`KW_FILES`, `KW_SCRATCH`); scanner: `LEN( ASC( VAL( STR$(` (`BI_LEN…BI_STR`), `TK_SFN`/`TK_SFN0` (LANGUAGE.md §5.2); string expressions everywhere a string reference was allowed and every new `MISMATCHED STRING OPERATION` rule (§4.5, §4.6); string tables: DIM, element references and targets, the list/table conflict, the "bare MAT name stays a list" rule (§4.4, §7.11), MAT READ/PRINT with tables, MAT INPUT tables rejected (§7.14); string DEF and string parameters, `FNx`/`FNx$` sharing a letter (`DUPLICATE FUNCTION`), the phase-3 kind check after `INCORRECT NUMBER OF ARGUMENTS` (§7.10.1, §10.1), `_ir_set_fnkind`; FILES (names, quoting, `TOO MANY FILES`, `_ir_add_file`), SCRATCH, RESTORE #, PRINT #, INPUT #, IF END # (§7.21–§7.26; `IF END#` recognised before the comparison); canonical lowering IR.md §4 (temp cells via `_ir_new_stemp`, string-argument copies, `fsel` placement); assembly-time `.error` asserts that the keyword, token and builtin tables have exactly `KW_COUNT`, `TK_COUNT` and `BI_COUNT` entries (as `ir_dump.s` does for `OP_COUNT`), so no table can be silently short with the switch 1 |
+| D | `src/ir/`, `src/driver/` | builder: `_ir_new_stemp`, `_ir_add_file`, `_ir_set_sarray2`, `_ir_set_fnkind` (ir.inc); dumper: the `dims=2` sarray line, `stemps` and `file` lines, `FNx$` and `X$` in function heads, every IR.md §3.3 text form and `smatredim` with B; verifier: IR.md §6 rule 8 and the new kinds, groups and placement (§3), `jeof` labels; driver: `--version` at integration (§4.1) |
+| B | `src/backend/arm64_macos/` | §5.3: the Fifth Edition skeleton items (`Lfile_<k>`, `_bsk_files`, `_bsk_files_count`, `_bsk_scells`, string-table descriptors and storage), string parameters and string results in frames (prologue, `sret`), every new row of the per-opcode table |
+| BX | `src/backend/x86_64_linux/` | §5.4: the same for x86_64 (seven global symbols) |
+| R | `src/runtime/` (new `rt_files.s`, `rt_ed5.s`; changes in `rt_print.s`, `rt_input.s`, `rt_mat.s`, `rt_data.s`, `rt_array.s`, `rt_main.s`, `rt_error.s`) | §6.8: every new entry point; the pending file selection in the print and input entry points; string tables in `_bsk_smat_read`/`_bsk_smat_print`; file finishing in `_bsk_end`/`_bsk_err` and exit status 1 after a failed file flush; switch-0 build unchanged (§2.2) |
+| RX | `src/runtime_x86_64_linux/` | the x86_64 counterparts (§6.4, §6.8), with the `.weak` file-table references of §2.2 until integration |
+| T | `tests/run.sh`, `tests/cross_pack.sh`, `tests/cross_run.sh`, `.github/workflows/ci.yml` | §8.5: the per-test work directory, `NAME.files/` fixtures and `NAME.expect/` checks in all three scripts; nothing in CI beyond what the scripts do (the bundle carries the directories) |
+| BENCH | `bench/` | nothing |
+
+Order:
+
+0. **Step 0 — switch-1 build skeleton (D, B, BX, before any feature work).** Today
+   `make BSK_ED5=1` stops at the `OP_COUNT` table asserts of `src/ir/ir_dump.s`,
+   `src/ir/ir_verify.s`, `src/backend/arm64_macos/a64_insn.s` (two asserts) and
+   `src/backend/x86_64_linux/x64_insn.s`. D, B and BX each first land a minimal change that makes
+   their module assemble with the switch 1: every table indexed by opcode is extended to
+   `OP_COUNT` entries, and opcodes 85–98 map to an internal-error entry (the dumper, the verifier
+   and both backends report `baysick: internal error: %s`, exit status 4, §4.2, if they ever
+   meet one). The switch-0 build is unchanged. After step 0, `make clean; make BSK_ED5=1` builds the
+   compiler and both runtimes, and the Fourth Edition tests pass with the switch 1 (except the
+   two `c_ed4_*` tests of §2.2).
+1. **Feature work.** D, R, RX and T start at once (their contracts are complete and independent:
+   T's harness change keeps every old test passing because old programs never touch files). F
+   needs D's builder functions to link. B and BX need D's records and, for end-to-end tests,
+   F's Fifth Edition IR: until F is in, they can only check their emitted text for hand-built
+   IR or wait; once D and F are in, a switch-1 compiler prints `--emit-ir` for any Fifth Edition
+   program, and `tests/ir/ed5_*` show the expected IR, so B and BX can work from real IR before
+   the runtimes are complete.
+2. **Integration commit** (its own step, after every package has passed its tests with the
+   switch 1; done by the coordinator, not by a package): remove the switch (§2.2: the `=1`
+   values become plain constants, the `.if` blocks, the `BSK_ED5` Makefile lines and RX's two
+   `.weak` lines go away, `include_asserts.inc` keeps only the `=1` assertions), rewrite the two
+   `c_ed4_*` tests of LANGUAGE.md §14.1, set `--version` (§4.1), and update the docs (this
+   section and §2.2 become history, CLAUDE.md and README.md say "implemented", SEA_BOOTSTRAP.md
+   marks the rows covered).
+
+The test corpus (`ed5_*`, `manual5_*`, `c_ed5_*`, `r_ed5_*`, `tests/ir/ed5_*`) is complete now
+and fails until the packages are in (the expected-failure set of §2.2).
 
 ## 3. Conventions inside the compiler and runtime
 
@@ -316,6 +440,10 @@ baysick --version            "baysick 0.3.0 (Dartmouth BASIC, Fourth Edition 196
 
 * The Fourth Edition integration (§2.2) changed the version text from
   `baysick 0.2.0 (Dartmouth BASIC, Second Edition 1964)`.
+* The Fifth Edition integration (§2.2, §2.4) changes it to
+  `baysick 0.4.0 (Dartmouth BASIC, Fifth Edition 1970)` + LF (exit 0). Until then, with either
+  switch value, it stays `baysick 0.3.0 (Dartmouth BASIC, Fourth Edition 1968)`. Nothing in the
+  usage or help text changes.
 * Options and the input file may appear in any order; exactly one input file is required.
   `-o` and `--target` take the next argument. If an option is repeated, the last one wins.
 * Default `--target` is `arm64-macos`. The other target is `x86_64-linux` (§5.4); its descriptor
@@ -474,24 +602,36 @@ _bsk_sdata:          per string DATA value k: ".quad Lsdb_<k>" / ".long <len>, 0
                      (none if NSDATA = 0; label still emitted)
     .globl _bsk_sdata_count
 _bsk_sdata_count:    .quad NSDATA
+                     Fifth Edition (switch 1, every program):
+Lfile_<k>:           in __TEXT,__const after the Lsdb_ lists: each FILES name k = 1 … NFILES
+                     as a decimal .byte list
+    .globl _bsk_files
+_bsk_files:          in __DATA,__const after _bsk_sdata_count: per file k = 1 … NFILES
+                     ".quad Lfile_<k>" / ".long <len>, 0" (none if NFILES = 0; label still emitted)
+    .globl _bsk_files_count
+_bsk_files_count:    .quad NFILES
     .section __DATA,__data
     .p2align 3
 Ldesc_<L>:           32-byte RTA descriptor per used array (.quad _bsk_arr_<L>, .long dims,
                      .long b1, .long b2, .long rowlen, .long letter, .long cap),
                      cap = (b1+1)*(b2+1)
-Lsdesc_<L>:          per used string list, letter order: .quad _bsk_sarr_<L>,
-                     .long 1, b1, 0, 1, letter, b1+1
+Lsdesc_<L>:          per used string array, letter order: a list: .quad _bsk_sarr_<L>,
+                     .long 1, b1, 0, 1, letter, b1+1; a table (Fifth Edition): .quad
+                     _bsk_sarr_<L>, .long 2, b1, b2, b2+1, letter, (b1+1)*(b2+1)
     .zerofill __DATA,__bss,_bsk_vars,<8*NSLOTS>,3
     .zerofill __DATA,__bss,_bsk_svars,4576,3                  286 SD records (always)
     .zerofill __DATA,__bss,_bsk_arr_<L>,<8*(b1+1)*(b2+1)>,3   per used array
-    .zerofill __DATA,__bss,_bsk_sarr_<L>,<16*(b1+1)>,3        per used string list
+    .zerofill __DATA,__bss,_bsk_sarr_<L>,<16*cap>,3           per used string array (cap as in Lsdesc_)
+    .zerofill __DATA,__bss,_bsk_scells,<16*NSTEMPS>,3         Fifth Edition, only if NSTEMPS > 0
 ```
 
-`_bsk_vars`, `_bsk_svars`, `_bsk_arr_<L>` and `_bsk_sarr_<L>` are file-local (no `.globl`).
+`_bsk_vars`, `_bsk_svars`, `_bsk_arr_<L>`, `_bsk_sarr_<L>` and `_bsk_scells` are file-local (no
+`.globl`).
 Labels of `main`: `Lbsk_L<id>` for every label id (line and internal labels alike); labels of a
 multi-line function FN*L*: `Lfn_<L>_L<id>`. (Every `Lstr_<id>` gets its `Lsd_<id>` and every
 program defines the four data symbols, because the runtime references `_bsk_sdata` and
-`_bsk_sdata_count` unconditionally.)
+`_bsk_sdata_count` unconditionally; with `BSK_ED5_CONTRACT=1` it defines six, adding `_bsk_files`
+and `_bsk_files_count`, which the switch-1 runtime references unconditionally.)
 
 **Frames and temps.** Temps live in 8-byte stack slots. Because a temp is never read after the
 next `line` (IR.md §1), slots are reused per line: slot(t) = t − *base*, where *base* is the
@@ -526,6 +666,18 @@ With L = 1 the frame is the earlier one (`align16(8*W + 16)`). Offsets that do n
 instruction's immediate are materialised in `x16` (`mov`/`movk`) and used as a register offset.
 FN functions receive argument k in `d<k>` (k < 8) and return the result in `d0`.
 `_bsk_program` never returns normally (main ends with `end`); `Lfn_*` return with `ret`.
+
+**Fifth Edition frames** (string parameters, string functions; IR.md §3.3.1). A **string**
+parameter k arrives as an SD pointer in `x<k>` (k < 8) and its local cell k holds that pointer:
+the prologue stores `str x<k>, [sp, #8*(W+k)]` instead of `str d<k>` for every k whose
+`IRM_FNKINDS` bit is set. A **string function** (`FNK_STRING`) receives the address of its result
+descriptor in `x8` (the AAPCS64 indirect-result register) and keeps it in cell NP:
+L = NP + 1 for a single-line string function (L = NP + 2 for multi-line functions as before;
+cell NP then holds the result pointer instead of the numeric value), and the prologue stores
+`str x8, [sp, #8*(W+NP)]` instead of `str xzr, …`. A multi-line string function then, after
+saving the caller's run-time line, clears its value: `ldr x0, [sp, #8*(W+NP)]` / `bl
+_bsk_str_clear` (every argument register has been stored by then). String functions return no
+value in a register.
 
 **Per-opcode translation** (`dN` loads from temp slots; `x19` = globals base):
 
@@ -583,9 +735,23 @@ FN functions receive argument k in `d<k>` (k < 8) and return the result in `d0`.
 | `fnarg` k | `ldr d<k>` ← A (the `callfn` follows immediately and loads only `d0`) |
 | `stparam` k | `ldr d0` ← A, `str d0, [sp, #8*(W+k)]` |
 | `ldfv` / `stfv` | `ldr d0, [sp, #8*(W+NP)]`, store / `ldr d0` ← A, `str d0, [sp, #8*(W+NP)]` |
+| `scell` (Fifth Edition) | `adrp x0, _bsk_scells@PAGE` / `add x0, x0, _bsk_scells@PAGEOFF` / `add x0, x0, #<16*X>` (via `x16` when above 4095) / `str x0` → DST |
+| `sstr` | `ldr x0` ← A, `ldr d0` ← B, `bl _bsk_str` |
+| `len` `asc` `val` | `ldr x0` ← A, `bl _bsk_len` / `_bsk_asc` / `_bsk_val`, store `d0` |
+| `sald2` | `adrp/add x0, Lsdesc_<X>`, `ldr d0` ← A, `ldr d1` ← B, `bl _bsk_saref2`, `str x0` → DST |
+| `sparam` k | `ldr x0, [sp, #8*(W+k)]`, `str x0` → DST |
+| `sfv` | `ldr x0, [sp, #8*(W+NP)]`, `str x0` → DST |
+| `fnarg` k, string parameter | `ldr x<k>` ← A |
+| `callfn` / `scallfn`, string parameter 0 | `ldr x0` ← A (instead of `ldr d0`) |
+| `scallfn` | `ldr d0` or `ldr x0` ← A by the callee's parameter 0 kind (nothing if A = `IR_NONE`), `ldr x8` ← B, `bl Lfn_<L>` (nothing is stored) |
+| `sret` | `ldr x0, [sp, #8*(W+NP)]`, `ldr x1` ← A, `bl _bsk_str_set`; multi-line functions then restore the caller's run-time line as `ret` does; epilogue |
+| `fsel` | `ldr d0` ← A, `bl _bsk_fsel` |
+| `jeof` | `ldr d0` ← A, `bl _bsk_feof`, `cbz w0, 1f`, `b <label>`, `1:` |
+| `scratch` `frestore` | `ldr d0` ← A, `bl _bsk_scratch` / `_bsk_frestore` |
+| `smatredim` with B (string table) | `adrp/add x0, Lsdesc_<X>`, `ldr d0` ← A, `ldr d1` ← B, `bl _bsk_mat_redim2` |
 
-`line`, `label`, `jmp`, `jcmp`, `sjcmp` and `jfor` inside a multi-line function use its labels
-`Lfn_<L>_L<id>`. A `stop` inside a multi-line function is `bl _bsk_end` as in `main`.
+`line`, `label`, `jmp`, `jcmp`, `sjcmp`, `jfor` and `jeof` inside a multi-line function use its
+labels `Lfn_<L>_L<id>`. A `stop` inside a multi-line function is `bl _bsk_end` as in `main`.
 
 Overflow check after `fadd/fsub/fmul` (result in `d0`):
 
@@ -641,7 +807,8 @@ direct `call bsk_*` / `bsk_curline(%rip)` references, all resolved at static lin
   a noprefix symbol can collide with a register name); operand size comes from the mnemonic
   suffix (`movq`, `movl`), never from `qword ptr`. The x86_64 runtime uses the same syntax.
 * **Symbols:** ELF, no leading underscore. The output defines exactly five global symbols:
-  `bsk_program`, `bsk_data`, `bsk_data_count`, `bsk_sdata`, `bsk_sdata_count`. Everything else is
+  `bsk_program`, `bsk_data`, `bsk_data_count`, `bsk_sdata`, `bsk_sdata_count` — seven with the
+  Fifth Edition contract, which adds `bsk_files` and `bsk_files_count`. Everything else is
   an assembler-local `.L` name (not in the object's symbol table):
 
   | Name | Meaning |
@@ -657,7 +824,9 @@ direct `call bsk_*` / `bsk_curline(%rip)` references, all resolved at static lin
   | `.Lsdb_<k>` | bytes of string DATA value `<k>` |
   | `.Lsdesc_<L>` | 32-byte `RTA_*` descriptor of string list `<L>` |
   | `.Lbsk_svars` | the 286 string variables (`SD_*` records) |
-  | `.Lbsk_sarr_<L>` | element storage (`SD_*` records) of string list `<L>` |
+  | `.Lbsk_sarr_<L>` | element storage (`SD_*` records) of string list or table `<L>` |
+  | `.Lfile_<k>` | bytes of FILES name `<k>` (Fifth Edition) |
+  | `.Lbsk_scells` | the `NSTEMPS` string temp cells (`SD_*` records; Fifth Edition) |
 
   Numeric local labels `1:`, `2:`, `3:` (referenced as `1f` …) are used only inside one opcode's
   sequence below. All numbers in the output are decimal except `0x` + 16 uppercase hex digits for
@@ -686,6 +855,7 @@ bsk_data:               "    .quad 0x<16 uppercase hex>" per DATA value (none if
 bsk_data_count:
     .quad <NDATA>
 .Lsdb_0:                each string DATA value as ".byte" lines like .Lstr_ (may be empty)
+.Lfile_1:               Fifth Edition: each FILES name k = 1 … NFILES as ".byte" lines
     .section .data.rel.ro,"aw",@progbits
     .p2align 3
 .Lsd_<id>:              per string id: "    .quad .Lstr_<id>" / "    .long <len>, 0"
@@ -696,14 +866,22 @@ bsk_sdata:              per string DATA value k: "    .quad .Lsdb_<k>" / "    .l
     .type bsk_sdata_count, @object
 bsk_sdata_count:
     .quad <NSDATA>
+    .globl bsk_files        Fifth Edition (every program of a switch-1 compiler):
+    .type bsk_files, @object
+bsk_files:              per file k: "    .quad .Lfile_<k>" / "    .long <len>, 0" (none if NFILES = 0)
+    .globl bsk_files_count
+    .type bsk_files_count, @object
+bsk_files_count:
+    .quad <NFILES>
     .data
     .p2align 3
 .Ldesc_<L>:             per used array, letter order:
     .quad .Lbsk_arr_<L>
     .long <dims>, <b1>, <b2>, <rowlen>, <letter>, <cap>      cap = (b1+1)*(b2+1)
-.Lsdesc_<L>:            per used string list, letter order:
+.Lsdesc_<L>:            per used string array, letter order:
     .quad .Lbsk_sarr_<L>
-    .long 1, <b1>, 0, 1, <letter>, <b1+1>
+    .long 1, <b1>, 0, 1, <letter>, <b1+1>                    a list
+    .long 2, <b1>, <b2>, <b2+1>, <letter>, <(b1+1)*(b2+1)>   a table (Fifth Edition)
     .bss
     .p2align 3
 .Lbsk_vars:
@@ -714,9 +892,12 @@ bsk_sdata_count:
     .p2align 3          per used array, letter order:
 .Lbsk_arr_<L>:
     .zero <8*(b1+1)*(b2+1)>
-    .p2align 3          per used string list, letter order:
+    .p2align 3          per used string array, letter order:
 .Lbsk_sarr_<L>:
-    .zero <16*(b1+1)>
+    .zero <16*cap>                                   cap as in .Lsdesc_<L>
+    .p2align 3          Fifth Edition, only if NSTEMPS > 0:
+.Lbsk_scells:
+    .zero <16*NSTEMPS>
     .section .note.GNU-stack,"",@progbits
 ```
 
@@ -762,6 +943,15 @@ generated function:
   `%rbp` frame pointer. No value is kept in a register across a `call`.
 * `bsk_program` never returns (main ends with `end`); FN functions return through the epilogue,
   result in `%xmm0`.
+* **Fifth Edition** (IR.md §3.3.1): string parameter k arrives as an SD pointer in R(k) =
+  `%rdi %rsi %rdx %rcx %r8 %r9 %r10 %r11` (k = 0 … 7; these are calls between generated
+  functions, so the System V limit of six integer argument registers does not apply) and the
+  prologue stores `movq R(k), <8*(W+k)>(%rsp)` instead of the `movsd`. A string function receives
+  the address of its result descriptor in `%rax` and stores `movq %rax, <8*(W+NP)>(%rsp)` in
+  place of `movq $0, …` (before the multi-line line save, which overwrites `%eax`); L = NP + 1 for
+  a single-line string function. A multi-line string function then clears its value:
+  `movq <8*(W+NP)>(%rsp), %rdi` / `call bsk_str_clear`. String functions return nothing in a
+  register.
 
 #### 5.4.5 Per-opcode translation
 
@@ -826,9 +1016,23 @@ generated function:
 | `fnarg` k | `movsd S(A), %xmm<k>` |
 | `stparam` k | `movsd S(A), %xmm0` / `movsd %xmm0, <8*(W+k)>(%rsp)` |
 | `ldfv` / `stfv` | `movsd <8*(W+NP)>(%rsp), %xmm0` / store; `movsd S(A), %xmm0` / `movsd %xmm0, <8*(W+NP)>(%rsp)` |
+| `scell` (Fifth Edition) | `leaq .Lbsk_scells+<16*X>(%rip), %rax` / `movq %rax, S(DST)` |
+| `sstr` | `movq S(A), %rdi` / `movsd S(B), %xmm0` / `call bsk_str` |
+| `len` `asc` `val` | `movq S(A), %rdi` / `call bsk_len` \| `bsk_asc` \| `bsk_val` / store |
+| `sald2` | `leaq .Lsdesc_<X>(%rip), %rdi` / `movsd S(A), %xmm0` / `movsd S(B), %xmm1` / `call bsk_saref2` / `movq %rax, S(DST)` |
+| `sparam` k | `movq <8*(W+k)>(%rsp), %rax` / `movq %rax, S(DST)` |
+| `sfv` | `movq <8*(W+NP)>(%rsp), %rax` / `movq %rax, S(DST)` |
+| `fnarg` k, string parameter | `movq S(A), R(k)` |
+| `callfn` / `scallfn`, string parameter 0 | `movq S(A), %rdi` (instead of `movsd S(A), %xmm0`) |
+| `scallfn` | `movsd S(A), %xmm0` or `movq S(A), %rdi` by the callee's parameter 0 kind (nothing if A = `IR_NONE`) / `movq S(B), %rax` / `call .Lfn_<L>` (nothing is stored) |
+| `sret` | `movq <8*(W+NP)>(%rsp), %rdi` / `movq S(A), %rsi` / `call bsk_str_set` / multi-line functions: restore the caller's run-time line as `ret` does / epilogue |
+| `fsel` | `movsd S(A), %xmm0` / `call bsk_fsel` |
+| `jeof` | `movsd S(A), %xmm0` / `call bsk_feof` / `testl %eax, %eax` / `jne <label>` |
+| `scratch` `frestore` | `movsd S(A), %xmm0` / `call bsk_scratch` \| `bsk_frestore` |
+| `smatredim` with B (string table) | `leaq .Lsdesc_<X>(%rip), %rdi` / `movsd S(A), %xmm0` / `movsd S(B), %xmm1` / `call bsk_mat_redim2` |
 
-Inside a multi-line function `line`, `label`, `jmp`, `jcmp`, `sjcmp` and `jfor` use its labels
-`.Lfn_<L>_L<id>`.
+Inside a multi-line function `line`, `label`, `jmp`, `jcmp`, `sjcmp`, `jfor` and `jeof` use its
+labels `.Lfn_<L>_L<id>`.
 
 **Compare semantics.** In AT&T order, `ucomisd X, %xmm0` compares `%xmm0` *with* X and sets only
 ZF/PF/CF (OF = SF = 0): ZF = 1 if equal, CF = 1 if `%xmm0` < X, PF = 1 if unordered. The
@@ -885,7 +1089,8 @@ DATA cursor (initial 0), the string DATA cursor (initial 0), the GOSUB stack (10
 its depth, the selected kernel variant and detected features (§6.6), the static matrix buffers
 (§6.6.6), the DET cell `_bsk_rt_kinv_det` (double, initially 0, §6.6.1), the NUM value (double,
 initially 0), and the input state of §6.7 (terminal flag, read buffer, current line and field
-cursor).
+cursor). Fifth Edition: the pending file selection and the file table of §6.8 (one record per
+FILES name, `LIM_FILES` at most).
 
 Data shared with compiled code:
 
@@ -897,6 +1102,8 @@ Data shared with compiled code:
 | `_bsk_data_count` | program | u64 | number of DATA values |
 | `_bsk_sdata` | program | SD[] | string DATA block in program order (`SD_CAP` 0) |
 | `_bsk_sdata_count` | program | u64 | number of string DATA values |
+| `_bsk_files` | program | SD[] | Fifth Edition: FILES names, entry k − 1 = file #k (`SD_CAP` 0) |
+| `_bsk_files_count` | program | u64 | Fifth Edition: number of FILES names, 0 … `LIM_FILES` |
 
 ### 6.2 Entry points
 
@@ -921,11 +1128,12 @@ All AAPCS64. "Error" means `_bsk_err(code)` is called and the function does not 
 | `_bsk_aref2` | x0 desc, d0 i, d1 j | x0 addr | both subscripts checked against the current `RTA_B1`/`RTA_B2`; address `RTA_DATA + 8·(ri·RTA_ROWLEN + rj)` with the current row length |
 | `_bsk_gosub_push` | x0 code address | — | depth 1024 → error 39 |
 | `_bsk_gosub_pop` | — | x0 code address | empty → error 33 |
-| `_bsk_end` | — | noreturn | pending-line newline, flush stdout, `exit(0)`; `exit(1)` instead if a stdout write failed earlier (`_bsk_rt_broken`) |
-| `_bsk_err` | w0 code | noreturn | precondition: code is a run-time error code (ERR_* 32..47); any other code exits 1 with no message. Pending-line newline, flush stdout, write `<MESSAGE> IN <_bsk_curline>` + LF to fd 2, `exit(1)` (codes 34 OUT OF DATA and 43 END OF INPUT exit 0, unless a stdout write failed earlier, then 1) |
+| `_bsk_end` | — | noreturn | Fifth Edition: finish the files in write mode first (§6.8; a failure → `_bsk_err(ERR_CANT_WRITE_FILE)` after the remaining files are finished); pending-line newline, flush stdout, `exit(0)`; `exit(1)` instead if a stdout write failed earlier (`_bsk_rt_broken`) |
+| `_bsk_err` | w0 code | noreturn | precondition: code is a run-time error code (ERR_* 32..47; with the Fifth Edition 32..55); any other code exits 1 with no message. Fifth Edition: finish the files in write mode not yet finished (§6.8; a failure only forces exit status 1). Pending-line newline, flush stdout, write `<MESSAGE> IN <_bsk_curline>` + LF to fd 2, `exit(1)` (codes 34 OUT OF DATA and 43 END OF INPUT exit 0, unless a stdout write or a file write failed earlier, then 1; 51 END OF FILE exits 1) |
 
 The MAT entry points (`_bsk_mat_*`) are specified in §6.5, the matrix kernels and their dispatch
-(`_bsk_kern_*`) in §6.6, the string, input and other Third/Fourth Edition entry points in §6.7.
+(`_bsk_kern_*`) in §6.6, the string, input and other Third/Fourth Edition entry points in §6.7,
+the Fifth Edition entry points and the file layer in §6.8.
 
 The comparison in `_bsk_aref*` is done on the rounded double before conversion to an integer, so
 huge or negative subscripts can never wrap. Stdout is written with `write(1, …)`; the buffer is
@@ -1018,10 +1226,17 @@ code) → `%edi`, pointer result `x0`→`%rax`, double result `d0`→`%xmm0`.
 | `bsk_change_n2s_el` | `%rdi` slist, `%xmm0` i, `%rsi` list | — |
 | `bsk_on` | `%xmm0` x, `%edi` n | `%xmm0` |
 | `bsk_sgn` `bsk_cot` | `%xmm0` | `%xmm0` |
+| `bsk_saref2` (Fifth Edition, §6.8) | `%rdi` sdesc, `%xmm0` i, `%xmm1` j | `%rax` SD address |
+| `bsk_str_clear` | `%rdi` SD | — |
+| `bsk_str` | `%rdi` destination SD, `%xmm0` x | — |
+| `bsk_len` `bsk_asc` `bsk_val` | `%rdi` SD | `%xmm0` |
+| `bsk_fsel` `bsk_scratch` `bsk_frestore` | `%xmm0` file number | — |
+| `bsk_feof` | `%xmm0` file number | `%eax` 1 / 0 |
 
 Defined by every compiled program (§5.4.3): `bsk_program` (code, System V, no arguments),
 `bsk_data` (8-byte aligned doubles), `bsk_data_count` (u64), `bsk_sdata` (8-byte aligned `SD_*`
-records), `bsk_sdata_count` (u64). The DET cell is `bsk_rt_kinv_det` (`.globl` + `.hidden`,
+records), `bsk_sdata_count` (u64), and with the Fifth Edition `bsk_files` (8-byte aligned `SD_*`
+records) and `bsk_files_count` (u64). The DET cell is `bsk_rt_kinv_det` (`.globl` + `.hidden`,
 defined in `rt_kinit.s`). The `RTA_*` descriptor layout is
 unchanged (`runtime.inc`). `main` is entered from glibc's start code with `%rsp` ≡ 8 (mod 16), so
 it pushes `%rbp` before its first `call`.
@@ -1040,6 +1255,8 @@ Only glibc and libm, always called through the PLT (`call write@PLT`):
 | input (§6.7) | `read(0, buf, n)`, `isatty(0)`, `strtod` |
 | strings (§6.7) | `malloc`, `realloc`, `memcpy`/`memmove` (or explicit loops) |
 | RANDOMIZE, TAB, COT | `getentropy(buf, 8)` (glibc ≥ 2.25), `time(NULL)`; `fmod`; `tan` |
+| files (§6.8) | `open(path, flags, mode)` (variadic: `movl $0, %eax` before the call; `O_RDONLY` 0, `O_WRONLY` 01, `O_CREAT` 0100, `O_TRUNC` 01000), `close`, `fstat(fd, buf)` (`struct stat` 144 bytes, `st_mode` u32 at offset 24), `read`, `write` |
+| STR$ (§6.8) | the `rt_numfmt` field routine (no new libc call) |
 
 Integers below 10⁹ are converted with `cvttsd2si` (the `fcvtzu` analogue); everything else in
 `rt_numfmt` follows §6.2. Instruction set: the x86-64 baseline (SSE2) only — no SSE4.1
@@ -1382,6 +1599,109 @@ this differently:
 exits); string constants and string DATA (`SD_CAP` = 0) are never written. The runtime still
 never uses stdio.
 
+### 6.8 Fifth Edition entry points and the file layer (both targets)
+
+arm64 names; x86_64 drops the underscore and maps registers as in §6.4.2. "sdesc" is the `RTA_*`
+descriptor of a string list or string table; a "file number" is a double (the designator value,
+LANGUAGE.md §7.21). Files: `src/runtime/rt_files.s` and `rt_ed5.s` (arm64),
+`src/runtime_x86_64_linux/rt_files.s` and `rt_ed5.s` (x86_64), plus the changes listed in §2.
+
+| Function | In | Out | Semantics (LANGUAGE.md) |
+|----------|----|-----|-------------------------|
+| `_bsk_saref2` | x0 sdesc, d0 i, d1 j | x0 SD | subscript rule of `_bsk_aref2` (§7.11, error 32) against the current `RTA_B1`/`RTA_B2`; address `RTA_DATA + 16·(ri·RTA_ROWLEN + rj)` |
+| `_bsk_str_clear` | x0 SD | — | LEN := 0 (PTR and CAP kept) |
+| `_bsk_str` | x0 dst, d0 x | — | §6.1 STR$: the §9 field of x from the `rt_numfmt` routine without its leading blank (x ≥ 0, `-0` included) and without its trailing blank; stored into dst with `_bsk_str_set` semantics (error 47) |
+| `_bsk_len` | x0 SD | d0 | `SD_LEN` as a double (`ucvtf` / `cvtsi2sdq` of the zero-extended u32) |
+| `_bsk_asc` | x0 SD | d0 | LEN = 0 → error 55; else the first byte (unsigned) as a double |
+| `_bsk_val` | x0 SD | d0 | §6.1: the numeric-field check of §6.7 ("Fields") on the whole value (every `0x20` removed, then `[+|-] mantissa [E [+|-] digits]` with the §4.1 limits); invalid or empty → error 54; else `strtod` on the blank-free text (the scratch buffer of the input reader may be reused: a VAL argument has at most `LIM_STRING_LEN` bytes, and a valid one at most 15 after blank removal, so longer blank-free text is rejected before copying) |
+| `_bsk_fsel` | d0 x | — | `k = trunc(x)` compared as a double: `0 ≤ k ≤ _bsk_files_count` else error 49; the pending selection := k |
+| `_bsk_feof` | d0 x | w0 | LANGUAGE.md §7.26: number check as `_bsk_fsel` (error 49); k ≥ 1 in write mode → 0; k ≥ 1 in read mode → open if needed (error 48), then 1 if the reader has no unread byte (a refill `read` returns 0), else 0; k = 0 → the same on the standard-input reader (on a terminal stdout is flushed before the refill `read`) |
+| `_bsk_scratch` | d0 x | — | §7.22: number check (error 49); k = 0 → error 49; close the file if open (write mode: buffered output discarded, not written); `open(path, O_WRONLY|O_CREAT|O_TRUNC, 0666)` (failure → error 48); only then, if the file has no output buffer yet, `malloc(RT_FILEBUF_SIZE)` (failure → error 47); write mode, `col = out = 0`, buffer empty |
+| `_bsk_frestore` | d0 x | — | §7.23: number check (error 49); k = 0 → error 49; write mode: `col ≠ 0` → LF into the buffer, flush (failure → error 53), `close`; read mode, open: `close`; the file becomes "read, not open" and its reader state (buffer, current line, cursor) is emptied |
+
+**Pending selection.** `_bsk_fsel` stores k in a runtime-private word ("none" otherwise). Every
+print and input entry point — `_bsk_print_num _bsk_print_str _bsk_print_sv _bsk_print_comma
+_bsk_print_semi _bsk_print_tab _bsk_print_nl _bsk_input_begin _bsk_input_num _bsk_input_str
+_bsk_input_str_el _bsk_input_end` — reads the pending selection **and resets it to none on
+entry**, before anything else (so a function the entry point could not call anyway never sees a
+stale selection). With none, or with k = 0 for a print entry point, it does exactly what §6.2 and
+§6.7 specify. Otherwise:
+
+* **print, k ≥ 1:** file k must be in write mode, else error 50 ILLEGAL FILE COMMAND; then the
+  §8 column logic runs with file k's own `col`, `out` and output buffer instead of stdout's. The
+  column code is one routine parameterised by a pointer to an output-state record (stdout's or a
+  file's), so the rules cannot drift apart.
+* **input, k ≥ 1 or k = 0:** the INPUT # rules (LANGUAGE.md §7.25) on the selected reader (file
+  k's, or for k = 0 the standard-input reader of §6.7): no prompt, no diagnostics. k ≥ 1 must be
+  in read mode (error 50) and is opened if needed (error 48). `_bsk_input_begin` reads the next
+  line of the reader (none → error 51 END OF FILE); `_bsk_input_num` / `_bsk_input_str` /
+  `_bsk_input_str_el` take the next field, reading further lines silently while the current one
+  has no field left (none → error 51); an invalid field → error 52 INCORRECT FORMAT IN FILE (the
+  element form takes the field first, then addresses the element, error 32 at the store);
+  `_bsk_input_end` discards the rest of the current line without a message. For k = 0 on a
+  terminal: stdout is flushed before each line is read and `col = out = 0` after it (no `"? "` is
+  written). An over-long line → error 46 as in §6.7.
+
+**Readers.** The standard-input reader of §6.7 and each file's reader have the same state: an
+input chunk buffer, its start/end positions, a line buffer, the current line's length and the
+field cursor. They share one line-assembly and field-scanning routine parameterised by a pointer
+to the reader (the INPUT dialogue's prompt and diagnostics are the only differences, selected by
+a flag). A file reader's buffers are `malloc`ed when the file is first opened for reading
+(`RT_INBUF_SIZE` chunk, `LIM_INPUT_LINE + 16` line bytes; failure → error 47) and reused after
+RESTORE #. **Chunk rule** (LANGUAGE.md §7.21 "Readers", observable, so both runtimes do exactly
+this): a reader calls `read(fd, chunk, RT_INBUF_SIZE)` only when it needs a byte and holds no
+unread byte; it never discards unread bytes except at RESTORE # / SCRATCH # of its file; it
+never reads ahead otherwise. A reader's current line belongs to the reader, not to a statement: INPUT, MAT INPUT,
+INPUT #0 and IF END #0 all advance the one standard-input reader (LANGUAGE.md §7.21), and each
+`_bsk_input_begin` starts with the reader's next line. `read` is retried on `EINTR`; any other
+error or 0 bytes is the end of that reader.
+
+**File table.** Runtime-private, `LIM_FILES` records, indexed by k − 1, zero-initialised (state
+"read, not open"): state (read-not-open / read-open / write), `fd`, output `col` and `out`, the
+output buffer pointer and fill count (`RT_FILEBUF_SIZE` bytes, `malloc`ed at the first SCRATCH
+of the file after its `open` succeeded, failure → error 47, then reused), the reader, and a
+"write failed" flag. Records
+beyond `_bsk_files_count` are never touched.
+
+**Opening.** The path is the file's `_bsk_files` entry copied into a NUL-terminated
+runtime-private buffer of `LIM_FILE_NAME + 1` bytes (a FILES name never contains a 0 byte,
+LANGUAGE.md §7.21). Read: `open(path, O_RDONLY)`; then `fstat(fd, &st)` and if
+`(st_mode & S_IFMT) == S_IFDIR` the fd is closed and the open fails (on Unix `open` succeeds on a
+directory); any failure → error 48 CAN'T OPEN FILE. Write: `open(path, O_WRONLY|O_CREAT|O_TRUNC,
+0666)` (fails on a directory by itself). `open` is variadic: on arm64-macos the mode goes **on
+the stack** (§3.1), on x86_64-linux in `%edx` with `%eax` = 0. The flag values differ between
+the hosts and are runtime-private constants of each runtime: macOS `O_RDONLY` 0, `O_WRONLY` 1,
+`O_CREAT` 0x200, `O_TRUNC` 0x400, `struct stat` 144 bytes with `st_mode` (u16) at offset 4;
+Linux §6.4.3. `S_IFMT` 0o170000, `S_IFDIR` 0o040000 on both. `close` results are ignored.
+
+**Writing.** Output bytes of file k go into its buffer through one byte-append routine, and
+that routine is the only place that writes a full buffer: immediately after it stores a byte
+that makes the fill count equal to `RT_FILEBUF_SIZE`, it writes all 4096 bytes with `write`
+(retried on `EINTR` and after a partial write until done) and sets the fill count to 0. A full
+buffer is never kept until the next byte, and a partially filled buffer is written only by
+RESTORE # and at termination (LANGUAGE.md §7.21). A failure (any other error, or a write
+of 0 bytes) sets the file's "write failed" flag, empties its buffer and raises error 53
+CAN'T WRITE FILE; the flagged file is skipped by every later flush (it stays in write mode; a
+later SCRATCH clears the flag). The column logic never writes a trailing blank (lazy spaces,
+§8), so a file never contains one.
+
+**Finishing at termination.** `_bsk_end` and `_bsk_err` finish the files once (a runtime-private
+"finished" flag makes the second call a no-op, so `_bsk_err` called from `_bsk_end` does not
+repeat it): for k = 1 … `_bsk_files_count` in ascending order, every file in write mode whose
+"write failed" flag is clear gets a LF in its buffer if its `col ≠ 0` and is flushed. Any failure
+is remembered and the loop continues. Then: in `_bsk_end`, a failure → `_bsk_err(ERR_CANT_WRITE_FILE)`
+with `_bsk_curline` still the END/STOP line; in `_bsk_err`, a failure (or an earlier "write
+failed" flag of any file) makes the exit status 1 whatever the code (LANGUAGE.md §10). Only then
+stdout's pending-line newline and flush, then the message. Files in read mode need nothing, and
+no file is closed (exit closes them).
+
+**String tables.** `_bsk_smat_read` and `_bsk_smat_print` accept a string table descriptor
+(`RTA_DIMS` 2) and process its current r × c shape row by row exactly like `_bsk_mat_read` /
+`_bsk_mat_print` for a numeric table (§6.5; LANGUAGE.md §7.14.5: string elements are printed as
+string items); `_bsk_mat_redim2` redimensions a string table descriptor exactly as a numeric table (§6.5: only
+the `RTA_*` shape fields change; the test uses `RTA_CAP` in elements, so the element size does not
+matter, and no element is moved or freed). MAT INPUT stays list-only (§7.14.8).
+
 ## 7. Targets and porting
 
 The design keeps every target-specific decision behind the descriptor and the runtime ABI. Two
@@ -1425,7 +1745,9 @@ under that platform's ABI, and its own section here.
 * `COMPILER_DIRS` (the "not implemented yet" check) lists `src/backend/x86_64_linux` too.
 * Test sidecar formats are documented at the top of `tests/run.sh`. A program or run-phase
   error test may have a `NAME.in` file: its bytes are the program's standard input (INPUT, MAT
-  INPUT); without it stdin is `/dev/null`, exactly as before.
+  INPUT); without it stdin is `/dev/null`, exactly as before. Fifth Edition: every such case
+  runs in a fresh empty working directory, and the optional `NAME.files/` (fixtures) and
+  `NAME.expect/` (expected files) directories are handled as in §8.5.
 
 ### 8.2 Linux runtime build (`Makefile.linux`)
 
@@ -1469,6 +1791,7 @@ covered by `make test`.
 <bundle>/tests/include_asserts.inc
 <bundle>/cases/programs/NAME.s NAME.out [NAME.err] [NAME.in]            from tests/programs/NAME.*
 <bundle>/cases/errors/NAME.s NAME.meta NAME.err [NAME.out] [NAME.in]    run-phase tests/errors/NAME.*
+<bundle>/cases/<kind>/NAME.files/ NAME.expect/  copies of the §8.5 directories, when present
 <bundle>/cases/<kind>/NAME.packfail      instead of NAME.s when compiling on the Mac failed:
                                          "status <n>" line, then the compiler's stderr
 ```
@@ -1557,3 +1880,69 @@ sh tests/cross.sh [-v] [-H HOST] [PATTERN...]
   (`uname -m`, `as --version | head -1`, `gcc --version | head -1`); `Cross tests`:
   `sh bundle/tests/cross_run.sh bundle`; on failure, upload `bundle/build-x86_64-linux/` as
   artifact `build-x86_64-linux` (`if-no-files-found: ignore`).
+
+### 8.5 File tests (Fifth Edition; implementer T)
+
+Programs that use files (LANGUAGE.md §7.21–§7.26) need a known working directory, input files
+that exist before the run, and a check of the files the run leaves behind. Two optional sidecar
+**directories** do this, next to the `NAME.bas` of a `tests/programs` case or a run-phase
+`tests/errors` case:
+
+* `NAME.files/` — **fixtures**: its contents (files and subdirectories, recursively) are copied
+  into the run's working directory before the program starts.
+* `NAME.expect/` — **expected files**: after the run, every regular file under it must exist at
+  the same relative path in the working directory with byte-identical contents.
+
+**Every** program and run-phase case — with or without these directories — runs with its working
+directory set to a **fresh, empty directory** made for that case (`mktemp -d` below the runner's
+own temp directory), into which `NAME.files/` (if present) is copied with `cp -R NAME.files/.
+WORKDIR/`. The compiled program is not in that directory (it is invoked by absolute path) and
+neither are its standard input, output and error capture files; so the working directory holds
+exactly the fixtures and whatever the program creates. The directory is removed after the case.
+
+**Checks, in this order, after the existing exit-status / stdout / stderr checks** (each failure
+is one `FAIL <name>: <reason>` line, and the first failing check ends the case, as today):
+
+1. For each regular file `R` under `NAME.expect/` (relative path): `WORKDIR/R` missing →
+   `FAIL <name>: missing file R`; contents differ (`cmp -s`) → `FAIL <name>: file R differs`
+   (with `-v`: `diff` of the two, as for stdout).
+2. Every regular file `R` in `WORKDIR` (recursively) must be either listed in `NAME.expect/` or
+   be a fixture from `NAME.files/` with unchanged contents; else
+   `FAIL <name>: unexpected file R` (created by the program and not expected) or
+   `FAIL <name>: fixture R changed` (a fixture overwritten but not listed in `NAME.expect/`).
+   So a program that writes a file the test does not expect fails, and a test that expects a
+   fixture to be rewritten says so by listing it in `NAME.expect/`.
+
+Directories themselves are not compared (only regular files); a fixture or expected-file name is
+ASCII without blanks, `*`, `?`, `[`, newline or a leading `-`, and two names never differ only in
+letter case (the corpus must behave identically on macOS's case-insensitive default file system
+and on Linux). A case without the two directories gets checks 1–2 for free: its working
+directory must be empty after the run, so a program writing a stray file fails.
+
+**Where each script does it:**
+
+* `tests/run.sh` (Mac): as above; the compiled executable stays in the runner's temp directory,
+  the program runs as `(cd "$WORKDIR" && exec "$EXE" <"$IN" >"$OUT" 2>"$ERR")` under the
+  existing timeout — the `exec` makes the subshell *become* the program, so the timeout's kill
+  reaches the program itself and not only a waiting shell. Compile-phase `tests/errors` cases and `tests/ir` cases are unaffected (the compiler
+  never runs in the work directory; the driver's own temp files are elsewhere).
+* `tests/cross_pack.sh`: copies `NAME.files/` and `NAME.expect/` (when present) unchanged to
+  `cases/<kind>/NAME.files/` and `cases/<kind>/NAME.expect/` with `cp -R` (§8.3 bundle layout).
+* `tests/cross_run.sh` (Linux): the same per-case work directory, copy and checks as `run.sh`;
+  only POSIX `sh`, `find`, `cmp`, `cp -R`, `mktemp -d` and `diff` (for `-v`) are used, so it
+  runs on the CI image and on `desktop` alike.
+* CI (§8.4): no change in its steps — the bundle carries the directories; `run.sh` on macOS and
+  `cross_run.sh` on Linux apply the checks.
+* `.gitattributes`: `tests/**/*.files/** -text` and `tests/**/*.expect/** -text`, so fixture and
+  expected-file bytes (CR, missing final LF) are never normalised.
+
+**Misplaced directories are a harness error.** A compile-phase `tests/errors` case or a
+`tests/ir` case that has `NAME.files/` or `NAME.expect/` is a corpus mistake (those tests never
+run a program): `run.sh` and `cross_pack.sh` report `<script>: NAME: .files/.expect only for
+program and run-phase tests` on stderr and exit 2 (setup error) before running anything.
+
+The checks never look outside `WORKDIR`; a test must not use absolute paths that escape it
+(`FILES /tmp/x` is tested only through its error behaviour, never by writing). Error tests
+whose program fails to open a file (`CAN'T OPEN FILE`) use a name that does not exist in the work
+directory or a fixture directory as the path (a fixture subdirectory is created by copying a
+`NAME.files/DIR/` that contains a file, since git does not store empty directories).

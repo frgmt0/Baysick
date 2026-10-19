@@ -77,6 +77,24 @@
 //  _bsk_num() -> d0  _bsk_det() -> d0   NUM, DET
 //  (MAT READ X$(n) redimensions with _bsk_mat_redim1 on the slist descriptor.)
 //
+//  Fifth Edition (DESIGN.md 6.8; "sdesc" = RTA descriptor of a string list
+//  OR string table, d0/d1 = file numbers as doubles, LANGUAGE.md 7.21-7.26):
+//  _bsk_saref2(x0=sdesc, d0=i, d1=j) -> x0   address (SD*) of string table element (i,j)
+//  _bsk_str_clear(x0=SD*)               the string := empty (LEN 0, buffer kept)
+//  _bsk_str(x0=dst SD*, d0=x)           dst := STR$(x) (OUT OF ROOM)
+//  _bsk_len(x0=SD*) -> d0               LEN
+//  _bsk_asc(x0=SD*) -> d0               ASC (ASC OF EMPTY STRING)
+//  _bsk_val(x0=SD*) -> d0               VAL (ILLEGAL 'VAL' ARGUMENT)
+//  _bsk_fsel(d0=file number)            select the file of the next print/input
+//                                       entry point (INVALID FILE NUMBER)
+//  _bsk_feof(d0=file number) -> w0      IF END #: 1 at end, else 0
+//  _bsk_scratch(d0=file number)         SCRATCH #
+//  _bsk_frestore(d0=file number)        RESTORE #
+//  Changed by the Fifth Edition: _bsk_print_* _bsk_print_sv _bsk_print_tab
+//  and _bsk_input_* honour a pending _bsk_fsel; _bsk_smat_read and
+//  _bsk_smat_print accept string tables; _bsk_end and _bsk_err flush the
+//  files written (DESIGN.md 6.8).
+//
 //  MAT statements (DESIGN.md 6.5; x0/x1/x2 = RTA descriptors, LANGUAGE.md 7.14):
 //  _bsk_mat_redim1(x0=desc, d0=rows)              shape rows x 1
 //  _bsk_mat_redim2(x0=desc, d0=rows, d1=cols)     shape rows x cols
@@ -110,6 +128,9 @@
 //  _bsk_sdata                 8-byte aligned array of SD records (string DATA
 //                             values, CAP 0), may be empty
 //  _bsk_sdata_count           .quad number of entries in _bsk_sdata (may be 0)
+//  _bsk_files                 8-byte aligned array of SD records (CAP 0): the
+//                             FILES names, entry k-1 = file #k (Fifth Edition)
+//  _bsk_files_count           .quad number of entries in _bsk_files (0..LIM_FILES)
 
 // ---- Array descriptor (RTA_*), 32 bytes, emitted by the backend -----------------
 .equ RTA_DATA,          0   /* ptr  element storage, (b1+1)*(b2+1) doubles, zero-filled */
@@ -130,6 +151,9 @@
 // A STRING LIST uses the same 32-byte RTA descriptor with DIMS 1, B2 0,
 // ROWLEN 1, CAP b1+1, and RTA_DATA pointing at (b1+1) SD records (16 bytes
 // each, zero-filled = empty strings): element i is at RTA_DATA + 16*i.
+// A STRING TABLE (Fifth Edition) uses DIMS 2, B1, B2, ROWLEN b2+1, CAP
+// (b1+1)*(b2+1), RTA_DATA pointing at CAP SD records: element (i,j) is at
+// RTA_DATA + 16*(i*RTA_ROWLEN + j); MAT READ redimensions it like a table.
 
 // ---- String descriptor (SD_*), 16 bytes ----------------------------------------
 // A string value: LEN bytes at PTR (no NUL; PTR may be 0 when LEN is 0).
@@ -204,5 +228,8 @@
 // ---- Input (DESIGN.md 6.7) --------------------------------------------------
 .equ RT_INBUF_SIZE,     65536       /* read(0) chunk buffer */
 .equ TAB_MODULUS,       75          /* TAB(x): trunc(x) mod 75 */
+
+// ---- Files (DESIGN.md 6.8) ---------------------------------------------------
+.equ RT_FILEBUF_SIZE,   4096        /* output buffer of each file in write mode */
 
 .endif

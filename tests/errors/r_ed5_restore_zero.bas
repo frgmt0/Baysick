@@ -1,0 +1,3 @@
+10 PRINT "R";
+20 RESTORE #0
+30 END

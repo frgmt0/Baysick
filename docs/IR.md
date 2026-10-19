@@ -9,11 +9,13 @@ Language semantics referenced here are defined in `docs/LANGUAGE.md`.
 
 The IR is a **linear, target-independent three-address code over virtual registers** ("temps"):
 
-* every value is an IEEE-754 double, except that a temp defined by `slit`, `svar` or `sald1` is
-  a **string reference** ("sref"): the address of a 16-byte string descriptor (`SD_*`,
-  `runtime.inc`). There are no string temporaries: the Fourth Edition has no string operators,
-  so every string value lives in a variable, a list element, a constant or a DATA item, and an
-  sref names it (§3.2);
+* every value is an IEEE-754 double, except that a temp defined by `slit`, `svar`, `sald1` and,
+  in the Fifth Edition, `scell`, `sald2`, `sparam` or `sfv` is a **string reference** ("sref"):
+  the address of a 16-byte string descriptor (`SD_*`, `runtime.inc`). There are no string
+  temporaries: every string value lives in a variable, an array element, a constant, a DATA item
+  or — for the results of the Fifth Edition string functions (`STR$`, `FNx$`) and for string
+  arguments — in a static **string temp cell** that the frontend allocates per use (§2.1,
+  §3.3), and an sref names it (§3.2);
 * an instruction reads up to three temps (`A`, `B`, `C`) and writes at most one (`DST`);
 * control flow is explicit jumps to numbered labels; there are no basic-block objects, no SSA
   phi nodes and no implicit fall-through tricks;
@@ -31,32 +33,38 @@ the middle of anything), so φ-placement would add complexity no backend needs.
 **Temp lifetime rule** (backends may rely on it): within a function each temp is written by
 exactly one instruction (static single assignment, without φ), and is read only by instructions
 that come **after** its definition in the linear order and before the next `line` instruction
-that follows the definition. Temps are function-local. A temp may be live across `callfn`. Every
-temp has a **kind** fixed by its defining opcode — *sref* for `slit`, `svar`, `sald1`, *number*
-for every other — and every operand field requires one kind (§3, §3.2, verifier §6).
+that follows the definition. Temps are function-local. A temp may be live across `callfn` and
+`scallfn`. Every temp has a **kind** fixed by its defining opcode — *sref* for `slit`, `svar`,
+`sald1`, `scell`, `sald2`, `sparam`, `sfv`, *number* for every other — and every operand field
+requires one kind (§3, §3.2, §3.3, verifier §6).
 
 ## 2. Module structure
 
-A **Module** (`IRM_*`, 3488 bytes, DESIGN.md §2.2)
+A **Module** (`IRM_*`, 3488 bytes; 3624 with the Fifth Edition contract, DESIGN.md §2.2)
 holds:
 
 | Part | Meaning |
 |------|---------|
 | `NFORS` | number of FOR statements; FOR *k* (0-based, in ascending line order) |
 | `NSLOTS` | number of global variable cells = 286 + 2·NFORS |
-| strings | table of string constants outside DATA `s0, s1, …` (`IRS_*`: pointer + length, no NUL): PRINT labels and the constants of LET, IF and CHANGE |
+| strings | table of string constants outside DATA `s0, s1, …` (`IRS_*`: pointer + length, no NUL): PRINT labels and the constants of LET, IF and CHANGE (Fifth Edition: of every string expression, §4.1) |
 | data | the numeric DATA block: `NDATA` doubles as raw IEEE bits, in program order |
 | sdata | the string DATA block: `NSDATA` entries `IRS_*` (bytes as stored, LANGUAGE.md §7.5), in program order |
 | arrays | 26 entries `IRA_*` (letter A…Z): `DIMS` 0 (unused) / 1 / 2, bounds `B1`, `B2` (the initial bounds; they fix the storage `(B1+1)·(B2+1)`; MAT statements may change the run-time shape within it, LANGUAGE.md §7.14.3) |
 | funcs | 27 entries `IRF_*`: index 0 = `main`, index 1+L = `FN` letter L; `PRESENT` = 0 if absent |
-| sarrays | 26 entries `IRA_*` (letter A…Z) for the string lists `A$( )` … `Z$( )`: `DIMS` 0 (unused) or 1, `B1` (the bound, default 10; storage `B1+1` strings), `B2` 0 |
+| sarrays | 26 entries `IRA_*` (letter A…Z) for the string arrays `A$( )` … `Z$( )`: `DIMS` 0 (unused), 1 (list: `B1`, default 10, storage `B1+1` strings, `B2` 0) or, Fifth Edition, 2 (table: `B1`, `B2`, default 10, 10, storage `(B1+1)·(B2+1)` strings) |
+| stemps | Fifth Edition (this and the next two rows exist only in a module built with `BSK_ED5_CONTRACT=1`, `IRM_SIZE` 3624; with the switch 0 no module touches them, DESIGN.md §2.2): `NSTEMPS`, the number of string temp cells `%s0 … %s(NSTEMPS−1)` (§2.1) |
+| files | Fifth Edition: `NFILES` (0…8) FILES names `IRS_*` in file-number order (entry 0 = `#1`), bytes as the frontend determined them (LANGUAGE.md §7.21) |
+| fnkinds | Fifth Edition: 27 u32 `FNK_*` words, one per function index: bit k (`FNK_SPARAM0 << k`) = parameter k is a string parameter; `FNK_STRING` = a string function `FNx$`; 0 for `main` and for numeric functions with numeric parameters |
 
 A **Function** (`IRF_*`, 96 bytes) holds a linear array of
 instructions, its temp count, a label table (`LABELS[id]` = BASIC line number for a line label,
 0 for an internal label), its kind (`FUNC_KIND_MAIN`, `FUNC_KIND_FN` for a single-line DEF,
 `FUNC_KIND_FNML` for a multi-line DEF), its parameters (`NPARAMS` 0…8 and `PARAMS[k]`, the
 scalar slot naming parameter k; `PARAM` = `PARAMS[0]` or `IR_NONE`, kept for the one-parameter
-form), `DEFLINE` and, for a multi-line function, `ENDLINE` (its FNEND line). `main` has one line
+form), `DEFLINE` and, for a multi-line function, `ENDLINE` (its FNEND line). In the Fifth
+Edition `PARAMS[k]` is a **string slot** (0…285, the `X$` of the parameter) when bit k of the
+function's `fnkinds` word is set, a scalar slot otherwise. `main` has one line
 label per line of the main program (every program line that is not in a multi-line DEF body,
 LANGUAGE.md §7.10) plus internal labels; a multi-line function has one line label per line of
 its body plus internal labels; single-line functions have no labels.
@@ -69,6 +77,8 @@ its body plus internal labels; single-line functions have no labels.
 | slot | u32 in `IRI_X`: `0..285` user scalars, `286+2k` LIMIT of FOR k, `287+2k` STEP of FOR k | `A`, `X7`, `%lim3`, `%step3` |
 | string slot | u32 in `IRI_X` (`svar`): `0..285`, numbered like scalar slots, a separate space | `A$`, `X7$` |
 | string list | u32 letter 0..25 in `IRI_X` (`sald1`, `smat*`, element form of `sread`/`insv`); in `IRI_IMM` (element form of `chgn2s`, §3.2) | `A$` … `Z$` |
+| string table | u32 letter 0..25 in `IRI_X` (`sald2`; `smatredim`, `smatread`, `smatprint` accept a string list or table) | `A$` … `Z$` |
+| string temp cell | u32 in `IRI_X` (`scell`): `0..NSTEMPS-1` | `%s<n>` |
 | label | u32 id in `IRI_X` (or `IRI_IMM` for gosub's return label) | `@<line>` for a line label, `L<id>` for an internal label |
 | array | u32 letter 0..25 in `IRI_X`; MAT opcodes also in `IRI_A` / `IRI_B` (§3.1) | `A` … `Z` |
 | function | u32 letter 0..25 in `IRI_X` | `FNA` … `FNZ` |
@@ -76,7 +86,7 @@ its body plus internal labels; single-line functions have no labels.
 | constant | u64 IEEE-754 bits in `IRI_IMM` | `0x` + 16 uppercase hex digits |
 | relation | u16 in `IRI_REL` | `eq ne lt le gt ge` |
 | line number | u64 in `IRI_IMM` (`line` op) | decimal |
-| small integer | u64 in `IRI_IMM`: parameter index (`param`, `stparam`, `fnarg`), count (`onsel`), RESTORE variant | decimal / `all num str` |
+| small integer | u64 in `IRI_IMM`: parameter index (`param`, `stparam`, `fnarg`, `sparam`), count (`onsel`), RESTORE variant | decimal / `all num str` |
 
 Scalar slot of a variable: `letter*11 + (digit+1)`, or `letter*11` for a bare letter
 (`A`=0, `A0`=1, … `A9`=10, `B`=11, …, `Z9`=285). Text name: the letter, followed by the digit if
@@ -136,21 +146,27 @@ Each instruction is a 32-byte record (`IRI_*`). "Run-time line" means the value 
 Placement rules (checked by the verifier, §6). Opcode groups:
 
 * **E** (expression): `const ldv add sub mul div pow neg sin cos tan atn exp abs log sqr int rnd
-  ald1 ald2 callfn fnarg sgn cot num det`;
-* **S** (string reference): `slit svar sald1`;
+  ald1 ald2 callfn fnarg sgn cot num det`, and (Fifth Edition) `len asc val`;
+* **S** (string reference): `slit svar sald1`, and (Fifth Edition) `scell sald2`;
+* **X** (string expression, Fifth Edition): `sset sstr scallfn` — the operations a string
+  expression or a string argument needs (also inside single-line functions);
 * **T** (statement): `line label stv ast1 ast2 jmp jcmp jfor read prnum prstr prcomma prsemi
-  prnl stop`, the MAT opcodes 42–54, and `sset sjcmp prsv prtab sread inbeg innum insv inend
-  matinput smatinput smatredim smatread smatprint chgs2n chgn2s onsel restore randomize`.
+  prnl stop`, the MAT opcodes 42–54, and `sjcmp prsv prtab sread inbeg innum insv inend
+  matinput smatinput smatredim smatread smatprint chgs2n chgn2s onsel restore randomize`, and
+  (Fifth Edition) `fsel jeof scratch frestore`.
 
 `nop` belongs to no group: it is allowed in every function kind.
 
 | Function kind | Allowed | It ends with |
 |---------------|---------|--------------|
-| `main` | E, S, T, `gosub`, `return`, `end` | `end` (END must be the last line) |
-| single-line FN (`FUNC_KIND_FN`) | E, `param`, `ret` | `ret` |
-| multi-line FN (`FUNC_KIND_FNML`) | E, S, T, `param`, `stparam`, `ldfv`, `stfv`, `ret` | `ret` (its FNEND) |
+| `main` | E, S, X, T, `gosub`, `return`, `end` | `end` (END must be the last line) |
+| single-line FN (`FUNC_KIND_FN`) | E, S, X, `param`, `sparam`, and `ret` (numeric) or `sret` (string function) | `ret` / `sret` |
+| multi-line FN (`FUNC_KIND_FNML`) | E, S, X, T, `param`, `stparam`, `sparam`, and `ldfv`, `stfv`, `ret` (numeric) or `sfv`, `sret` (string function) | `ret` / `sret` (its FNEND) |
 
-Instructions after an unconditional transfer (`jmp`, `return`, `end`, `stop`, `ret`) up to the
+(Without Fifth Edition features S and X never occur in a single-line function, so the table is the
+Fourth Edition table for every Fourth Edition program.)
+
+Instructions after an unconditional transfer (`jmp`, `return`, `end`, `stop`, `ret`, `sret`) up to the
 next label are reachable only through labels, as usual.
 
 ### 3.1 MAT opcodes
@@ -228,6 +244,64 @@ argument 0). Nothing else may come between them, so a backend can load the argum
 into its argument registers. A call with k = 0 has `callfn` A = `IR_NONE` and no `fnarg`. The
 verifier checks that the count, `1 + number of fnargs` (or 0), equals the callee's `NPARAMS`.
 
+### 3.3 Fifth Edition opcodes
+
+Opcodes 85–98 (LANGUAGE.md §4.4–§4.6, §6.1, §7.10.1, §7.21–§7.26; staged behind
+`BSK_ED5_CONTRACT`, DESIGN.md §2.2). "file" fields hold a number temp, the designator value
+before truncation; the runtime truncates and checks it. Each opcode is one runtime call
+(DESIGN.md §6.8) except `scell`, `sparam`, `sfv`, which only form an address, and `scallfn`,
+which calls a generated function. Unused fields as in §2.1.
+
+| Op | Fields | Text form | Semantics |
+|----|--------|-----------|-----------|
+| `scell` 85 | DST, X=cell | `t0 = scell %s3` | DST := reference to string temp cell X |
+| `sstr` 86 | A=sref, B | `sstr t1, t0` | the string A references := STR$(B) (LANGUAGE.md §6.1); A is never a `slit`; OUT OF ROOM |
+| `len` 87 `asc` 88 `val` 89 | DST, A=sref | `t2 = len t1` | DST := LEN / ASC / VAL of the string A references (ASC OF EMPTY STRING, ILLEGAL 'VAL' ARGUMENT) |
+| `sald2` 90 | DST, X=string table, A, B | `t3 = sald2 T$, t1, t2` | DST := reference to element (A, B) of string table X (subscript rules and SUBSCRIPT ERROR as `ald2`) |
+| `sparam` 91 | DST, IMM=k | `t0 = sparam` (k = 0) / `t0 = sparam 2` | DST := reference to string parameter k of the current FN function (its own copy of the argument) |
+| `sfv` 92 | DST | `t1 = sfv` | DST := reference to the value variable `FNx$` of the current multi-line string function |
+| `scallfn` 93 | B=sref, X=fn, A or none | `scallfn t5, FNA, t3` / `scallfn t5, FNA` | call string function FN X with first argument A (none: no arguments) and the arguments of the `fnarg` instructions right before it; its value is stored into the string B references (a `scell`) |
+| `sret` 94 | A=sref | `sret t2` | return from the current string function with a copy of the string A references as its value (a multi-line function also restores the caller's run-time line) |
+| `fsel` 95 | A=file | `fsel t0` | select file A for the one print or input opcode that follows (§3.3.2) |
+| `jeof` 96 | A=file, X | `jeof t0, @90` | IF END #: if file A is at its end (LANGUAGE.md §7.26) jump to X |
+| `scratch` 97 | A=file | `scratch t0` | SCRATCH # |
+| `frestore` 98 | A=file | `frestore t0` | RESTORE # |
+
+Existing opcodes with Fifth Edition field uses (verifier §6): `smatredim` may have `B` = a number
+temp (the column count; X a string table: `smatredim T$, t0, t1`), like `matredim`;
+`smatread` and `smatprint` accept a string table in X; `fnarg` and `callfn`/`scallfn` `A` hold an
+sref when the callee's parameter is a string parameter (§3.3.1); `sset` may target a `scell`,
+`sparam` or `sfv` reference; `sread`, `insv`, `chgn2s` (plain form) may target a `scell`.
+
+#### 3.3.1 String functions and string arguments
+
+A string parameter is passed **by reference to a private copy**: the caller passes, in the
+argument position of the parameter, an sref to a string that nothing else will read or write —
+a fresh `scell` holding a copy of the argument (§4.2), or the `scell` that already holds the
+result of a `STR$` or string FN call in that argument. The callee keeps that sref in its local
+cell k (DESIGN.md §5.3) and `sparam k` returns it, so assigning a string parameter writes into
+the caller's private cell and never into a caller's variable. A **string function's value** is
+the `scell` the caller names in `scallfn`'s B: the callee receives its address as a hidden
+argument (DESIGN.md §5.3: `x8` on arm64, `%rax` on x86_64), keeps it in local cell NP, `sfv`
+returns it (multi-line), a multi-line string function's prologue sets it to the empty string, and
+`sret A` copies A into it. Because a function is never active twice at once (RECURSIVE FUNCTION,
+LANGUAGE.md §7.10), no string ever needs a stack.
+
+The `fnarg` rule (§3.2) is unchanged: argument k of a call is `fnarg k` (k ≥ 1) or the
+`callfn`/`scallfn` `A` (k = 0); its temp is a number for a numeric parameter and an sref for a
+string parameter. `callfn` calls numeric functions only, `scallfn` string functions only.
+
+#### 3.3.2 The `fsel` rule
+
+`fsel A` is always **immediately** followed by one of `prnum prstr prsv prcomma prsemi prtab prnl
+inbeg innum insv inend`, and that instruction acts on file `trunc(A)` (the runtime checks the
+number, `INVALID FILE NUMBER`, and the mode, `ILLEGAL FILE COMMAND`) instead of standard output /
+the standard-input INPUT dialogue: on file 0 a print opcode is exactly the plain one, an input
+opcode reads standard input with the INPUT # rules (no prompt, no diagnostics, END OF FILE). A
+print or input opcode without a preceding `fsel` is the Fourth Edition operation, unchanged. So
+items of a PRINT # are evaluated before their `fsel` (a function called by an item may print to
+standard output), and nothing can come between the selection and its use.
+
 ## 4. Canonical lowering (frontend → IR)
 
 The frontend must produce **exactly** this IR; `tests/ir/*.ir` depend on it.
@@ -246,10 +320,18 @@ The frontend must produce **exactly** this IR; `tests/ir/*.ir` depend on it.
   instruction per node. There is **no** constant folding, CSE or dead-code removal.
 * **FOR index k** counts FOR statements in ascending line order from 0.
 * **String ids** count the string constants outside DATA statements (PRINT labels and the
-  constants of LET, IF and CHANGE) in ascending line order, left to right, from 0 (no
-  deduplication) — for programs without the new statements, exactly the PRINT literals as
+  constants of LET, IF and CHANGE; Fifth Edition: every string constant in a string expression,
+  e.g. a function argument, a `LEN`/`ASC`/`VAL` argument, a single-line string DEF's expression
+  at its DEF line, a PRINT # item; never a FILES name) in ascending line order, left to right,
+  from 0 (no deduplication) — for programs without the new statements, exactly the PRINT literals as
   before. **Data index** likewise for numeric DATA values, **string data index** for string DATA
   values (separately, from 0).
+* **String temp cells** (Fifth Edition) are numbered from 0 over the whole module, in the order
+  their `scell` instructions are emitted (lines in ascending order; a single-line DEF's
+  expression is lowered at its DEF line, a multi-line body line by line). Each `scell` emitted by
+  the rules below allocates a **new** cell (`_ir_new_stemp`); no cell is shared by two `scell`
+  instructions. **File numbers** count the FILES names in ascending line order, left to right,
+  from 1 (`_ir_add_file`).
 
 ### 4.2 Expressions (emit order)
 
@@ -272,14 +354,31 @@ The frontend must produce **exactly** this IR; `tests/ir/*.ir` depend on it.
 | `FNx` without `(` (a call with no arguments) | `tN = callfn FNx` |
 | `L(i)` | i, then `tN = ald1 L, ti` |
 | `L(i, j)` | i, j, then `tN = ald2 L, ti, tj` |
+| `LEN(s)` / `ASC(s)` / `VAL(s)` | s's string reference tS (below), then `tN = len tS` / `asc` / `val` |
+| parameter k of the enclosing DEF that is a string parameter, in a string position | `tN = sparam` (k = 0) / `tN = sparam k` |
 
-String references (LANGUAGE.md §4.4) are lowered where a statement needs one:
+String expressions (LANGUAGE.md §4.4, §4.6) are lowered where a statement, function or argument
+needs one; each yields one sref temp, "its string reference":
 
 | Source | Emitted |
 |--------|---------|
 | `"…"` (string constant K) | `tN = slit sK` |
 | `V$` | `tN = svar V$` |
 | `L$(i)` | i, then `tN = sald1 L$, ti` |
+| `T$(i, j)` (string table, Fifth Edition) | i, j, then `tN = sald2 T$, ti, tj` |
+| `STR$(e)` | e, then `tC = scell %sK` (a new cell), `sstr tC, te`; the reference is tC |
+| `FNx$` inside the multi-line body of FNx$ (its value variable) | `tN = sfv` |
+| `FNx$` without `(` (a call with no arguments) | `tC = scell %sK`, `scallfn tC, FNx`; the reference is tC |
+| `FNx$(a0, …, ak)` | the arguments as for a call below, then `tC = scell %sK`, then `fnarg 1, ta1`, …, `fnarg k, tak`, then `scallfn tC, FNx, ta0`; the reference is tC |
+
+**Arguments of a call** (`FNx(…)` and `FNx$(…)`, Fifth Edition rules; for numeric arguments
+exactly the rows above): the arguments are lowered left to right; a numeric argument is its
+expression's temp; a string argument whose expression is a `STR$` or string FN call is that
+call's result cell; any other string argument (a constant, a variable, an array element, a
+string parameter or a value variable) is lowered to its reference tR and then **copied into a
+new cell** right away: `tC = scell %sK`, `sset tC, tR`; the argument is tC. So `FNA(X, B$)` is
+`tX = ldv X`, `tB = svar B$`, `tC = scell %s0`, `sset tC, tB`, `fnarg 1, tC`, `tN = callfn FNA,
+tX`.
 
 ### 4.3 Statements
 
@@ -297,7 +396,7 @@ it — then, into the same function:
 | `LET L(i,j) = e` | i; j; e; `ast2 L, ti, tj, te` |
 | `LET x1 = x2 = … = e` (numeric, ≥ 2 targets) | for each target left to right: its subscripts (i; or i; j); then e; then for each target left to right its store with value te (`stv`, `ast1`, `ast2`, `stparam`, `stfv` as above). With one target this is the three rows above. |
 | `LET s1 = … = sk = r` (string targets) | for each target left to right: a string variable V$: `tsj = svar V$`; a list element `L$(i)`: only i; then r's string reference; then for each target left to right: (a list element: `tsj = sald1 L$, ti`;) `sset tsj, tr` — the `sald1` immediately before its `sset`, so the subscript is checked at the store (LANGUAGE.md §7.1) |
-| `PRINT …` | for each element left to right: string constant → `prstr sK`; string variable or element → its string reference, then `prsv tr`; `TAB(e)` → e, then `prtab te`; expression → its lowering then `prnum te`; `,` → `prcomma`; `;` → `prsemi` **only if the previous element was an expression**, otherwise nothing. After the list: `prnl` unless the last element was `,` or `;` (an empty PRINT emits just `prnl`). |
+| `PRINT …` | for each element left to right: string constant → `prstr sK`; string variable or element — Fifth Edition: any other string expression (`STR$(…)`, `FNx$…`, a string parameter, a value variable `FNx$`) — → its string reference, then `prsv tr`; `TAB(e)` → e, then `prtab te`; expression → its lowering then `prnum te`; `,` → `prcomma`; `;` → `prsemi` **only if the previous element was an expression**, otherwise nothing. After the list: `prnl` unless the last element was `,` or `;` (an empty PRINT emits just `prnl`). |
 | `GOTO n` | `jmp @n` |
 | `IF a REL b THEN n`, `IF a REL b GOTO n` | a; b; `jcmp REL, ta, tb, @n` |
 | `IF r1 REL r2 THEN n` (strings; also `GOTO`) | r1's string reference; r2's; `sjcmp REL, tr1, tr2, @n` |
@@ -324,6 +423,19 @@ it — then, into the same function:
 | `MAT X = IDN` | `matidn X` |
 | `MAT X = IDN(n)` | n; `matredim X, tn, tn`; `matidn X` |
 | `MAT X = TRN(Y)` / `INV(Y)` | `mattrn X, Y` / `matinv X, Y` |
+| `FILES …` (Fifth Edition) | nothing (each name is added with `_ir_add_file` when the line is parsed) |
+| string table element target `T$(i,j)` in `LET` (Fifth Edition) | target phase: i; j. Store phase: `te = sald2 T$, ti, tj`, `sset te, tr` (the `sald2` immediately before its `sset`, like `sald1`) |
+| string table element target `T$(i,j)` in `READ`, `INPUT` | i; j; `tC = scell %sK`; `sread tC` / `insv tC`; `te = sald2 T$, ti, tj`; `sset te, tC` (the value is taken into the cell first, then the subscripts are checked at the store) |
+| `CHANGE L TO T$(i,j)` | i; j; `tC = scell %sK`; `chgn2s L, tC`; `te = sald2 T$, ti, tj`; `sset te, tC` |
+| `LET FNx$ = r` (in the body of FNx$; also one target of a multiple string LET) | target phase: `tv = sfv`; store phase: `sset tv, tr` |
+| a string parameter target `P$` (multi-line body) in LET, READ, INPUT, INPUT #, CHANGE | as a string variable with `tr = sparam k` in place of `tr = svar P$` |
+| `MAT READ T$(r, c)` (string table) | r; c; `smatredim T$, tr, tc`; `smatread T$` (without dimensions: `smatread T$`) |
+| `MAT PRINT … T$ …` (string table) | `smatprint T$, zoned` / `packed`, as for a string list |
+| `SCRATCH #e` | e; `scratch te` |
+| `RESTORE #e` | e; `frestore te` |
+| `IF END #e THEN n` (also `GOTO`) | e; `jeof te, @n` |
+| `PRINT #e` [`,` items] | e (→ tF); then exactly the PRINT lowering of the items (above), except that every emitted `prnum prstr prsv prtab prcomma prsemi prnl` is immediately preceded by `fsel tF` (the item's value — its expression or string reference — is lowered before the `fsel`). `PRINT #e` alone: e; `fsel tF`; `prnl` |
+| `INPUT #e, x1, …` | e (→ tF); `fsel tF`; `inbeg`; then each target exactly as in INPUT except that every `innum` / `insv` is immediately preceded by `fsel tF` (the subscripts, and for a string variable its `svar`, come before the `fsel`; a string table element uses the cell form above with `fsel tF` before its `insv tC`); after the last target `fsel tF`, `inend` |
 | `FOR v = a TO b [STEP c]` (FOR index k) | see below |
 | `NEXT v` (closing FOR k) | see below |
 
@@ -376,6 +488,14 @@ a body). The body lines are lowered into the function with the statement rules o
 internal labels of that function), GOTO/IF/ON targets naming its own line labels; FNEND lowers to
 `line <n>`, `tN = ldfv`, `ret tN`.
 
+**String functions and string parameters** (Fifth Edition). For every function with a string
+parameter or a string result the frontend calls `_ir_set_fnkind(module, 1+x, bits)` when it
+creates the function (`FNK_SPARAM0 << k` for each string parameter k, `FNK_STRING` for `FNx$`);
+`PARAMS[k]` of a string parameter `P$` is the string slot of `P$`. A single-line string
+function `DEF FNx$(…) = s` lowers s (its string reference tS) followed by `sret tS`. In a
+multi-line string function, FNEND lowers to `line <n>`, `tN = sfv`, `sret tN`. A string parameter
+is read with `sparam k` (every occurrence emits a new `sparam`), its value variable with `sfv`.
+
 ## 5. Text dump format (`--emit-ir`)
 
 The dump is ASCII, every line terminated by LF, no trailing spaces, no tabs. Grammar (literal
@@ -383,22 +503,27 @@ text in quotes, `SP` = one space):
 
 ```
 dump      := header module-line array-line* sarray-line* string-line* data-line* sdata-line*
-             function+
+             [ stemps-line ] file-line* function+
 header    := "; baysick-ir 1" LF
 module-line := "module slots=" U " fors=" U " funcs=" U " strings=" U " data=" U LF
 array-line  := "array " LETTER " dims=1 b1=" U LF
              | "array " LETTER " dims=2 b1=" U " b2=" U LF          (letters A..Z, used arrays only)
-sarray-line := "sarray " LETTER " dims=1 b1=" U LF                   (string lists A$..Z$ in letter order, used ones only)
+sarray-line := "sarray " LETTER " dims=1 b1=" U LF                   (string arrays A$..Z$ in letter order, used ones only)
+             | "sarray " LETTER " dims=2 b1=" U " b2=" U LF          (string table, Fifth Edition)
 string-line := "string s" U SP '"' BYTES '"' LF                       (raw bytes of the literal)
 data-line   := "data d" U SP HEX " ; " G17 LF
 sdata-line  := "sdata d" U SP '"' BYTES '"' LF                         (raw bytes of the string DATA value)
+stemps-line := "stemps " U LF                                          (NSTEMPS; only if NSTEMPS > 0)
+file-line   := "file #" U SP '"' BYTES '"' LF                          (FILES name of file number U, from 1)
 function  := func-head instr* "endfunc" LF
 func-head := "func main temps=" U " labels=" U LF
-           | "func FN" LETTER " param=" VAR " temps=" U " labels=" U LF          (single-line, one parameter)
-           | "func FN" LETTER " params=" PLIST " temps=" U " labels=" U LF       (single-line, 0 or 2..8 parameters)
-           | "func FN" LETTER " params=" PLIST " def=" U " fnend=" U
+           | "func " FNAME " param=" PVAR " temps=" U " labels=" U LF          (single-line, one parameter)
+           | "func " FNAME " params=" PLIST " temps=" U " labels=" U LF       (single-line, 0 or 2..8 parameters)
+           | "func " FNAME " params=" PLIST " def=" U " fnend=" U
              " temps=" U " labels=" U LF                                        (multi-line, any count)
-PLIST := "-" | VAR { "," VAR }                                         ("-" = no parameters)
+FNAME := "FN" LETTER [ "$" ]                                           ("$": a string function, FNK_STRING)
+PLIST := "-" | PVAR { "," PVAR }                                       ("-" = no parameters)
+PVAR  := VAR [ "$" ]                                                   ("$": a string parameter)
 instr     := "  " text-form LF                                       (text forms from §3)
 U   := unsigned decimal, no leading zeros ("0" for zero)
 HEX := "0x" 16 uppercase hexadecimal digits of the IEEE bits
@@ -414,7 +539,12 @@ G17 := the value formatted exactly as C printf("%.17g")
   element forms of `sread`, `insv` and `chgn2s`, `tests/ir/ed4_slist_targets.ir`.
 * `module-line` is unchanged: string lists and string DATA are counted by their lines only.
   A dump of a program without Third/Fourth Edition features is byte-identical to the earlier
-  format.
+  format. Likewise the Fifth Edition adds only the `dims=2` sarray form, the optional `stemps`
+  line, `file` lines, the `$` forms of FNAME and PVAR and the §3.3 text forms, so a dump of a
+  program without Fifth Edition features is byte-identical to the Fourth Edition format. See
+  `tests/ir/ed5_*.ir`.
+* BYTES of a `file` line are written raw like those of a `string` line; a FILES name cannot
+  contain `"` or LF either.
 * BYTES of a `string` or `sdata` line are written raw (no escaping); since neither can contain
   `"` or LF, the line is unambiguous.
 * Operand separators are `", "` exactly as in the §3 text forms; `=` has one space on each side.
@@ -485,7 +615,7 @@ internal error (exit 4). Checks:
    (sref for the sref fields of §3.2, number everywhere else, including the subscript `B` of an
    element form). A string reference that is written (`sset` A, `sread` A, `insv` A, the
    `chgn2s` target A) is never defined by a `slit`.
-3. Every label referenced by `jmp/jcmp/sjcmp/jfor/gosub` (both labels) is `< NLABELS` of the
+3. Every label referenced by `jmp/jcmp/sjcmp/jfor/jeof/gosub` (both labels) is `< NLABELS` of the
    same function and is defined by exactly one `line`/`label` of that function; every label id
    is defined exactly once.
 4. Slots are `< NSLOTS` (no rule limits the FOR slots to `main`: a multi-line FN body writes
@@ -502,6 +632,27 @@ internal error (exit 4). Checks:
 7. Function records: `KIND` is `FUNC_KIND_FN` or `FUNC_KIND_FNML` for index ≥ 1; `NPARAMS ≤ 8`;
    `PARAMS[k]` `< 286` for `k < NPARAMS` and `IR_NONE` after; `PARAM` = `PARAMS[0]` or `IR_NONE`;
    `ENDLINE > DEFLINE` for `FUNC_KIND_FNML`, 0 otherwise.
+8. Fifth Edition (with `BSK_ED5_CONTRACT`):
+   * `scell` X `< NSTEMPS`; `sald2` X a declared string table (sarray `DIMS` = 2), `sald1` and
+     the element forms of `sread`/`insv`/`chgn2s` a declared string **list** (`DIMS` = 1);
+     `smatinput` a string list; `smatredim` B = `IR_NONE` for a string list and a number temp for
+     a string table (A a number temp in both); `smatread`/`smatprint` either.
+   * `fnkinds` of `main` is 0; no bits above `FNK_STRING`; string-parameter bits only below
+     `NPARAMS`; `PARAMS[k]` of a string parameter `< 286` (a string slot).
+   * `sparam` IMM `< NPARAMS` with bit IMM set; `param`/`stparam` IMM with bit IMM clear; `sfv`
+     only in a multi-line function with `FNK_STRING`; `ldfv`/`stfv` and `ret` only in functions
+     without `FNK_STRING`, `sret` only in functions with it; every string function ends with
+     `sret`.
+   * `callfn` targets a present function without `FNK_STRING`, `scallfn` one with it; for each
+     argument k (A for k = 0, `fnarg k` otherwise) the temp kind is sref exactly when the callee's
+     bit k is set. `scallfn` B is an sref defined by `scell`.
+   * The written sref of `sstr` A, `sset` A, `sread` A, `insv` A and the `chgn2s` target A is
+     never defined by a `slit`.
+   * `fsel` is immediately followed by one of `prnum prstr prsv prcomma prsemi prtab prnl inbeg
+     innum insv inend` (§3.3.2), and A is a number temp; `jeof`, `scratch`, `frestore` have a
+     number temp in A (`jeof`: X a label, rule 3).
+   * `NFILES ≤ LIM_FILES`; every file name has 1…`LIM_FILE_NAME` bytes and no byte 0.
+   * every string table has `(B1+1)*(B2+1) <= 1 000 000`.
 
 ## 7. Writing a new backend
 
@@ -528,6 +679,12 @@ interface for the descriptor and §Runtime ABI for the calls). A minimal, correc
 
 6. Each §3.2 opcode is one runtime call (DESIGN.md §6.7) with srefs as pointer arguments, or a
    move of a double between a temp and a local cell (`fnarg` loads argument register k directly).
+7. The §3.3 opcodes (Fifth Edition) are runtime calls too (DESIGN.md §6.8), plus: a static block
+   of `NSTEMPS` zeroed string descriptors for `scell`; string-table descriptors and storage
+   like numeric tables but with 16-byte elements; the `_bsk_files` table of the FILES names; and
+   for string parameters and string functions the register convention of DESIGN.md §5.3
+   (string argument k in the k-th integer argument register, the result descriptor's address in
+   a hidden register).
 
 Nothing else is needed; all language rules live in the runtime or are explicit opcodes.
 

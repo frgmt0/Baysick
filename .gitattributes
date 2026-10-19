@@ -4,3 +4,6 @@ tests/**/*.out -text
 tests/**/*.err -text
 tests/**/*.bas -text
 tests/**/*.ir  -text
+# Fifth Edition file tests (docs/DESIGN.md section 8.5): fixtures and expected files are byte-exact.
+tests/**/*.files/** -text
+tests/**/*.expect/** -text

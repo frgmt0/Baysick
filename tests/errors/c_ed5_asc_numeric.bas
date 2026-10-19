@@ -1,0 +1,2 @@
+10 LET X = ASC(X)
+20 END

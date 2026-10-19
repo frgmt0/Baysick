@@ -25,6 +25,8 @@
 .equ LIM_DIM_DIGITS,        7         /* max digits in a DIM bound -> DIMENSION TOO LARGE */
 .equ LIM_ARRAY_ELEMS,       1000000   /* max elements in one array -> DIMENSION TOO LARGE */
 .equ LIM_DEFAULT_BOUND,     10        /* default upper bound of each subscript without DIM */
+.equ LIM_FILES,             8         /* max file names in all FILES statements (file numbers 1..8) -> TOO MANY FILES */
+.equ LIM_FILE_NAME,         255       /* max bytes of one FILES name (implied by LIM_PHYS_LINE_LEN) */
 
 // ---- Language-fixed sizes --------------------------------------------
 .equ NUM_LETTERS,           26

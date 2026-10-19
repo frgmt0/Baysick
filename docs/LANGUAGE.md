@@ -5,13 +5,17 @@ observable behaviour of compiled programs (standard output bytes, standard error
 status). Where this document and any other document disagree, this one wins for language
 behaviour; `docs/IR.md` wins for IR details; `docs/DESIGN.md` wins for module boundaries and ABI.
 
-Baysick implements **Dartmouth BASIC through the Fourth Edition (1968)**: the language of the
+Baysick implements **Dartmouth BASIC through the Fourth Edition (1968) and a scoped part of the
+Fifth Edition (1970)** (specified here; being implemented, DESIGN.md §2.4): the language of the
 manual of 1 October 1964 ([M64]) — the fifteen statements of the First Edition (first run 1 May
 1964), the Second Edition's zero-based subscripts and `;` packing and its **MAT** matrix
 statements (§7.14) — extended by the additions of the **Third Edition** (1966: `INPUT`,
 `RESTORE`, `SGN`) and the **Fourth Edition** (1967 supplement and January 1968 manual [M68]:
 string variables and lists, `CHANGE`, `ON … GO TO`, `TAB`, `RANDOMIZE`, multiple and multi-line
-`DEF`, `MAT INPUT`, `NUM`, `DET`, `COT`, multiple assignment, `'` remarks). Sections marked
+`DEF`, `MAT INPUT`, `NUM`, `DET`, `COT`, multiple assignment, `'` remarks), and by a scoped part
+of the **Fifth Edition** (1970: sequential files with `FILES`, `PRINT #`, `INPUT #`, `IF END #`,
+`SCRATCH #`, `RESTORE #`; the functions `LEN`, `ASC`, `STR$`, `VAL`; `DEF` functions with string
+arguments and string values; two-dimensional string arrays). Sections marked
 **Baysick decision:** are places where the historical behaviour is unknown, impractical on a
 modern machine, or deliberately extended; each states the choice and why. §14 lists every place
 where a later edition *changed* the meaning of a program an earlier edition already accepted,
@@ -28,8 +32,9 @@ the line printer, not of the language, and are not implemented (`PAGE` is `ILLEG
 INSTRUCTION`).
 
 There is exactly **one language level and no `--edition` flag**: every statement, function and
-form of every edition up to the Fourth is always accepted. **Baysick decision**, rationale:
-every Third and Fourth Edition addition is a text that was an error before (`INPUT`, `ON`,
+form of every edition up to the Fourth, and of the Fifth Edition part above, is always accepted.
+**Baysick decision**, rationale: every Third, Fourth and Fifth Edition addition is a text that was
+an error before (`INPUT`, `ON`, `FILES`, `LEN(`, `DIM A$(3,4)`,
 `A$`, `FNEND`, `IF … GO TO`, `'`, `NUM`, …; §14.1 lists the few error tests whose text became
 legal), so every program that compiled before compiles to the same program and prints the same
 bytes. Where a later edition **changed the meaning of an already-legal program** — `INT` became
@@ -47,6 +52,41 @@ unary minus (`-X↑2` = `-(X↑2)`; Baysick already parses it so, §5.1), and `I
 function ([K81] p. 523). Every one of these is documented again, in more detail, in [M68], which
 is therefore the source of the semantics of all Third Edition features below.
 
+**The Fifth Edition.** The Fifth Edition manual (*BASIC*, Fifth Edition, Kiewit Computation
+Center, Dartmouth, September 1970) is **not publicly scanned**: bitsavers.org (`pdf/dartmouth/dtss/`
+holds the 1964 and 1968 manuals, the 1972 DTSS user's guide and the 1979–1980 DTSS Inc.
+documents), archive.org and Dartmouth's digital exhibits were searched without finding it; the
+Rauner Library catalogue lists a paper copy among Kurtz's papers ([R70], record found by web
+search, not opened). Its content is known only from Kurtz's short summary [K81] p. 528–529
+(listed in `docs/SEA_BOOTSTRAP.md` §1): files named by reference number in a `FILES`
+statement; sequential ("terminal format") files read and written with `INPUT` and `PRINT`, with
+`IF END` for the end-of-file condition; random-access files; `CHAIN`; overlay subprograms;
+two-dimensional string arrays; `DEF` functions with string arguments and values; the functions
+`CLK$`, `DAT$`, `LEN`, `USR$`, `STR$`, `VAL`, `ASC`, `TIM`; recursive `DEF`; `CHANGE … BIT`. For the *form* of the file statements Baysick also uses the General
+Electric MARK II BASIC manual of November 1970 [G70], a contemporaneous dialect of the
+Dartmouth-developed language (its preface: "Under this grant, Dartmouth College developed …
+the BASIC language compiler", copyright shared with the Trustees of Dartmouth College), which documents `FILES`, `#` file designators, `PRINT #`, `INPUT #`, `IF END #`,
+`SCRATCH #`, `RESTORE #`, `LEN`, `ASC`, `STR$` and `VAL` with error texts. **[G70] is not the
+Dartmouth Fifth Edition**: every rule taken from it is labelled with its page and with "[G70]",
+and is adopted as a **Baysick decision** because the Dartmouth semantics are unknown. Where
+[G70] and [K81] say nothing, the rule is Baysick's own, chosen to be the simplest one consistent
+with the Fourth Edition and with the Sixth Edition's `FILE #`/`INPUT #`/`PRINT #` [U72], so that a
+later Sixth Edition design can extend it. Nothing in §4.4–§4.6, §6, §7.10, §7.11, §7.14 or
+§7.21–§7.26 that concerns a Fifth Edition feature is historical fact unless it cites [K81].
+
+The Fifth Edition features that Baysick does **not** implement, each a Baysick decision:
+
+| Feature [K81 p. 528–529] | Decision and reason |
+|--------------------------|---------------------|
+| random-access files (`READ #`, `WRITE #`, `LOC`, `LOF`, `RESET`) | not implemented. Their record format is not documented in any available source (in [G70] they are binary files of machine words), so no byte-exact behaviour could be specified, and a compiler needs only sequential text files. `READ #1, X`, `WRITE #1, X`, `RESET #1`, `LOC(1)` and `LOF(1)` remain the compile errors they are in the Fourth Edition (a READ with an illegal target, an unknown keyword, the variable `L` followed by `OC(`) |
+| `CHAIN` | not implemented: a compiled Baysick program is one executable; starting another program is the operating system's job. `CHAIN` stays `ILLEGAL INSTRUCTION` |
+| overlay "subprograms" sharing all variables | not implemented: the Sixth Edition replaced them by `CALL`/`SUB` [K81 p. 530], which is what a later Baysick edition should implement |
+| `USR$` | not implemented: it returned the DTSS user number, which does not exist on a Unix host |
+| `CHANGE … BIT` | not implemented: its bit-string semantics are not documented anywhere available; `CHANGE A$ TO B BIT 7` stays `INCORRECT FORMAT` |
+| recursive `DEF` | not implemented: `RECURSIVE FUNCTION` stays a compile error (§7.10); the Sixth Edition removed recursion again [K81 p. 530], and one activation per function is what lets string parameters and values live in static storage (DESIGN.md §6.8) |
+| `TIM`, `CLK$`, `DAT$` | not implemented: their values depend on the clock, so no test can pin their output byte for byte; `TIM` is the variable `T` followed by `IM` (an error, as before) |
+| the `FILE` statement (run-time binding of a name to a file number) | not implemented in this edition: [K81] attributes run-time binding to the Sixth Edition (p. 530; [U72] §11.2.3), and a Sixth Edition design adds it on top of §7.21 without changing any program |
+
 ## 0. Sources
 
 | Ref | Source |
@@ -54,7 +94,9 @@ is therefore the source of the semantics of all Third Edition features below.
 | [M64] | *BASIC — A Manual for BASIC, the elementary algebraic language designed for use with the Dartmouth Time Sharing System*, Dartmouth College Computation Center, 1 October 1964. Scan: <https://alandix.com/wp-content/uploads/2021/07/BASIC_Oct64.pdf>. Catalog entry: <https://exhibits.library.dartmouth.edu/s/OnSolidGround/item/89>. This is the Second Edition ("version 2") manual, also at <https://www.bitsavers.org/pdf/dartmouth/dtss/196410_BASIC.pdf>; it is the earliest widely available printing and documents the language as implemented in 1964 (the May 1964 First Edition typescript is not publicly scanned). Page numbers below are the manual's own. |
 | [M68] | *BASIC*, Fourth Edition, John G. Kemeny and Thomas E. Kurtz, Dartmouth College Computation Center, 1 January 1968. Scan: <https://www.bitsavers.org/pdf/dartmouth/dtss/196801_BASIC_4th_Edition.pdf>. The normative source of every Third and Fourth Edition feature (page numbers are the manual's own; the scan lacks page 26). Used before only for MAT details that [M64]'s one-page summary leaves open. |
 | [K81] | Thomas E. Kurtz, "BASIC", in *History of Programming Languages* (R. L. Wexelblat, ed.), Academic Press / ACM, 1981, p. 515–549 (§3.3–3.6, p. 526–531: the Third to Sixth Editions). Primary historical account by the language's co-designer: used for *which edition* introduced a feature, and for the Third Edition, whose manual is not available. |
-| [U72] | *User's Guide to the Dartmouth Time-Sharing System*, Dartmouth, September 1972 (<https://www.bitsavers.org/pdf/dartmouth/dtss/197209_Users_Guide_to_the_Dartmouth_Timesharing_System.pdf>), §11.2.3: the Sixth Edition file statements. Used only in `docs/SEA_BOOTSTRAP.md`. |
+| [U72] | *User's Guide to the Dartmouth Time-Sharing System*, Dartmouth, September 1972 (<https://www.bitsavers.org/pdf/dartmouth/dtss/197209_Users_Guide_to_the_Dartmouth_Timesharing_System.pdf>), §11.2.3: the Sixth Edition file statements. Cited in "The Fifth Edition" and §7.22, and in `docs/SEA_BOOTSTRAP.md`. |
+| [G70] | *BASIC Language Reference Manual*, General Electric Information Service Department, publication 711224B, revised November 1970 (the MARK II time-sharing dialect). Scan: <https://www.bitsavers.org/pdf/ge/MarkI_Timesharing/711224B_BASICLanguageReferenceManual_Nov1970.pdf> (mirror: <https://ftp.mirrorservice.org/sites/www.bitsavers.org/pdf/ge/MarkI_Timesharing/711224B_BASICLanguageReferenceManual_Nov1970.pdf>). Page numbers are the manual's own. Not a Dartmouth manual: used only for the form of the Fifth Edition file statements and functions and for error texts, each use a Baysick decision (see "The Fifth Edition" above). |
+| [R70] | *BASIC*, Fifth Edition, Kiewit Computation Center, Dartmouth College, September 1970. Not scanned; a paper copy is listed in the Rauner Special Collections Library catalogue (<https://archives-manuscripts.dartmouth.edu/repositories/2/archival_objects/412980>, found by web search; the page itself could not be opened, so the listing is **unverified**). Cited only to record that the manual exists and was not available. |
 | [W] | Wikipedia, "Dartmouth BASIC" (edition history; cites [K81]). Secondary source: used only for dates and edition names, not for semantics. |
 | [E55] | ECMA-55 *Minimal BASIC* (1978), used only where [M64] is silent, to pick a well-known convention. |
 
@@ -121,6 +163,27 @@ decisions (each section below cites its page):
   `INCORRECT NUMBER OF ARGUMENTS`, `UNFINISHED DEF`, `NESTED DEF`, `ON EVALUATED OUT OF RANGE`,
   `OUT OF ROOM` (p. 71–74).
 
+Facts taken from [K81] p. 528–529 for the Fifth Edition (the *existence* of each feature; every
+detail of syntax and semantics is a Baysick decision, §4.4–§4.6, §6, §7.10–§7.11, §7.14,
+§7.21–§7.26):
+
+* files are named by reference number in a `FILES` statement; sequential files are read with
+  `INPUT` and written with `PRINT`; `IF END` tests for the end of a file;
+* string arrays may have two dimensions; `DEF` functions may have string arguments and string
+  values;
+* `LEN`, `ASC`, `STR$` ("the printed form of a number but without leading or trailing spaces")
+  and `VAL` exist.
+
+Forms adopted from [G70] (each a Baysick decision): `FILES name; name; …` with names separated by
+`;` and at most eight files (p. 60, `TOO MANY FILES`, p. 86); a file designator `#` followed by
+an expression whose integer part (truncated) selects the file (p. 60); designator 0 is the
+terminal (p. 71: `PRINT #0`); files start in read mode, `SCRATCH #n` empties a file and puts it
+in write mode, `RESTORE #n` puts it back in read mode at its beginning (p. 62, 74–75); `PRINT #`
+writes like PRINT (p. 71); `INPUT #` reads line by line, takes missing items from the next line
+and ignores excess items silently (p. 65); `IF END #n THEN line` (p. 78); the run-time error texts
+`CAN'T OPEN FILE`, `CAN'T WRITE FILE`, `ILLEGAL FILE COMMAND`, `INVALID FILE NUMBER`,
+`INCORRECT FORMAT IN FILE` and `ILLEGAL 'VAL' ARGUMENT` (p. 87–88, without the file name).
+
 ---
 
 ## 1. Source files
@@ -185,11 +248,14 @@ line number (the *statement text*).
 
 ## 3. Statements and keyword recognition
 
-3.1. The statement text must begin with one of the twenty-two keywords, tested **in this
+3.1. The statement text must begin with one of the twenty-four keywords, tested **in this
 order** as a prefix of the statement text:
 
 `LET PRINT END READ DATA GOTO IF FOR NEXT GOSUB RETURN DEF DIM REM STOP MAT INPUT RESTORE ON
-RANDOMIZE CHANGE FNEND`
+RANDOMIZE CHANGE FNEND FILES SCRATCH`
+
+(`FILES` and `SCRATCH` are the Fifth Edition keywords, §7.21–§7.22; the other file statements
+start with `PRINT`, `INPUT`, `IF` and `RESTORE`.)
 
 The keyword `RANDOMIZE` also matches the shorter spelling `RANDOM` ([M68] p. 45: "RANDOMIZE (or
 more briefly RANDOM)"): the text is tested for `RANDOMIZE` first, then for `RANDOM`. Apart from
@@ -240,14 +306,19 @@ exponent  := "E" [ "+" | "-" ] digits            (only if the E is followed by a
 * `X1(3)` (letter+digit followed by `(`) → `ILLEGAL VARIABLE IN n`.
 * **User function**: `FN` followed by a letter: `FNA` … `FNZ`.
 * **Builtin function names** (three letters): `SIN COS TAN COT ATN EXP ABS LOG SQR INT SGN RND`
-  (with an argument; `RND` also without) and `NUM DET` (never with an argument).
+  (with an argument; `RND` also without) and `NUM DET` (never with an argument); Fifth Edition:
+  `LEN ASC VAL` (a string argument, a numeric value) and `STR$` (a numeric argument, a string
+  value), always with an argument (§6).
+* **String function** (Fifth Edition): `FN` followed by a letter and `$`: `FNA$` … `FNZ$`
+  (§7.10). A letter names at most one function, numeric or string.
 * All numeric variables and array elements start at **0**.
 
 ### 4.3 String constants
 
 `"` … `"` containing any bytes except `"` and LF. No escape sequences. String constants appear
 in PRINT (where [M64] calls them labels), in LET, IF and CHANGE statements (§7.1, §7.7, §7.19)
-and in DATA (§7.5). Total bytes of all string constants outside DATA statements > **65 536** →
+and in DATA (§7.5); in the Fifth Edition in every string expression (§4.6). `""` is the empty
+string. Total bytes of all string constants outside DATA statements > **65 536** →
 `TOO MANY LABELS IN n` (n = the line whose constant crosses the limit). String constants in DATA
 are string data, not labels, and do not count.
 
@@ -258,18 +329,27 @@ are string data, not labels, and do not count.
   `$`: `A$`, `C7$`, `Z9$`. 286 names, independent of the numeric variables (`A` and `A$` are
   different storage).
 * **String list** ([M68] p. 63: "A vector variable followed by $, e.g. V$( ), will denote a list
-  of strings"): a letter, `$`, `(`: `V$(7)`. String lists are one-dimensional only ("but *not*
-  'string' matrices"): a second subscript (`V$(1,2)`, also in DIM and MAT READ) → `ILLEGAL
-  VARIABLE IN n`. A string list is independent of the numeric list or table, the numeric
-  variable and the string variable of the same letter. Subscripts follow the numeric rules
-  (§7.11): bound 10 without DIM, rounded half up, `SUBSCRIPT ERROR` outside `0..bound`.
+  of strings"): a letter, `$`, `(`: `V$(7)`. In the Fourth Edition string arrays were
+  one-dimensional only ([M68] p. 63: "but *not* 'string' matrices").
+* **String table** (Fifth Edition, [K81] p. 529: two-dimensional string arrays): a letter, `$`,
+  `(` with two subscripts: `T$(2,3)`. A letter's string array is a list or a table, never both:
+  the rule of §4.2 for numeric arrays applies to the string arrays separately (`ILLEGAL VARIABLE
+  IN n` at the first conflicting line, in ascending line order, DIM or use). A string array is
+  independent of the numeric array, the numeric variable and the string variable of the same
+  letter. Subscripts follow the numeric rules (§7.11): bounds 10 (and 10, 10) without DIM,
+  rounded half up, `SUBSCRIPT ERROR` outside `0..bound`; element `(i, j)` of a table whose
+  current second bound is `c` is storage element `i·(c+1) + j`. A string array whose
+  dimensionality is still unknown after the whole program (it appears only as a bare name in
+  MAT READ or MAT PRINT) is a **list** with bound 10 — unlike a numeric array, which becomes a
+  table (§7.11) — so every Fourth Edition program keeps its meaning (**Baysick decision**).
 * `X1$(3)` (letter + digit + `$` + `(`) → `ILLEGAL VARIABLE IN n`, like `X1(3)`.
 * A string value is a sequence of **0 to 65 536 bytes** (`LIM_STRING_LEN`); any byte value
   0–255 may occur. All string variables and string list elements start as the **empty string**.
-* A **string reference** is a string constant, a string variable or a string list element. The
-  Fourth Edition has no string operators and no string-valued functions (the `&`, `SEG$` and
-  `LEN` of later editions, `docs/SEA_BOOTSTRAP.md`), so a string reference is the only form of a
-  "string expression".
+* A **string reference** is a string constant, a string variable or a string array element
+  (list or table). In the Fourth Edition it is the only form of a "string expression"; the
+  Fifth Edition adds the string-valued functions of §4.6. There are still no string operators:
+  concatenation (`&`) and `SEG$`/`POS` are Sixth Edition features ([K81] p. 531,
+  `docs/SEA_BOOTSTRAP.md`), not part of Baysick.
 
 ### 4.5 Strings and numbers do not mix
 
@@ -296,6 +376,43 @@ bytes: far more than any line of text a program reads or writes (and the same as
 input line, §7.15), small enough that a `CHANGE` vector of every string fits a list
 (`DIM A(65536)`).
 
+**Fifth Edition: string expressions.** Everything above applies with "string reference" read as
+"string expression" (§4.6): in operand position the text `STR$(` and `FN` *letter* `$` also start
+a string expression, so `LET X = STR$(5)`, `LET X = 1 + FNA$(2)` and `IF LEN(A$) = FNB$ THEN 10`
+are `MISMATCHED STRING OPERATION`; a string expression followed by an arithmetic operator outside
+PRINT is the same error (`LET A$ = STR$(1) + "X"`). Conversely `LEN`, `ASC` and `VAL` need a
+string expression as argument: `LEN(5)`, `ASC(X)`, `VAL(A$ + 1)` are
+`MISMATCHED STRING OPERATION`.
+
+### 4.6 String expressions (Fifth Edition)
+
+```
+string-expression := string-reference
+                   | "STR$" "(" expression ")"                         §6
+                   | "FN" letter "$" [ "(" argument { "," argument } ")" ]   §7.10
+string-reference  := string-constant | string-variable
+                   | letter "$" "(" expression [ "," expression ] ")"  list or table element
+argument          := string-expression | expression
+```
+
+A string expression may appear wherever the Fourth Edition allowed a string reference as a
+*value*: the value of a string LET (§7.1), a PRINT item (§7.2, §7.24), each side of a string
+comparison in IF (§7.7), the source of `CHANGE … TO list` (§7.19), the body of a single-line
+string DEF (§7.10), an argument of a user function (§7.10) and the argument of `LEN`, `ASC`,
+`VAL` (§6). A *target* (LET, READ, INPUT, INPUT #, CHANGE … TO, a string DEF's value variable)
+is still a string variable or string array element (or `FNx$` in its own body), never a function
+call: `LET STR$(1) = "X"` → `ILLEGAL VARIABLE`.
+
+Inside the body of a multi-line string function FN*x*`$`, the text `FNx$` not followed by `(` is
+that function's value variable (§7.10), exactly as `FNx` is for a numeric function.
+
+Every string expression has a value that is a string of 0 to 65 536 bytes. A function's result
+is a **copy**: after `LET A$ = FNA$(1)` or `LET B$ = STR$(X)`, nothing the program does later
+changes `A$` or `B$` except an assignment to them. There is still no way to combine two strings
+into one in an expression (no concatenation, Sixth Edition); `CHANGE` (§7.19) builds strings from
+character codes.
+
+
 ## 5. Expressions
 
 ### 5.1 Grammar
@@ -309,6 +426,7 @@ primary    := constant
             | letter "(" expression [ "," expression ] ")"          array element
             | "FN" letter [ "(" expression { "," expression } ")" ]  user function (§7.10)
             | builtin "(" expression ")"                             builtin call
+            | ( "LEN" | "ASC" | "VAL" ) "(" string-expression ")"   Fifth Edition (§6, §4.6)
             | "RND" | "NUM" | "DET"                                  (bare, see §6)
             | "(" expression ")"
 ```
@@ -331,16 +449,25 @@ At a point where an operand is required, the parser looks at the compacted text:
 2. digit, or `.` → constant (§4.1).
 3. letter:
    1. if the next three characters are a builtin name taking an argument (`SIN COS TAN COT ATN
-      EXP ABS LOG SQR INT SGN RND`) and the fourth is `(` → builtin call;
+      EXP ABS LOG SQR INT SGN RND`, and in the Fifth Edition `LEN ASC VAL`) and the fourth is
+      `(` → builtin call (for `LEN ASC VAL` the argument is a string expression, §4.6);
+      if the next four characters are `STR$` and the fifth is `(` → `STR$` call, a string
+      expression: `MISMATCHED STRING OPERATION` here (§4.5);
    2. else if they are `RND` (not followed by `(`) → bare `RND`;
    3. else if they are `NUM` or `DET` → that function; if a `(` follows → `ILLEGAL FORMULA`
       (they take no argument);
-   4. else if the next characters are `F`,`N`,letter → user function: with an argument list if
+   4. else if the next characters are `F`,`N`,letter,`$` → a string function (§7.10), a string
+      expression: `MISMATCHED STRING OPERATION` here (§4.5);
+   5. else if the next characters are `F`,`N`,letter → user function: with an argument list if
       `(` follows, else a call without arguments (§7.10; inside the body of a multi-line DEF of
-      that same function, the function's result variable instead);
-   5. else if the letter, plus a following digit if any, is followed by `$` → a string
+      that same function, the function's result variable instead). Fifth Edition: "that same
+      function" is the *numeric* function FN*x*; inside the body of the string function
+      FN*x*`$`, `FNx` is an ordinary call of the numeric function FN*x*, and since a letter names
+      only one function (§7.10.1) that call is always rejected after the whole program is read
+      (`MISMATCHED STRING OPERATION` by the kind check, or an earlier phase-3 error, §10.1);
+   6. else if the letter, plus a following digit if any, is followed by `$` → a string
       reference: `MISMATCHED STRING OPERATION` here (§4.5);
-   6. else the letter, plus a following digit if any, is a variable name; if the letter (with no
+   7. else the letter, plus a following digit if any, is a variable name; if the letter (with no
       digit) is followed by `(` it is an array element; a letter+digit followed by `(` is
       `ILLEGAL VARIABLE`.
 4. `"` → a string constant: `MISMATCHED STRING OPERATION` (§4.5).
@@ -351,7 +478,17 @@ one or more (their number is checked against the DEF after the whole program is 
 array subscript list contains one or two. Anything else before the `)` is `ILLEGAL FORMULA`
 (`FNA()` too: an operand is required after the `(`). These recognitions cannot change the
 meaning of any program that compiled before: in every case (`NUM`, `DET`, `SGN(`, `COT(`, `FNA`
-without `(`, `A$`, `"` in an expression) the text used to be a compile error.
+without `(`, `A$`, `"` in an expression; Fifth Edition: `LEN(`, `ASC(`, `VAL(`, `STR$(`, `FNA$`)
+the text used to be a compile error.
+
+Where a **string expression** is required (§4.6), the same text is read with the string rules:
+`"` → constant; `STR$(` → STR$ call (one numeric expression, then `)`); `FN` letter `$` → string
+function call (with `(`: one or more arguments, each a string expression if its text starts like
+one — `"`, `STR$(`, `FN` letter `$`, letter [digit] `$` — else a numeric expression); letter
+[digit] `$` → string variable, or with `(` (no digit) a string array element with one or two
+subscripts; anything else → `MISMATCHED STRING OPERATION` if it starts a numeric operand, else
+`ILLEGAL FORMULA` (as for a missing value, §7.1). `STR$` without `(` is not a string expression
+(the variable `S` followed by `TR$`).
 
 ### 5.3 Operator position
 
@@ -398,6 +535,10 @@ raised `OVERFLOW`), all six relations behave as in mathematics.
 | `SGN(X)` | `1` if X > 0, `0` if X = 0 (either sign of zero), `-1` if X < 0 ([M68] p. 46) | — |
 | `NUM` | the number of values the most recent `MAT INPUT` accepted (§7.14.8); 0 before the first ([M68] p. 57) | — |
 | `DET` | the determinant of the matrix most recently inverted by `MAT … = INV(…)` (§7.14.6); 0 before the first inversion ([M68] p. 59) | OVERFLOW if that determinant is not finite |
+| `LEN(S$)` | the number of bytes of the string (trailing blanks count) | — |
+| `ASC(S$)` | the code (0–255, §7.19) of the first byte of the string | empty string → `ASC OF EMPTY STRING` |
+| `VAL(S$)` | the number the string denotes, by the INPUT number rule (§6.1) | not a number → `ILLEGAL 'VAL' ARGUMENT` |
+| `STR$(X)` | a **string**: the printed form of X without leading or trailing spaces (§6.1) | — |
 
 **RND generator. Baysick decision** ([M64] only requires a fixed, repeatable sequence in (0,1)):
 the Park–Miller "minimal standard" Lehmer generator. State `s` is an integer, initially
@@ -417,6 +558,45 @@ unchanged.
 Transcendental functions come from the host libm, so results may differ in the last binary
 digit between platforms; tests avoid printing values within one ulp of a formatting boundary.
 
+### 6.1 LEN, ASC, VAL, STR$ (Fifth Edition)
+
+[K81] p. 529 names the four functions and describes only STR$ ("the printed form of a number but
+without leading or trailing spaces"). Everything else below is a **Baysick decision**; [G70]
+p. 37–39 has the same four names with the same purposes.
+
+* **`LEN(s)`** is the length of the value of the string expression `s` in bytes, 0 … 65 536. It
+  counts trailing blanks (which comparisons ignore, §7.7): `LEN("AB  ")` = 4.
+* **`ASC(s)`** is the code of the first byte of `s`, an integer 0 … 255 (the code table of §7.19:
+  `ASC("A")` = 65, `ASC(" ")` = 32). If `s` is empty: run-time error
+  `ASC OF EMPTY STRING IN n` (exit 1). **Baysick decision:** the argument is a string
+  expression, not a bare character as in [G70] p. 37 (`ASC(R)`, `ASC(LF)`): in Baysick `ASC(R)`
+  would be ambiguous with the variable `R`, and a string argument gives the same codes for every
+  printable character (`ASC("R")`) plus every byte a program reads; `CHANGE` (§7.19) remains the
+  way to get all codes of a string.
+* **`VAL(s)`** is the number written in `s`, read exactly like a numeric INPUT field (§7.15):
+  every blank (`0x20`) is removed, and what remains must be `[ "+" | "-" ] constant` with the
+  §4.1 constant syntax (at most 9 mantissa digits, at most 2 exponent digits, `e` accepted for
+  `E`); the value is the double nearest the decimal value (`strtod`), negated for `-`. Otherwise
+  — an empty or all-blank string, `"1/2"`, `"X"`, `"1E100"`, `"1234567890"`, `"1,2"`, a TAB
+  byte — run-time error `ILLEGAL 'VAL' ARGUMENT IN n` (exit 1; text from [G70] p. 88).
+  `VAL(" - 1.5 E3")` = −1500, `VAL("1 2")` = 12. **Baysick decision:** one number syntax for
+  program constants, INPUT fields, INPUT # fields and VAL.
+* **`STR$(x)`** is the string `sign + body`, where `body` is the §9 body of x and `sign` is `-`
+  if x < 0 and empty otherwise — the §9 field *F* without its leading blank (for x ≥ 0) and
+  without its trailing blank. So `STR$(5)` = `"5"`, `STR$(-0)` = `"0"`, `STR$(.5)` = `".5"`,
+  `STR$(-1234567)` = `"-1234567"`, `STR$(1/3)` = `".333333"`, `STR$(2/3)` = `".666667"`,
+  `STR$(999999.4)` = `"999999."`, `STR$(1E9)` = `"1.00000E+9"`, `STR$(-2.35E-4)` = `"-.000235"`,
+  `STR$(6.02E23)` = `"6.02000E+23"`. Its length is 1 to 13 bytes (`"-1.79769E+308"`). A STR$ result has at
+  most 9 mantissa digits, so `VAL(STR$(x))` succeeds whenever the decimal exponent of x is
+  between −99 and 99 (a 3-digit exponent — STR$ produces one for every |x| that rounds to six
+digits at 1E100 or above, i.e. from about 9.999995E99 up, and for every |x| that rounds below
+1E-99, i.e. below about 9.999995E-100 — is
+  `ILLEGAL 'VAL' ARGUMENT`), and then equals x whenever x prints exactly (integers below 10⁹,
+  numbers with at most six significant digits).
+
+The arguments are evaluated once, before the function is applied; the string argument may be any
+string expression (`LEN(STR$(X))`, `VAL(FNA$(1))`, `ASC(L$(I, J))`).
+
 ## 7. Statements
 
 Notation: `n` is the line number of the statement. Every statement must consume its whole
@@ -428,39 +608,52 @@ LET target { "=" target } "=" value
 target     := numeric-target | string-target
 numeric-target := simple-variable | letter "(" expression [ "," expression ] ")"
                 | "FN" letter                       (only in that function's multi-line DEF body)
-string-target  := simple-variable "$" | letter "$" "(" expression ")"
+string-target  := simple-variable "$" | letter "$" "(" expression [ "," expression ] ")"
+                | "FN" letter "$"                   (only in that function's multi-line DEF body)
 value      := expression          (numeric targets)
-            | string-reference    (string targets: "…", A$, A$(i))
+            | string-expression   (string targets: "…", A$, A$(i), A$(i,j), STR$(x), FNA$(…), §4.6)
 ```
+(The second subscript of a string target and the `FN` letter `$` target are Fifth Edition.)
 `LET` is required ([M64] Appendix C). Several targets receive the same value ([M68] p. 33:
 `LET X = Y3 = A(3,1) = 1`). Parsing: after `LET` (and after each `=`), if the text there is a
 target immediately followed by `=`, it is another target; otherwise the rest is the value. All
 targets must be of one kind; a string target among numeric ones, a numeric value for string
 targets or a string reference for numeric targets → `MISMATCHED STRING OPERATION`. A missing
 value for string targets (`LET A$ =` with nothing after the `=`) → `ILLEGAL FORMULA`; anything
-else that is not a string reference there (`LET A$ = 5`, `LET A$ = B`) →
+else that is not a string expression there (`LET A$ = 5`, `LET A$ = B`) →
 `MISMATCHED STRING OPERATION` (§4.5). Missing or illegal first target → `ILLEGAL VARIABLE`;
 missing `=` → `INCORRECT FORMAT`; `LET FNA = …` outside the multi-line body of FNA →
-`ILLEGAL VARIABLE`; a string reference followed by more text → `INCORRECT FORMAT`, except an arithmetic operator → `MISMATCHED STRING OPERATION` (§4.5).
+`ILLEGAL VARIABLE`, and so is `LET FNA$ = …` outside the multi-line body of FNA$ — in
+particular `LET FNA = …` inside the body of the string function FNA$ and `LET FNA$ = …` inside
+the body of the numeric function FNA (the value variable of a function has exactly that
+function's kind, §7.10.1); a string
+expression followed by more text → `INCORRECT FORMAT`, except an arithmetic operator →
+`MISMATCHED STRING OPERATION` (§4.5).
 
 **Evaluation order:** the subscripts of every target, targets left to right; then the value;
 then the stores, targets left to right (each subscript checked at its store). So
 `LET I = A(I) = 5` stores into `A` at the *old* `I`. A string store copies the bytes: after
-`LET A$ = B$` the two variables are independent. The `FN` target and simple variables that are
-parameters of the enclosing multi-line DEF are that function's local cells (§7.10).
+`LET A$ = B$` the two variables are independent. The `FN` target (`FNx` or `FNx$`) and simple
+or string variables that are parameters of the enclosing multi-line DEF are that function's
+local cells (§7.10). A string value that is a function call is evaluated after the subscripts of
+every target, like any value: in `LET A$(I) = FNA$(1)` a change of `I` inside FNA$ does not move
+the target.
 
 ### 7.2 PRINT
 ```
 PRINT [ item-list ]
 item-list := element { element }
-element   := string-reference | "TAB" "(" expression ")" | expression | "," | ";"
+element   := string-expression | "TAB" "(" expression ")" | expression | "," | ";"
 ```
+(`string-expression`, §4.6: a string reference, and in the Fifth Edition also `STR$(…)` and
+`FNx$…`; `PRINT #` is §7.24.)
 Constraints: an expression must be followed by `,`, `;` or end of line (otherwise
-`INCORRECT FORMAT`). A string reference or a TAB item may be followed directly by another item
+`INCORRECT FORMAT`). A string item or a TAB item may be followed directly by another item
 with no separator (`PRINT "X ="X`, [M64] p. 32; `PRINT A$B$`). Consecutive separators are
 allowed (`PRINT 1,,3`). An unterminated string constant → `INCORRECT FORMAT`. At the start of an
-element, `TAB(` is the TAB item (the name `TAB` is recognised only there); a string reference is
-a string item (§4.4); anything else is an expression. Output rules: §8.
+element, `TAB(` is the TAB item (the name `TAB` is recognised only there); a text that starts a
+string expression (§5.2, §4.6) is a string item; anything else is an expression. Output rules:
+§8. A `#` right after `PRINT` makes the statement a PRINT # (§7.24).
 
 ### 7.3 END
 `END` with nothing after it. Exactly one END, and it must be the **highest-numbered line**
@@ -473,14 +666,15 @@ line (its FNEND missing) → `UNFINISHED DEF IN n`, n = the DEF line (§7.10; ch
 ```
 READ target { "," target }
 ```
-(targets as in §7.1, without the `FN` target). Each numeric target receives the next value of
+(targets as in §7.1, without the `FN` targets; a string target may be a string table element
+`A$(i, j)`, Fifth Edition). Each numeric target receives the next value of
 the **numeric data block**, each string target the next value of the **string data block**
 (§7.5; [M68] p. 64: "Numbers will be assigned only to numerical variables, and strings only to
 string-variables"). Targets are processed left to right; for array targets the subscripts are
 evaluated immediately before that element's value is taken. If the block a target needs has no
 value left, the program ends with `OUT OF DATA IN n` on stderr and **exit status 0** (§10). A
 program containing a numeric READ target or a numeric MAT READ but no numeric DATA values →
-compile error `NO DATA`; a string READ target or a MAT READ of a string list but no string DATA
+compile error `NO DATA`; a string READ target or a MAT READ of a string array but no string DATA
 values → compile error `NO STRING DATA` ([M68] p. 71).
 
 ### 7.5 DATA
@@ -517,13 +711,15 @@ rest of the program → `ILLEGAL TRANSFER IN n` (§7.10).
 ```
 IF comparison ( "THEN" | "GOTO" ) line-number
 comparison := expression relation expression
-            | string-reference relation string-reference
+            | string-expression relation string-expression          (§4.6)
 relation := "=" | "<>" | "<" | "<=" | ">" | ">="
 ```
 `IF X > 5 GO TO 200` is the same as `IF X > 5 THEN 200` ([M68] p. 36). The comparison is a
-string comparison when the text after `IF` starts with a string reference (§4.4); then the right
-side must be a string reference too, else `MISMATCHED STRING OPERATION` (likewise a numeric left
-side with a string right side). The relation is matched longest-first (`<=`, `<>`, `>=` before
+string comparison when the text after `IF` starts with a string expression (§4.6: a string
+reference, `STR$(`, `FN` letter `$`); then the right side must be a string expression too, else
+`MISMATCHED STRING OPERATION` (likewise a numeric left side with a string right side). If the
+text after `IF` starts with `END#`, the statement is `IF END #` (§7.26), not a comparison; in the
+Fourth Edition `IF END…` could only be an error (`E` followed by `N` is not an expression). The relation is matched longest-first (`<=`, `<>`, `>=` before
 `<`, `>`, `=`). No valid relation after the first operand → `ILLEGAL RELATION IN n`. Missing
 `THEN`/`GOTO` → `INCORRECT FORMAT`; the line number as in GOTO (§7.6). Evaluation: left operand,
 right operand, compare; if true, jump. `=<`, `=>`, `><` are not relations.
@@ -607,16 +803,20 @@ allows nested GOSUBs, which agrees.
 ```
 DEF "FN" letter [ "(" parameter { "," parameter } ")" ] "=" expression     single-line
 DEF "FN" letter [ "(" parameter { "," parameter } ")" ]                    multi-line header
+DEF "FN" letter "$" [ "(" parameter { "," parameter } ")" ] "=" string-expression
+DEF "FN" letter "$" [ "(" parameter { "," parameter } ")" ]
 FNEND                                                                      end of a multi-line body
-parameter := simple-variable
+parameter := simple-variable | simple-variable "$"
 ```
+(The `$` forms — string functions — and string parameters are Fifth Edition, §7.10.1.)
 Defines function FN*x* with 0 to 8 parameters ([M68] p. 46–47: "Each function defined may have
 zero, one, two, or more variables", e.g. `DEF FNB(X,Y) = 3*X*Y - Y↑3`, `DEF FNA = 3.1416*R↑2`). A header whose
 parameter list (if any) is followed by end of line starts a **multi-line** definition; one
 followed by `=` is a **single-line** definition; anything else → `INCORRECT FORMAT`. DEF may
 appear anywhere ([M64] p. 41); it is processed at compile time. Parameters must be distinct
-simple variables: a missing, string, array or repeated parameter (`DEF FNA()`, `DEF FNA(X$)`,
-`DEF FNA(X,X)`) → `ILLEGAL VARIABLE`; more than **8** (`LIM_FN_PARAMS`) → `INCORRECT FORMAT`,
+simple or string variables (`X` and `X$` are distinct): a missing, array or repeated parameter
+(`DEF FNA()`, `DEF FNA(X(1))`, `DEF FNA(X,X)`, `DEF FNA(X$,X$)`) → `ILLEGAL VARIABLE` (in the
+Fourth Edition a string parameter `DEF FNA(X$)` was `ILLEGAL VARIABLE` too); more than **8** (`LIM_FN_PARAMS`) → `INCORRECT FORMAT`,
 reported as soon as a ninth parameter starts, whatever it is (`DEF FNA(A,B,C,D,E,F,G,H,1)` too);
 `DEF FN` not followed by a letter, or a missing `)` → `INCORRECT FORMAT`.
 
@@ -672,16 +872,80 @@ replaced. (c) [M68] states the transfer restriction but no message; Baysick repo
 `ILLEGAL TRANSFER`. (d) At most 8 parameters: [M68] states no limit; eight cover every example
 and fit the argument registers of both targets.
 
+#### 7.10.1 String functions and string parameters (Fifth Edition)
+
+[K81] p. 529 says only that the Fifth Edition allowed "DEF functions with string arguments and
+values". Every rule below is a **Baysick decision**, chosen as the direct extension of the numeric
+rules above.
+
+* **Names.** `FNx$` is the string function of letter x. A letter names one function: a `DEF FNA`
+  and a `DEF FNA$` in the same program → `DUPLICATE FUNCTION IN n` (n = the second DEF line,
+  ascending line order).
+* **Single-line string function** `DEF FNx$(p…) = s`: the body is a string expression (§4.6); a
+  numeric expression there → `MISMATCHED STRING OPERATION`, as is a string expression as the body
+  of a numeric function (`DEF FNA = "X"`). The value of a call is the value of `s`.
+* **Multi-line string function** `DEF FNx$(p…)` … `FNEND`: exactly the rules of multi-line
+  functions above, with the **value variable** `FNx$` (written without `(` inside the body) in
+  place of `FNx`: it is the **empty string** at the start of every call, `LET FNx$ = s` (also one
+  target of a multiple string LET) assigns it, `FNx$` in a string expression reads it, `READ FNx$`,
+  `INPUT FNx$` and `CHANGE L TO FNx$` are `ILLEGAL VARIABLE` (only LET assigns a value
+  variable, as for numeric functions), and FNEND returns its value. Outside the body of FN*x*`$`,
+  `LET FNx$ = …` → `ILLEGAL VARIABLE`.
+* **The other kind of the same letter inside a body.** The value variable belongs to one kind
+  only. Inside the body of FN*x*`$`, `FNx` (no `$`) is not a variable but an ordinary call of the
+  numeric function FN*x* (§5.2), and `LET FNx = …` → `ILLEGAL VARIABLE`; symmetrically, inside
+  the body of a numeric FN*x*, `FNx$` is a call of the string function FN*x*`$` and
+  `LET FNx$ = …` → `ILLEGAL VARIABLE`. Because a program cannot define both FN*x* and FN*x*`$`
+  (`DUPLICATE FUNCTION`, above), such a call always names the letter's one function with the
+  wrong kind, so the program is rejected in the whole-program phase (§10.1): by
+  `INCORRECT NUMBER OF ARGUMENTS` if its argument count differs from the DEF, else by the kind
+  check below (`MISMATCHED STRING OPERATION` at the call's line). A call written in the wrong
+  *position* is rejected earlier, while the statement is parsed: `FNx` where a string expression
+  is required, or `FNx$` where a number is required, is `MISMATCHED STRING OPERATION` (§4.5).
+  `UNDEFINED FUNCTION` cannot occur for such a call (the letter is defined), and
+  `RECURSIVE FUNCTION` is never reached (the kind check comes first).
+* **String parameters** `X$`, `C7$` (a function may mix numeric and string parameters in any
+  order, at most 8 in all): inside the body (single- or multi-line) the name denotes the
+  function's own copy of the corresponding argument, a string; in a multi-line body it is
+  assignable like a numeric parameter (LET, READ, INPUT, INPUT #, CHANGE … TO). Every other string
+  variable is the global one.
+* **Calls.** `FNx$` without `(` calls FN*x*`$` with no arguments (outside its own body), and
+  `FNx$(a1, …, ak)` with k; a call of a string function is a string expression (§4.6), usable
+  wherever one is. Each argument is a string expression or a numeric expression, decided by its
+  text (§5.2). The arguments are evaluated **left to right, each to its value** — a string
+  argument's value is fixed when it is evaluated, so a later argument that calls a function
+  changing a variable used by an earlier argument does not change that earlier argument — and
+  then the call is made. Inside the body each parameter starts as a copy of its argument;
+  assigning a parameter never changes the caller's variables.
+* **Kind checks** (after the whole program is read, in the order of §10.1): a call `FNx$…` of a
+  function defined as numeric, a call `FNx…` of a function defined as string, or a call with a
+  string argument for a numeric parameter or a numeric argument for a string parameter →
+  `MISMATCHED STRING OPERATION IN n` (n = the line of the call; for a call inside a single-line
+  DEF, the DEF line). The Fourth Edition reported a string argument while parsing the call
+  (`PRINT FNA("A")` with `DEF FNA(X)`); Baysick now reports it in the whole-program phase, with
+  the same message and line.
+* **Results are copies.** The value of a string function call belongs to the caller: two calls in
+  one statement (`IF FNA$(1) = FNA$(2) THEN 50`, `PRINT FNA$(1); FNA$(2)`) give two independent
+  values.
+* Recursion stays rejected (`RECURSIVE FUNCTION`, decision (a)), through string functions as
+  through numeric ones; every function has at most one activation at a time, which is what lets
+  the runtime keep string parameters and values without a stack of strings (DESIGN.md §6.8).
+  Recursive DEF (a Fifth Edition feature, [K81] p. 529) is therefore **not** implemented (see
+  "The Fifth Edition" above).
+
 ### 7.11 DIM
 ```
 DIM decl { "," decl }
 decl := letter "(" integer [ "," integer ] ")"
-      | letter "$" "(" integer ")"         string list (§4.4)
+      | letter "$" "(" integer [ "," integer ] ")"   string list or table (§4.4)
 integer := digits                          (no sign, point or exponent)
 ```
-A string list is always one-dimensional (`DIM A$(3,4)` → `ILLEGAL VARIABLE`); its storage is
-`b1+1` strings; `DIM A$(…)` and `DIM A(…)` declare different arrays, so both may appear. A
-second DIM of the same string list → `DUPLICATE DIMENSION`. The `DIM A$(1000)` that [M68] p. 75
+A string array is a list (one bound; storage `b1+1` strings) or, in the Fifth Edition, a table
+(two bounds; storage `(b1+1)·(b2+1)` strings, the same `DIMENSION TOO LARGE` limit of 1 000 000
+elements). In the Fourth Edition `DIM A$(3,4)` was `ILLEGAL VARIABLE`. `DIM A$(…)` and
+`DIM A(…)` declare different arrays, so both may appear. A second DIM of the same string array
+→ `DUPLICATE DIMENSION`; a string DIM whose dimensionality conflicts with an earlier use of that
+string array (or a use conflicting with an earlier DIM) → `ILLEGAL VARIABLE` (§4.4). The `DIM A$(1000)` that [M68] p. 75
 recommends for long strings is legal and simply declares a list of 1001 strings.
 Sets the upper bound of each subscript (lower bound is always 0). DIM is a compile-time
 declaration: it applies to the whole program regardless of where it appears ([M64] p. 38;
@@ -743,7 +1007,7 @@ On the compacted statement text (spaces are insignificant, §2):
 mat-statement := "MAT" ( mat-read | mat-print | mat-input | mat-assign )
 mat-read      := "READ" mat-target { "," mat-target }
 mat-target    := name [ "(" expression [ "," expression ] ")" ]
-               | sname [ "(" expression ")" ]                 string list (§4.4)
+               | sname [ "(" expression [ "," expression ] ")" ]   string list or table (§4.4)
 mat-print     := "PRINT" pname { sep pname } [ sep ]         sep := "," | ";"
 pname         := name | sname
 mat-input     := "INPUT" ( name | sname )                     (§7.14.8)
@@ -773,8 +1037,8 @@ parentheses ([M64] p. 52: "note parentheses").
 | `FORMULA TOO COMPLEX`, `ILLEGAL CONSTANT` | as in any expression (the `(` of a dimension list, of IDN's argument and of the scalar multiple count toward the depth limit, §5.1) |
 | `NO DATA` | a numeric MAT READ (or READ) target present, no numeric DATA values (§7.4) |
 | `NO STRING DATA` | a string MAT READ (or READ) target present, no string DATA values (§7.4) |
-| `MISMATCHED STRING OPERATION` | a string list (`A$`) anywhere in a MAT assignment (`MAT A$ = B$`, `MAT A$ = ZER`, `MAT C = A$ + B`): only MAT READ, MAT PRINT and MAT INPUT handle string lists ([M68] p. 64) |
-| `ILLEGAL VARIABLE` (string list) | a string list given two dimensions (`MAT READ A$(2,3)`); a string MAT READ target or MAT INPUT target with digit (`A1$`) |
+| `MISMATCHED STRING OPERATION` | a string array (`A$`) anywhere in a MAT assignment (`MAT A$ = B$`, `MAT A$ = ZER`, `MAT C = A$ + B`): only MAT READ, MAT PRINT and MAT INPUT handle string arrays ([M68] p. 64) |
+| `ILLEGAL VARIABLE` (string array) | a string MAT READ target whose dimensionality conflicts with the letter's string array (§4.4: `DIM A$(5)` and `MAT READ A$(2,3)`); a string MAT READ, MAT PRINT or MAT INPUT name with a digit (`A1$`); MAT INPUT of a string table (as for numeric tables, §7.14.8). In the Fourth Edition every two-dimension string target (`MAT READ A$(2,3)`) was `ILLEGAL VARIABLE` |
 
 #### 7.14.3 Dimensions and redimensioning
 
@@ -811,7 +1075,12 @@ by row — `(1,1) … (1,c), (2,1) …` — or `1 … n` for a list. A string li
 redimensioned exactly like a numeric list (`X$(r)` needs `r + 1 ≤ b1 + 1` of its DIM, else
 `DIMENSION ERROR`; a current bound 0 without dimensions → `DIMENSION ERROR`) and its elements
 `1 … n` receive the next values of the **string** data block ([M68] p. 66, the sorting program:
-`MAT READ L$(N)`). Running out of data ends the program
+`MAT READ L$(N)`). A **string table** `X$` (Fifth Edition) is redimensioned exactly like a numeric
+table (`X$(r, c)` needs `(r+1)·(c+1)` within its storage; the stored strings are reinterpreted,
+never moved or cleared) and its elements `(1,1) … (1,c), (2,1) …` receive the next values of the
+string data block; a current shape with a zero dimension → `DIMENSION ERROR`. **Baysick
+decision** ([K81] gives no MAT details for string tables): string tables follow the numeric table
+rules wherever MAT READ and MAT PRINT apply. Running out of data ends the program
 exactly like READ (`OUT OF DATA IN n`, exit 0; §7.4); the elements read before stay stored.
 
 **MAT PRINT**: §7.14.5.
@@ -877,7 +1146,9 @@ For each item, in order:
    `X$(1) … X$(n)` (§8 string item), each followed — if it is not the last — by the §8 `,` rule
    (zoned) or nothing (packed: [M68] p. 64, "MAT PRINT M$; will cause the members of the list to
    be printed without spaces between them"); after the row, newline. A current bound 0 →
-   `DIMENSION ERROR`.
+   `DIMENSION ERROR`. A **string table** of current shape `r × c` (Fifth Edition) is printed as
+   `r` such rows, row `i` holding `X$(i,1) … X$(i,c)`, each row starting on a new line; a zero
+   dimension → `DIMENSION ERROR`.
 
 A statement therefore always ends at column 0; a trailing separator selects the format of the
 last item and does not continue the line. Zoned rows hold five numbers per line and continue on
@@ -1021,7 +1292,11 @@ vector need not be specified"). The name must be a list: a letter whose dimensio
 → `ILLEGAL VARIABLE`; dimensions given (`MAT INPUT V(5)`) → `INCORRECT FORMAT`. A letter used
 only in MAT INPUT (and other bare MAT references) is a **list** (MAT INPUT counts as a use as a
 list, like a one-dimension MAT READ target, §7.11), so `MAT INPUT V` alone gives a list of bound
-10.
+10. The same holds for a string array `V$`: `MAT INPUT V$` of a string table → `ILLEGAL
+VARIABLE` (**Baysick decision**, Fifth Edition: MAT INPUT stays list-only for both kinds). MAT
+INPUT always reads standard input; there is no `MAT INPUT #` and no `MAT PRINT #` (`MAT PRINT #1`
+is `ILLEGAL VARIABLE`, a name is required after PRINT, as before; **Baysick decision**: [K81]
+mentions only INPUT and PRINT for files).
 
 Execution (input lines and fields as in §7.15):
 
@@ -1055,7 +1330,7 @@ table (which [M68] does not describe) is not accepted.
 ```
 INPUT target { "," target }
 ```
-(targets as in READ, §7.4). INPUT "acts as a READ statement but does not draw numbers from a DATA
+(targets as in READ, §7.4, including string table elements; `INPUT #` is §7.25). INPUT "acts as a READ statement but does not draw numbers from a DATA
 statement" ([M68] p. 50): the values come from **standard input**, one line at a time.
 
 **Terminal or not.** At the first input operation of the run the runtime determines once whether
@@ -1120,9 +1395,11 @@ filter, and an interactive user typing end-of-file means "stop".
 RESTORE        both data blocks
 RESTORE*       numeric data block only
 RESTORE$       string data block only
+RESTORE # expression       a file (Fifth Edition, §7.23)
 ```
 The next READ (or MAT READ) of the restored block starts again at its first value ([M68] p. 52,
-66–67). Anything else after the keyword → `INCORRECT FORMAT`.
+66–67). A `#` after the keyword makes the statement a RESTORE # (§7.23). Anything else after the
+keyword → `INCORRECT FORMAT`.
 
 ### 7.17 ON … GO TO
 ```
@@ -1146,11 +1423,13 @@ usual order"). Text after the keyword → `INCORRECT FORMAT`.
 
 ### 7.19 CHANGE
 ```
-CHANGE string-reference "TO" letter            string to list
+CHANGE string-expression "TO" letter           string to list
 CHANGE letter "TO" string-target               list to string
 ```
+(Fifth Edition: the source may be any string expression, §4.6, e.g. `CHANGE STR$(X) TO L`; the
+target may be a string table element `A$(i, j)`, which is handled like a list element below.)
 ([M68] p. 67–69.) The letter names a **numeric list** (CHANGE fixes its dimensionality as a list,
-§7.11; a table → `ILLEGAL VARIABLE`); string-target is a string variable or string list element.
+§7.11; a table → `ILLEGAL VARIABLE`); string-target is a string variable or string array element.
 
 * **String to list**: with n the length of the string (bytes): if `n` exceeds the list's current
   bound → `SUBSCRIPT ERROR`; else `L(0) = n` and `L(i)` = the code (0–255) of byte i, for
@@ -1165,7 +1444,7 @@ CHANGE letter "TO" string-target               list to string
   after the conversion's own checks above, so `CHANGE L TO A$(99)` with an illegal code in L
   gives `ILLEGAL CHARACTER`, not `SUBSCRIPT ERROR`.
 
-Recognition: after `CHANGE`, a string reference (§4.4) starts the first form; else a letter
+Recognition: after `CHANGE`, a string expression (§4.6) starts the first form; else a letter
 followed by `TO` starts the second. Errors: `TO` missing → `INCORRECT FORMAT`; a string where the
 list must be or a list where the string must be (`CHANGE A TO B`, `CHANGE A$ TO B$`) →
 `MISMATCHED STRING OPERATION`; a string constant where the string target must be
@@ -1180,6 +1459,244 @@ compile-time message of [M68] p. 71) is reused for a code that is not a byte.
 
 ### 7.20 FNEND
 See §7.10.
+
+### 7.21 FILES, file numbers and the file model (Fifth Edition)
+
+```
+FILES name { ";" name }
+name := '"' { byte except '"' } '"'          quoted: the bytes between the quotes
+      | { byte except ";" and '"' }          unquoted: taken from the compacted text (§2)
+```
+
+[K81] p. 528–529: files are named by reference number in a `FILES` statement and sequential
+files are read with INPUT and written with PRINT, with IF END for the end-of-file condition. The
+statement forms below follow [G70] (p. 60–62, 65, 71, 74–75, 78); all details are **Baysick
+decisions** (see "The Fifth Edition" at the top).
+
+**Declaration.** FILES is not executable: like DATA (§7.5) it is processed before the run, and
+reaching it does nothing. All names of all FILES statements, in ascending line order and left to
+right, receive the **file numbers** 1, 2, 3, … ([G70] p. 60: "FILES name 1; name 2; … ;name n";
+"Multiple FILES statements are permitted"). A FILES statement may appear anywhere, also in a
+multi-line DEF body. More than **8** names in all (`LIM_FILES`) → `TOO MANY FILES IN n`, reported as soon as a
+ninth name starts — at the position where a name is expected (after `FILES` or after a `;`),
+whatever follows there, even an empty or malformed name, exactly like the ninth DEF parameter
+(§7.10) — n = the line of that position; [G70] p. 60, 86: "You can reference as many as eight files at the
+same time in any program"). A name is **empty** (`FILES`, `FILES ;A`, `FILES A;`, `FILES ""`),
+contains a byte 0, has text other than `;` or end of line after its closing quote, or has an
+unterminated quote → `INCORRECT FORMAT IN n`. Because a physical line has at most 255 bytes, a
+name has at most 249 (`LIM_FILE_NAME` = 255 bounds it). Two numbers may name the same file; each
+number then has its own position and mode (no other check is made).
+
+**Names and host paths.** The bytes of a name are the host file's **path, unchanged**: Baysick
+does no further interpretation (no `~`, no globbing, no environment variables, no added
+extension). A relative path is relative to the **working directory of the process**, which a
+program never changes; an absolute path (`/tmp/x`) is used as it is. An **unquoted** name is
+compacted like all program text outside quotes (§2.1): blanks are removed and lower-case letters
+become upper case (`FILES data.txt` names `DATA.TXT`), and a `'` ends it (a remark). A
+**quoted** name keeps every byte (`FILES "data.txt"; "my file"`). Whether `DATA` and `data` are
+the same file is the host file system's business (on macOS by default yes, on Linux no); portable
+programs and the test corpus use the exact spelling. **Baysick decision:** host paths are the
+only names a Unix program has; quoting gives access to every legal path, and unquoted names keep
+the Dartmouth look (`FILES INPUT; RESULT`).
+
+**File number expressions.** Every file statement names its file by `#` followed by a numeric
+expression, the **designator** ([G70] p. 60: "an integer, variable, subscripted variable, or an
+arithmetic expression"). Its value x is evaluated when the statement executes and truncated
+toward zero, k = trunc(x) ([G70] p. 60: "the value is truncated to an integer"); 0 ≤ k ≤ N (N =
+the number of FILES names) is required, else run-time error `INVALID FILE NUMBER IN n` (exit 1;
+[G70] p. 88). A string expression as designator → `MISMATCHED STRING OPERATION` (compile time).
+
+**File 0 is the terminal** ([G70] p. 71: "The statement PRINT #0 … directs the system to print
+the results at your terminal"): `PRINT #0` writes standard output exactly like PRINT (same column
+state), and `INPUT #0` and `IF END #0` read **standard input** with the file rules of §7.25–§7.26
+(no prompt, no retype dialogue, an end-of-file test). This is how a program reads its standard
+input to the end and still continues: `IF END #0 THEN 900` before each `INPUT #0`. Standard input
+has one reader: INPUT, MAT INPUT, INPUT #0 and IF END #0 share it, and each INPUT-like statement
+starts at the beginning of the next unread line. File 0 is always open and always readable and
+writable; `SCRATCH #0` and `RESTORE #0` → `INVALID FILE NUMBER`.
+
+**Modes** ([G70] p. 62: "All sequential files … are considered as being in either the read mode or
+the write mode. … Initially, the FILES statement results in all files being set to read mode").
+File k ≥ 1 is at every moment in one of three states:
+
+| State | Entered by | INPUT #k, IF END #k | PRINT #k |
+|-------|------------|---------------------|----------|
+| read, not open | start of the run; RESTORE #k | open the host file for reading (`open(path, O_RDONLY)`), position at its first byte, then as "read, open"; failure → `CAN'T OPEN FILE` | `ILLEGAL FILE COMMAND` |
+| read, open | the first INPUT #k or IF END #k in read mode | reads from the current position | `ILLEGAL FILE COMMAND` |
+| write | SCRATCH #k | INPUT #k → `ILLEGAL FILE COMMAND`; IF END #k is false | appends to the file's output |
+
+So a file is opened **lazily**: a program never fails because of a name it does not use, and a
+file that is only written (SCRATCH, then PRINT #) need not exist before. `CAN'T OPEN FILE IN n`
+(exit 1, [G70] p. 87) covers every failure to open: a missing file, a missing directory in the
+path, no permission, and a path that names a directory. `ILLEGAL FILE COMMAND IN n` (exit 1,
+[G70] p. 88: "You have tried to write to a file that has not been set to the write mode, or read
+from a file that has not been set to the read mode").
+
+**There is no append mode.** SCRATCH always empties the file; a program that wants to extend a
+file reads it and writes it again. **Baysick decision:** [G70] p. 77 has APPEND for binary files
+only, and [K81] mentions no append for the Fifth Edition.
+
+**Output of a file in write mode** is buffered (`RT_FILEBUF_SIZE` = 4096 bytes per file, DESIGN.md
+§6.8) and reaches the host file only at these moments: as soon as the buffer becomes full — when
+the byte that fills it (the 4096th unwritten byte) is added, all 4096 bytes are written at once,
+so the host file grows in exact 4096-byte steps while the program runs — at RESTORE #k (§7.23),
+and at program termination (§10). (SCRATCH #k of a file already in write mode discards its
+unwritten output instead, §7.22.)
+
+**Readers.** Each file in read mode, and standard input, is read in chunks: whenever its reader
+needs a byte and holds no unread byte, it makes one `read` request of up to **65 536** bytes
+(`RT_INBUF_SIZE`), and it keeps the bytes it received until they are consumed. A file read
+through another number therefore sees the bytes that had reached the host file at the moment of
+each of its chunk reads: bytes already in its chunk are kept even if the file is later
+truncated or rewritten, and bytes written later are seen only by a later chunk read (made when
+the reader has consumed every byte it holds; RESTORE # of the reading number empties its reader). A write that fails (any `write` error other than `EINTR`, or a write that
+transfers 0 bytes) → `CAN'T WRITE FILE IN n` (exit 1; [G70] p. 87), n = the line of the statement
+whose output or flush failed (at termination, §10).
+
+**Input lines of a file** are the §7.15 input lines: the bytes up to the next LF (not included),
+one CR immediately before the LF removed, a last line without LF a line if it is not empty, a
+line longer than 65 536 bytes → `INPUT LINE TOO LONG` (exit 1). A read error (other than `EINTR`)
+is treated as the end of the file.
+
+**Extension path (not part of this edition).** Two later Baysick extensions are planned
+(`docs/SEA_BOOTSTRAP.md` §4 item 3): a verbatim line-input statement and a way to write to
+standard error and choose the exit status. This file model leaves room for both without changing
+any valid program: a verbatim line input reads the next line of file k (or standard input, k = 0)
+with the same per-file line reader and the same IF END condition, assigning it to a string
+target without splitting, quoting or blank removal — it needs only a new keyword, which is
+`ILLEGAL INSTRUCTION` today; standard error can be reached through a designator that is
+`INVALID FILE NUMBER` today (a negative one, e.g. `#-1`), or through a new statement, and the exit
+status through a new statement. No FILES name is reserved, so no host path loses its meaning.
+
+### 7.22 SCRATCH
+
+```
+SCRATCH "#" expression
+```
+
+([G70] p. 75: "When a file is scratched, all data elements contained in the file are erased";
+Dartmouth's Sixth Edition has `SCRATCH #` too, [U72] §11.2.3.) For file k ≥ 1 (§7.21): if the
+file is open (read or write mode) it is closed — in write mode its unwritten output is discarded,
+because the file is emptied anyway — then the host file is opened for writing, **created if it
+does not exist and truncated to length 0 if it does** (`open(path, O_WRONLY | O_CREAT | O_TRUNC,
+0666)`, the process umask applies), and the file is in write mode with its own column state at
+`col = out = 0` (§8). Failure → `CAN'T OPEN FILE IN n`. The open comes first: only after it
+succeeds is the file's output buffer allocated (once per file, at its first SCRATCH), and if
+that fails → `OUT OF ROOM IN n`, the host file having been created or truncated already. k = 0 → `INVALID FILE NUMBER`. Missing
+`#` or text after the expression → `INCORRECT FORMAT`.
+
+### 7.23 RESTORE #
+
+```
+RESTORE "#" expression
+```
+
+([G70] p. 74: "the RESTORE statement resets a sequential file to the read mode", with the
+position at the beginning.) For file k ≥ 1: in write mode, if the file's `col ≠ 0` a newline is
+written to it (as at termination, §8), its buffered output is written (failure → `CAN'T WRITE
+FILE`) and it is closed; in read mode, an open file is closed. The file is then "read, not open":
+the next INPUT #k or IF END #k opens it again and reads from its first byte. k = 0 →
+`INVALID FILE NUMBER`. The statements `RESTORE`, `RESTORE*` and `RESTORE$` (§7.16) are not
+affected and do not affect files.
+
+### 7.24 PRINT #
+
+```
+PRINT "#" expression [ "," item-list ]
+```
+
+([G70] p. 71: "PRINT #file designator, output list"; [K81] p. 529: sequential files are written
+with PRINT.) The item list is exactly that of PRINT (§7.2), with the same constraints and errors;
+`PRINT #k` alone (or `PRINT #k,` with nothing after the comma) writes an empty line. For k = 0
+the statement is PRINT. For k ≥ 1 the file must be in write mode (§7.21, else `ILLEGAL FILE
+COMMAND`) and the output follows **all of §8 with the file's own state**: each file has its own
+`col` and `out` counters and lazy spaces, its own zones (`,`), `;` and TAB columns and its own
+75-column rules (a number starts a new line of that file if fewer than 12 columns remain; a `,`
+that reaches column 75 ends that file's line). Printing to one file never changes the column of
+another file or of standard output. No trailing blank is ever written to a file.
+
+**Order of evaluation:** the designator is evaluated first; then, for each item in order, its
+value (which may call a function whose body prints to standard output or another file) and then
+its output. The file number (`INVALID FILE NUMBER`) and the mode (`ILLEGAL FILE COMMAND`) are
+checked immediately before each output of the statement — the first time after the first item's
+value has been evaluated, or before the newline of a `PRINT #k` without items. A PRINT # whose
+item list produces no output at all (`PRINT #9,;`: a leading `;` moves nothing and the trailing
+`;` suppresses the newline) therefore does nothing, and its file number and mode are never
+checked; this is intended. After the
+designator only `,` or end of line may follow (`PRINT #1 X` → `INCORRECT FORMAT`).
+
+### 7.25 INPUT #
+
+```
+INPUT "#" expression "," target { "," target }
+```
+
+(targets as in INPUT, §7.15; [G70] p. 65: "INPUT #file designator, input list"; [K81] p. 529:
+sequential files are read with INPUT.) The values come from the lines of file k (k = 0: standard
+input) with the **field rules of §7.15** (fields separated by commas outside quotes, a line of
+blanks has no field, numeric fields in the constant syntax, quoted and unquoted string fields),
+but **without a prompt and without a dialogue**:
+
+1. For k ≥ 1 the file must be in read mode (else `ILLEGAL FILE COMMAND`); it is opened if
+   necessary (`CAN'T OPEN FILE`). The statement reads the next line of the file. If there is
+   none: `END OF FILE IN n` (exit 1).
+2. For each target in order: its subscripts are evaluated (as in READ), then the next field is
+   taken. If no field is left on the current line, the next line is read silently and its first
+   field taken ([G70] p. 65: "If six data items are required … and only five items are on the
+   line …, the next line will be accessed"); if there is no next line: `END OF FILE IN n`. A field
+   that is not valid for the target → `INCORRECT FORMAT IN FILE IN n` (exit 1; [G70] p. 88).
+   Otherwise the value is assigned (string array elements: the subscript is checked at the
+   store, after the field is taken, as in §7.15).
+3. After the last target the rest of the current line is discarded silently ([G70] p. 65: "The
+   fifth data item will be ignored").
+
+Values assigned before an error stay assigned (the program stops anyway). The three INPUT
+diagnostics of §7.15 are never written for INPUT #, and `END OF INPUT` never occurs (k = 0 reads
+standard input with these rules: its end is `END OF FILE`, exit 1). On a terminal, INPUT #0
+writes no prompt, but stdout is flushed before each line is read and `col = out = 0` after it, as
+for INPUT (§7.15). **Baysick decisions:** a file
+has nobody to retype a field, so a bad field stops the program; reading past the end without an
+`IF END` test is a program error (exit 1), unlike `END OF INPUT` (exit 0, §7.15), which ends a
+filter whose input simply ran out.
+
+Syntax errors: a missing `,` after the designator → `INCORRECT FORMAT` — this includes
+`INPUT #1` at the end of the line, and `INPUT #1 A`; a `,` with no target after it (`INPUT #1,`)
+→ `ILLEGAL VARIABLE`, as for INPUT (§7.15); `INPUT #` at the end of the line → `ILLEGAL FORMULA`
+(an operand is required, §5.2).
+
+### 7.26 IF END #
+
+```
+IF END "#" expression ( "THEN" | "GOTO" ) line-number
+```
+
+([G70] p. 78: "IF END #file designator THEN line number"; [K81] p. 529: "IF END for the
+end-of-file condition".) The line number follows the GOTO rules (§7.6: `UNDEFINED NUMBER`,
+`ILLEGAL TRANSFER`). The designator k is evaluated and checked (`INVALID FILE NUMBER`); then the
+program jumps to the line if file k is **at its end**:
+
+* k ≥ 1 in read mode: the file is opened if necessary (`CAN'T OPEN FILE`); it is at its end when
+  no byte of it remains unread, i.e. the next INPUT #k would find no line. Since every INPUT #
+  discards the rest of its last line, this is exactly "every line has been read".
+* k ≥ 1 in write mode: never at its end (the condition is false). ([G70] p. 78 tests "the end of
+  file space" when writing; Baysick files have no fixed space.)
+* k = 0: standard input is at its end when no byte remains unread; to know, the runtime reads
+  standard input (waiting for a terminal user to type a line or end-of-file); on a terminal
+  stdout is flushed first.
+
+**Baysick decision:** IF END tests *before* reading (is there another line?), so the loop
+`10 IF END #1 THEN 90` / `20 INPUT #1, A$` / `30 … GOTO 10` reads every line and never fails.
+[G70] p. 78 describes the test after a READ ("whether a valid data item was read") and lets the
+READ past the end assign zeros; a pre-test needs no such substitute values. An empty line still
+counts as a line: if the last line of a file is empty, IF END is false before it and the INPUT #
+that skips it (it has no field) then finds no further line → `END OF FILE`. Reading lines
+verbatim, empty ones included, is the planned extension of §7.21.
+
+Syntax errors: the designator is an ordinary expression (§5.1–§5.3), so its errors are the
+expression errors, and after it `THEN` or `GOTO` must follow, else `INCORRECT FORMAT`
+(`IF END #1 PRINT`). In particular `IF END #` at the end of the line → `ILLEGAL FORMULA` (an
+operand is required, §5.2 rule 5), while `IF END # THEN 10` reads the letter `T` as the
+designator (the variable T) and then finds no `THEN` → `INCORRECT FORMAT`.
 
 ## 8. PRINT output
 
@@ -1220,7 +1737,11 @@ teletype shows none either).
 * The column state persists across PRINT statements (a trailing separator continues the line).
 * MAT PRINT (§7.14.5) prints through these same rules.
 * **At program termination** (END, STOP, OUT OF DATA, END OF INPUT, or any run-time error): if
-  `col ≠ 0`, a newline is written to stdout; then stdout is flushed.
+  `col ≠ 0`, a newline is written to stdout; then stdout is flushed. Before that, every file in
+  write mode gets the same treatment with its own state (§10).
+* **Files (Fifth Edition).** `PRINT #k` (k ≥ 1, §7.24) applies every rule of this section to file
+  k with file k's own `col` and `out`, which start at 0 when SCRATCH #k puts the file in write
+  mode. Standard output's state is used by PRINT, `PRINT #0`, MAT PRINT and the INPUT prompt.
 * INPUT on a terminal writes its prompt through this state and resets it after the line is read
   (§7.15). Run-time error text goes to stderr after
   this flush.
@@ -1284,6 +1805,7 @@ Examples (field shown between brackets; `·` = space):
 | INPUT or MAT INPUT needs a line, stdin at its end | pending-line newline, flush | `END OF INPUT IN n` + LF | **0** |
 | any other run-time error | pending-line newline, flush | `<MESSAGE> IN n` + LF | 1 |
 | INPUT diagnostic (§7.15), program continues | flush | `<MESSAGE>` + LF | — |
+| END or STOP, and writing a file's last output fails (Fifth Edition) | pending-line newline, flush | `CAN'T WRITE FILE IN n` + LF | 1 |
 
 `n` is the line number of the statement being executed (for errors inside a single-line FN
 expression, the calling statement; inside a multi-line DEF body, the body line, §7.10).
@@ -1291,11 +1813,24 @@ expression, the calling statement; inside a multi-line DEF body, the body line, 
 "the program is assumed to be done"), so it exits 0, but the message is still written to stderr
 so it is visible; running out of input is treated the same way (§7.15).
 
-**Streams.** Programs read standard input only through INPUT and MAT INPUT (§7.15), lazily: a
-program that executes neither never reads it, so its behaviour does not depend on stdin. Input is
+**Files at termination (Fifth Edition).** In every row of the table, before standard output's
+pending-line newline and flush, the runtime finishes every file in **write mode**, in ascending
+file number: if its `col ≠ 0` a newline is written to it, then its buffered output is written.
+So every line a program wrote to a file ends with LF, as on standard output. Files in read mode
+need nothing. If finishing a file fails: after END or STOP the program ends as the run-time error
+`CAN'T WRITE FILE IN n` (n = the line of the END or STOP; the remaining files are still finished,
+then stdout, then the message, exit 1); in every other row (an error is already being reported)
+the failure does not change the message, but the exit status becomes **1** (also after `OUT OF
+DATA` and `END OF INPUT`), because output was lost. **Baysick decision**, the same reasoning as
+for a broken stdout below.
+
+**Streams.** Programs read standard input only through INPUT, MAT INPUT and, in the Fifth
+Edition, INPUT #0 and IF END #0 (§7.15, §7.21), lazily: a program that executes none of them never
+reads it, so its behaviour does not depend on stdin. Input is
 read with `read(0, …)` into a runtime buffer; bytes after the last line consumed are never
-interpreted. Standard output is written only by PRINT, MAT PRINT, the INPUT prompt (terminal
-only) and the termination newline; standard error only by BASIC error messages and the three
+interpreted. Standard output is written only by PRINT, PRINT #0, MAT PRINT, the INPUT prompt
+(terminal only) and the termination newline; files only by PRINT #, the pending newline that RESTORE # writes
+(§7.23) and their termination newline (§7.21–§7.24); standard error only by BASIC error messages and the three
 INPUT diagnostics. A read error on stdin (other than `EINTR`) is treated as end of input.
 
 **Baysick decision:** if writing stdout fails (any `write` error other than `EINTR`, or a write
@@ -1316,7 +1851,8 @@ The compiler stops at the **first** error, determined in this order:
    `TOO MANY LOOPS`, `TOO MUCH DATA`, `TOO MANY LABELS`, DIM errors, `DUPLICATE FUNCTION`,
    array dimensionality conflicts, `FORMULA TOO COMPLEX`, MAT syntax errors of §7.14.2,
    `MISMATCHED STRING OPERATION`, `NESTED DEF`, `ILLEGAL TRANSFER` for GOSUB/RETURN in a body,
-   `UNFINISHED DEF` at an END or at a FNEND with an open FOR).
+   `UNFINISHED DEF` at an END or at a FNEND with an open FOR; Fifth Edition: `TOO MANY FILES`,
+   the FILES syntax errors, `DUPLICATE FUNCTION` for a `DEF FNx` and a `DEF FNx$`).
 3. **Whole program**, in this order: `UNFINISHED DEF` (a DEF still open after the last line;
    reported at the DEF line); `FOR WITHOUT NEXT`; `NO END INSTRUCTION`; `NO DATA`;
    `NO STRING DATA`; `UNDEFINED NUMBER` (first offending reference in ascending line order, a
@@ -1324,7 +1860,8 @@ The compiler stops at the **first** error, determined in this order:
    and the rest of the program, same order); `UNDEFINED FUNCTION` (first reference in ascending
    line order, single-line DEF expressions included at their DEF line);
    `INCORRECT NUMBER OF ARGUMENTS` (first call, same order, whose argument count differs from its
-   DEF); `RECURSIVE FUNCTION` (lowest letter A…Z that can reach itself; reported at its DEF
+   DEF); `MISMATCHED STRING OPERATION` (Fifth Edition, §7.10.1: first call, same order, whose
+   kind — `FNx` or `FNx$` — or any argument's kind differs from its DEF); `RECURSIVE FUNCTION` (lowest letter A…Z that can reach itself; reported at its DEF
    line).
 
 The message is written to **stderr** as exactly `<MESSAGE> IN <n>` + LF, or `<MESSAGE>` + LF for
@@ -1370,6 +1907,7 @@ Compile-time ("IN n" column says whether a line number is printed):
 | 28 | `UNFINISHED DEF` | yes | multi-line DEF without FNEND (n = DEF line); FOR open at FNEND (n = FNEND line) ([M68] p. 72) |
 | 29 | `NESTED DEF` | yes | DEF inside a multi-line DEF body ([M68] p. 72) |
 | 30 | `ILLEGAL TRANSFER` | yes | GOSUB/RETURN in a multi-line DEF body; a jump into or out of a body (Baysick) |
+| 31 | `TOO MANY FILES` | yes | more than 8 FILES names in the program (§7.21) ([G70] p. 86) |
 
 Run-time:
 
@@ -1391,6 +1929,14 @@ Run-time:
 | 45 | `ILLEGAL CHARACTER` | 1 | CHANGE list to string: a code outside 0–255 (text from [M68] p. 71) |
 | 46 | `INPUT LINE TOO LONG` | 1 | an input line longer than 65 536 bytes (Baysick) |
 | 47 | `OUT OF ROOM` | 1 | string storage could not be allocated ([M68] p. 74) |
+| 48 | `CAN'T OPEN FILE` | 1 | a file cannot be opened for reading (INPUT #, IF END #) or writing (SCRATCH #) (§7.21) ([G70] p. 87) |
+| 49 | `INVALID FILE NUMBER` | 1 | a file designator whose integer part is below 0 or above the number of FILES names (text and meaning: [G70] p. 88); Baysick decision: also `SCRATCH #0`, `RESTORE #0` (§7.21) |
+| 50 | `ILLEGAL FILE COMMAND` | 1 | PRINT # to a file in read mode, INPUT # from a file in write mode (§7.21) ([G70] p. 88) |
+| 51 | `END OF FILE` | 1 | INPUT # needs a line and the file (or standard input, #0) has none left (§7.25) (Baysick) |
+| 52 | `INCORRECT FORMAT IN FILE` | 1 | an INPUT # field is not valid for its target (§7.25) ([G70] p. 88) |
+| 53 | `CAN'T WRITE FILE` | 1 | writing a file failed (§7.21, §10) ([G70] p. 87) |
+| 54 | `ILLEGAL 'VAL' ARGUMENT` | 1 | VAL of a string that is not a number (§6.1) ([G70] p. 88) |
+| 55 | `ASC OF EMPTY STRING` | 1 | ASC of the empty string (§6.1) (Baysick) |
 
 INPUT diagnostics (stderr, no `IN n`, program continues; [M68] p. 74; §7.15):
 `INPUT DATA NOT IN CORRECT FORMAT -- RETYPE IT`, `NOT ENOUGH INPUT -- ADD MORE`,
@@ -1404,6 +1950,10 @@ INPUT diagnostics (stderr, no `IN n`, program continues; [M68] p. 74; §7.15):
 `SYSTEM ERROR`, `USELESS LOOP IN`, `TIME UP -- LOOPING IN` (not applicable); the continuing
 arithmetic warnings `ABSOLUTE VALUE RAISED TO POWER`, `UNDERFLOW`, `EXP TOO LARGE`,
 `LOG OF NEGATIVE NUMBER`, `SQUARE ROOT OF A NEGATIVE NUMBER` (Baysick keeps its §5.4/§6 rules).
+[G70] messages not used by Baysick (p. 86–90): the file name and `LINE #` parts of the file
+messages (Baysick prints `<MESSAGE> IN n` like every other error), `ILLEGAL FILE NAME OR
+PASSWORD` (a bad FILES name is `INCORRECT FORMAT`, §7.21), `DATA RECORD TOO LARGE` (Baysick's
+`INPUT LINE TOO LONG`), and the messages of features Baysick does not have.
 MAT syntax errors use the existing compile-time messages (§7.14.2); the [M68] messages
 `ILLEGAL MAT FUNCTION`, `ILLEGAL MAT TRANSPOSE`, `ILLEGAL MAT MULTIPLE` and
 `INCORRECT NUMBER OF SUBSCRIPTS` are not used.
@@ -1420,7 +1970,7 @@ MAT syntax errors use the existing compile-time messages (§7.14.2); the [M68] m
 | DATA values | 100 000 numeric + 100 000 string | TOO MUCH DATA |
 | string constant bytes outside DATA (total) | 65 536 | TOO MANY LABELS |
 | string length | 65 536 bytes | STRING TOO LONG (CHANGE) |
-| input line | 65 536 bytes | INPUT LINE TOO LONG |
+| input line (stdin and files) | 65 536 bytes | INPUT LINE TOO LONG |
 | DEF parameters | 8 | INCORRECT FORMAT |
 | character codes | 0–255 | ILLEGAL CHARACTER |
 | FOR statements | 1000 | TOO MANY LOOPS |
@@ -1428,6 +1978,9 @@ MAT syntax errors use the existing compile-time messages (§7.14.2); the [M68] m
 | elements per array | 1 000 000 | DIMENSION TOO LARGE |
 | MAT matrix shape | within the array's storage (§7.14.3); square matrices up to 999 × 999 | DIMENSION ERROR |
 | pending GOSUBs | 1024 | TOO MANY GOSUBS |
+| FILES names (file numbers 1–8; file 0 is the terminal) | 8 (`LIM_FILES`) | TOO MANY FILES |
+| bytes of a FILES name | 255 (`LIM_FILE_NAME`; a 255-byte line holds at most 249) | — (LINE TOO LONG first) |
+| open files at once | the 8 FILES numbers plus standard input and output | — |
 
 The 1964 limits ([M64] Appendix B: 300 data, 26 FORs, 1500 array elements, …) are relaxed
 because they reflected GE-225 core memory, not the language.
@@ -1482,6 +2035,41 @@ because they reflected GE-225 core memory, not the language.
 29. RANDOMIZE seeds from `getentropy` (fallback `time`); without it RND is the fixed sequence.
 30. `DET` is the pinned product of the INV pivots; a singular matrix still stops the program.
 
+Fifth Edition (each where [K81] gives only the feature's existence; forms from [G70] are
+decisions too):
+
+31. Scope: sequential files, `LEN ASC STR$ VAL`, string DEF, string tables; not random-access
+    files, `CHAIN`, overlay subprograms, `USR$`, `CHANGE … BIT`, recursive DEF, `TIM CLK$ DAT$`,
+    the run-time `FILE` statement (the table under "The Fifth Edition").
+32. `FILES name; name; …` ([G70]) is a declaration like DATA; names numbered 1–8 in program
+    order; more than 8 → `TOO MANY FILES`; a bad name → `INCORRECT FORMAT`.
+33. A name is the host path, unchanged, relative to the working directory; unquoted names are
+    compacted (upper case), quoted names exact.
+34. Designators `#expression`, truncated ([G70]); file 0 is the terminal: `PRINT #0` = PRINT,
+    `INPUT #0`/`IF END #0` read standard input with the file rules, sharing INPUT's reader.
+35. Files start in read mode and open lazily; `SCRATCH #` creates/truncates and enters write
+    mode; `RESTORE #` returns to read mode at the start; no append mode; `SCRATCH #0`,
+    `RESTORE #0` are `INVALID FILE NUMBER`.
+36. PRINT # follows §8 with each file's own column state; output is buffered per file and
+    finished (pending newline, flush) at RESTORE # and at every termination, files before stdout.
+37. INPUT # uses the §7.15 field rules with no prompt and no diagnostics: missing fields come
+    from the next lines, excess fields are dropped, a bad field is `INCORRECT FORMAT IN FILE`,
+    running out is `END OF FILE` (exit 1).
+38. IF END # is a pre-test: true when no unread byte remains (read mode), false in write mode.
+39. File errors `CAN'T OPEN FILE`, `INVALID FILE NUMBER`, `ILLEGAL FILE COMMAND`,
+    `INCORRECT FORMAT IN FILE`, `CAN'T WRITE FILE` ([G70] texts without the file name) and
+    `END OF FILE`; a failed file write at termination makes the exit status 1.
+40. `LEN` counts bytes; `ASC` takes a string expression and fails on an empty string; `VAL` uses
+    the INPUT number syntax and fails with `ILLEGAL 'VAL' ARGUMENT`; `STR$` is the §9 field
+    without its blanks.
+41. String functions `FNx$` share the letter with numeric functions; string and numeric
+    parameters mix; a multi-line string function's value variable starts empty; arguments are
+    evaluated to values left to right; results are copies; kind mismatches are found in the
+    whole-program phase as `MISMATCHED STRING OPERATION`; recursion stays rejected.
+42. String tables `A$(i, j)` follow the numeric table rules (bounds 10, 10 by default, DIM,
+    redimensioning by MAT READ, MAT PRINT by rows); a string array named only in MAT READ/PRINT
+    stays a list; MAT INPUT stays list-only; no `MAT PRINT #`/`MAT INPUT #`.
+
 ## 14. Edition differences
 
 ### 14.1 Texts that were errors and are now programs
@@ -1500,6 +2088,27 @@ used to be errors and are now legal: a statement starting with `INPUT`, `RESTORE
 LET or IF; `SGN(`, `COT(`, `NUM`, `DET`; `FNA` without `(`; a DEF with zero or several parameters
 or without `=`; a DATA item starting with a letter or `"`; several `=` in LET; `TAB(` in PRINT;
 `'` outside a string (formerly kept, so `PRINT 1 'X` was an `INCORRECT FORMAT`).
+
+**Fifth Edition.** Every Fifth Edition addition likewise gives meaning to text that was an error:
+a statement starting with `FILES` or `SCRATCH` (`ILLEGAL INSTRUCTION`), `PRINT #` (`ILLEGAL
+FORMULA`), `INPUT #` (`ILLEGAL VARIABLE`), `RESTORE #` (`INCORRECT FORMAT`), `IF END #`
+(`ILLEGAL RELATION`), `LEN(`, `ASC(`, `VAL(`, `STR$(`, `FNA$` (the letter followed by text that
+cannot continue an expression), a string parameter (`ILLEGAL VARIABLE`), and two subscripts on a
+string array. Two Fourth Edition error tests pin text that becomes legal; at integration
+(DESIGN.md §2.2) they are rewritten so that they test the same error class with text that stays
+illegal:
+
+| Test | Fourth Edition text → message | Fifth Edition text → message |
+|------|-------------------------------|------------------------------|
+| `tests/errors/c_ed4_string_table_dim` | `10 DIM A$(3,4)` → `ILLEGAL VARIABLE IN 10` | `10 DIM A$(3,4,5)` → `INCORRECT FORMAT IN 10` (a third bound, as `DIM A(3,4,5)`) |
+| `tests/errors/c_ed4_string_two_subscripts` | `10 LET A$(1,2) = "X"` → `ILLEGAL VARIABLE IN 10` | `10 LET A$(1,2,3) = "X"` → `ILLEGAL FORMULA IN 10` (a third subscript, as `LET A(1,2,3) = 1`, §5.2) |
+
+One message moves between phases without changing: a string argument for a numeric parameter
+(`tests/errors/c_ed4_mismatched_fn_arg`) is now found in the whole-program phase (§7.10.1), still
+`MISMATCHED STRING OPERATION` at the line of the call; only a program that also has a
+per-statement error (any line) or an earlier whole-program error now reports that error instead.
+No Fifth Edition feature changes the
+meaning of a program that compiled before, so §14.2 has no Fifth Edition rows.
 
 ### 14.2 Meanings changed by later editions (Baysick keeps the earlier one)
 

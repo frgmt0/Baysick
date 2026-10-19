@@ -14,6 +14,9 @@
 // Operand mode also yields TK_SVAR TK_SARRAY TK_FN0 (Fourth Edition,
 // LANGUAGE.md 5.2); the scanner never decides "string not allowed here":
 // the parser reports MISMATCHED STRING OPERATION.
+// Fifth Edition: operand mode also yields TK_SFN TK_SFN0 (string functions
+// FNx$) and TK_BUILTIN for LEN ASC VAL STR$ (BI_LEN..BI_STR); `#` after
+// PRINT, INPUT, IF END, SCRATCH, RESTORE is read by the statement parsers.
 // =====================================================================
 .ifndef BSK_TOKENS_INC
 .equ BSK_TOKENS_INC, 1
@@ -54,7 +57,24 @@
 .equ TK_SARRAY,         27  /* letter '$' '('; TOK_INDEX = letter 0..25 ('(' consumed) */
 .equ TK_GOTO,           28  /* keyword GOTO (operator mode only: IF ... GOTO, ON ... GOTO) */
 .equ TK_FN0,            29  /* FNx NOT followed by '('; TOK_INDEX = 0..25 */
+// Fifth Edition tokens (LANGUAGE.md 5.2)
+.equ TK_SFN,            30  /* FNx$ immediately followed by '('; TOK_INDEX = 0..25 ('(' consumed) */
+.equ TK_SFN0,           31  /* FNx$ NOT followed by '('; TOK_INDEX = 0..25 */
+
+// Fifth Edition contract staging switch (DESIGN.md 2.2). 0: the counts the
+// current (Fourth Edition) modules are built with. 1: the Fifth Edition
+// contract. Build with `make BSK_ED5=1` during the implementation phase;
+// the integration step deletes the switch and keeps only the
+// BSK_ED5_CONTRACT=1 values. Every other constant is unconditional.
+// (Also defined, identically guarded, in ir.inc.)
+.ifndef BSK_ED5_CONTRACT
+.equ BSK_ED5_CONTRACT, 0
+.endif
+.if BSK_ED5_CONTRACT
+.equ TK_COUNT,          32
+.else
 .equ TK_COUNT,          30
+.endif
 
 // ---- Token record (filled by the scanner), 40 bytes --------------------
 .equ TOK_KIND,          0   /* u32 TK_* */
@@ -81,7 +101,15 @@
 .equ BI_COT,            11  /* Fourth Edition */
 .equ BI_NUM,            12  /* Fourth Edition, never with an argument */
 .equ BI_DET,            13  /* Fourth Edition, never with an argument */
+.equ BI_LEN,            14  /* Fifth Edition: LEN(string expression), numeric value */
+.equ BI_ASC,            15  /* Fifth Edition: ASC(string expression), numeric value */
+.equ BI_VAL,            16  /* Fifth Edition: VAL(string expression), numeric value */
+.equ BI_STR,            17  /* Fifth Edition: STR$(expression), STRING value; the scanner consumes "STR$(" */
+.if BSK_ED5_CONTRACT
+.equ BI_COUNT,          18
+.else
 .equ BI_COUNT,          14
+.endif
 
 // ---- Statement keyword ids (matched as prefixes of the compacted text
 //      after the line number, in exactly this order) --------------------
@@ -107,8 +135,14 @@
 .equ KW_RANDOMIZE,      19  /* Fourth Edition (7.18); also matches "RANDOM" */
 .equ KW_CHANGE,         20  /* Fourth Edition (7.19) */
 .equ KW_FNEND,          21  /* Fourth Edition (7.10) */
+.equ KW_FILES,          22  /* Fifth Edition (LANGUAGE.md 7.21) */
+.equ KW_SCRATCH,        23  /* Fifth Edition (7.22) */
 
+.if BSK_ED5_CONTRACT
+.equ KW_COUNT,          24
+.else
 .equ KW_COUNT,          22
+.endif
 
 // ---- MAT sub-keywords (after "MAT", in this order) and MAT function ids --
 // "MAT" is followed by READ, PRINT, INPUT (Fourth Edition), or an
