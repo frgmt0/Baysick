@@ -1,0 +1,2 @@
+10 ON X GOSUB 20
+20 END

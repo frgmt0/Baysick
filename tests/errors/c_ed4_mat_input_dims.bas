@@ -1,0 +1,2 @@
+10 MAT INPUT V(5)
+20 END

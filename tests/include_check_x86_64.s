@@ -11,6 +11,12 @@
     BSK_EMIT_ERRMSG_TABLE .Lerrtab
 ASSERT ((.Lerrtab_m1 - .Lerrtab) == ERR_TABLE_SIZE*8),     "error message table size"
 
+    .section .rodata
+    BSK_EMIT_INPUT_MSGS .Linmsg
+ASSERT ((.Linmsg_retype_end - .Linmsg_retype) == 46),      "INPUT retype message (with LF)"
+ASSERT ((.Linmsg_more_end - .Linmsg_more) == 29),          "INPUT add-more message (with LF)"
+ASSERT ((.Linmsg_excess_end - .Linmsg_excess) == 33),      "INPUT excess message (with LF)"
+
     .text
     ret
 

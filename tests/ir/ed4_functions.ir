@@ -1,0 +1,99 @@
+; baysick-ir 1
+module slots=288 fors=1 funcs=5 strings=0 data=0
+array L dims=1 b1=10
+func main temps=9 labels=7
+  line 10
+  line 20
+  line 30
+  jmp @90
+  line 90
+  jmp @140
+  line 140
+  t0 = const 0x3FF0000000000000 ; 1
+  t1 = const 0x4000000000000000 ; 2
+  t2 = const 0x4008000000000000 ; 3
+  fnarg 1, t2
+  t3 = callfn FNB, t1
+  fnarg 1, t3
+  t4 = callfn FNM, t0
+  prnum t4
+  prsemi
+  t5 = const 0x4000000000000000 ; 2
+  t6 = callfn FNF, t5
+  prnum t6
+  prnl
+  line 150
+  t7 = const 0x3FF0000000000000 ; 1
+  t8 = callfn FNA
+  stv Z, t8
+  ast1 L, t7, t8
+  line 170
+  end
+endfunc
+func FNA params=- temps=1 labels=0
+  t0 = const 0x4000000000000000 ; 2
+  ret t0
+endfunc
+func FNB params=X,Y temps=5 labels=0
+  t0 = param
+  t1 = param 1
+  t2 = mul t0, t1
+  t3 = callfn FNA
+  t4 = add t2, t3
+  ret t4
+endfunc
+func FNF params=N def=90 fnend=130 temps=13 labels=7
+  line 100
+  t0 = param
+  t1 = const 0x3FF0000000000000 ; 1
+  t2 = const 0x3FF0000000000000 ; 1
+  t3 = neg t2
+  stv %lim0, t1
+  stv %step0, t3
+  jfor t0, t1, t3, L4
+  stparam 0, t0
+  jmp L5
+  label L4
+  t4 = sub t0, t3
+  stparam 0, t4
+  jmp L6
+  label L5
+  line 110
+  t5 = ldfv
+  t6 = param
+  t7 = add t5, t6
+  stfv t7
+  line 120
+  t8 = param
+  t9 = ldv %step0
+  t10 = add t8, t9
+  t11 = ldv %lim0
+  jfor t10, t11, t9, L6
+  stparam 0, t10
+  jmp L5
+  label L6
+  line 130
+  t12 = ldfv
+  ret t12
+endfunc
+func FNM params=X,Y def=30 fnend=80 temps=8 labels=5
+  line 40
+  t0 = param
+  stfv t0
+  line 50
+  t1 = param 1
+  t2 = param
+  jcmp le, t1, t2, @80
+  line 60
+  t3 = param 1
+  stfv t3
+  line 70
+  t4 = param
+  t5 = const 0x3FF0000000000000 ; 1
+  fnarg 1, t5
+  t6 = callfn FNB, t4
+  stparam 0, t6
+  line 80
+  t7 = ldfv
+  ret t7
+endfunc

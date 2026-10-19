@@ -1,0 +1,69 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=1 strings=4 data=1
+array V dims=1 b1=10
+sarray L dims=1 b1=5
+string s0 "HI"
+string s1 "HJ"
+string s2 "NO"
+string s3 "!"
+data d0 0x401C000000000000 ; 7
+sdata d0 "ABC"
+sdata d1 "D,E"
+func main temps=20 labels=14
+  line 10
+  line 20
+  t0 = svar A$
+  t1 = svar B$
+  t2 = slit s0
+  sset t0, t2
+  sset t1, t2
+  line 30
+  t3 = const 0x4000000000000000 ; 2
+  t4 = sald1 L$, t3
+  t5 = svar A$
+  sset t4, t5
+  line 40
+  t6 = svar C$
+  sread t6
+  t7 = read
+  stv X, t7
+  line 50
+  t8 = const 0x4000000000000000 ; 2
+  t9 = sald1 L$, t8
+  t10 = slit s1
+  sjcmp lt, t9, t10, @70
+  line 60
+  prstr s2
+  prnl
+  line 70
+  t11 = svar A$
+  prsv t11
+  t12 = ldv X
+  prtab t12
+  t13 = const 0x4000000000000000 ; 2
+  t14 = sald1 L$, t13
+  prsv t14
+  prcomma
+  prstr s3
+  t15 = ldv X
+  prnum t15
+  prsemi
+  line 80
+  restore str
+  line 90
+  t16 = const 0x4000000000000000 ; 2
+  smatredim L$, t16
+  smatread L$
+  line 100
+  smatprint L$, packed
+  line 110
+  t17 = svar A$
+  chgs2n V, t17
+  line 120
+  t18 = const 0x3FF0000000000000 ; 1
+  t19 = sald1 L$, t18
+  chgn2s V, t19
+  line 130
+  line 140
+  end
+endfunc

@@ -1,0 +1,2 @@
+10 PRINT COT(0)
+20 END

@@ -1,0 +1,5 @@
+10 LET A(0) = 2
+20 LET A(1) = 65
+30 LET A(2) = 255.5
+40 CHANGE A TO A$
+50 END

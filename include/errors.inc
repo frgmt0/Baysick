@@ -39,6 +39,13 @@
 .equ ERR_DUPLICATE_DIMENSION,   22  /* "DUPLICATE DIMENSION"    (Baysick addition) */
 .equ ERR_RECURSIVE_FUNCTION,    23  /* "RECURSIVE FUNCTION"     (Baysick addition) */
 .equ ERR_FORMULA_TOO_COMPLEX,   24  /* "FORMULA TOO COMPLEX"    (Baysick addition) */
+// Third and Fourth Edition compile-time errors (LANGUAGE.md 11)
+.equ ERR_MISMATCHED_STRING,     25  /* "MISMATCHED STRING OPERATION" (1968 manual text) */
+.equ ERR_NO_STRING_DATA,        26  /* "NO STRING DATA"         (1968 manual text) */
+.equ ERR_WRONG_NUM_ARGS,        27  /* "INCORRECT NUMBER OF ARGUMENTS" (1968 manual text) */
+.equ ERR_UNFINISHED_DEF,        28  /* "UNFINISHED DEF"         (1968 manual text) */
+.equ ERR_NESTED_DEF,            29  /* "NESTED DEF"             (1968 manual text) */
+.equ ERR_ILLEGAL_TRANSFER,      30  /* "ILLEGAL TRANSFER"       (Baysick addition) */
 
 // ---- Run-time errors (codes 32..47) ------------------------------------
 .equ ERR_SUBSCRIPT,             32  /* "SUBSCRIPT ERROR" */
@@ -51,9 +58,16 @@
 .equ ERR_TOO_MANY_GOSUBS,       39  /* "TOO MANY GOSUBS"        (Baysick addition) */
 .equ ERR_DIMENSION_ERROR,       40  /* "DIMENSION ERROR"        (MAT; 1968 manual text) */
 .equ ERR_SINGULAR_MATRIX,       41  /* "SINGULAR MATRIX"        (MAT INV; Baysick addition) */
+// Third and Fourth Edition run-time errors (LANGUAGE.md 11)
+.equ ERR_ON_RANGE,              42  /* "ON EVALUATED OUT OF RANGE" (1968 manual text) */
+.equ ERR_END_OF_INPUT,          43  /* "END OF INPUT"  (exit status 0, like OUT OF DATA; Baysick) */
+.equ ERR_STRING_TOO_LONG,       44  /* "STRING TOO LONG"        (CHANGE; Baysick addition) */
+.equ ERR_ILLEGAL_CHARACTER,     45  /* "ILLEGAL CHARACTER"      (CHANGE; 1968 manual text) */
+.equ ERR_INPUT_LINE_TOO_LONG,   46  /* "INPUT LINE TOO LONG"    (Baysick addition) */
+.equ ERR_OUT_OF_ROOM,           47  /* "OUT OF ROOM"            (string storage; 1968 manual text) */
 
 .equ ERR_FIRST_RUNTIME,         32
-.equ ERR_TABLE_SIZE,            42  /* valid indices 0..41; unused entries are 0 */
+.equ ERR_TABLE_SIZE,            48  /* valid indices 0..47; unused entries (0, 31) are 0 */
 
 // ---------------------------------------------------------------------
 // BSK_EMIT_ERRMSG_TABLE name
@@ -77,10 +91,12 @@
     .quad \name\()_m13, \name\()_m14, \name\()_m15, \name\()_m16
     .quad \name\()_m17, \name\()_m18, \name\()_m19, \name\()_m20
     .quad \name\()_m21, \name\()_m22, \name\()_m23, \name\()_m24
-    .quad 0, 0, 0, 0, 0, 0, 0
+    .quad \name\()_m25, \name\()_m26, \name\()_m27, \name\()_m28
+    .quad \name\()_m29, \name\()_m30, 0
     .quad \name\()_m32, \name\()_m33, \name\()_m34, \name\()_m35
     .quad \name\()_m36, \name\()_m37, \name\()_m38, \name\()_m39
-    .quad \name\()_m40, \name\()_m41
+    .quad \name\()_m40, \name\()_m41, \name\()_m42, \name\()_m43
+    .quad \name\()_m44, \name\()_m45, \name\()_m46, \name\()_m47
 \name\()_m1:  .asciz "ILLEGAL CONSTANT"
 \name\()_m2:  .asciz "ILLEGAL FORMULA"
 \name\()_m3:  .asciz "ILLEGAL RELATION"
@@ -105,6 +121,12 @@
 \name\()_m22: .asciz "DUPLICATE DIMENSION"
 \name\()_m23: .asciz "RECURSIVE FUNCTION"
 \name\()_m24: .asciz "FORMULA TOO COMPLEX"
+\name\()_m25: .asciz "MISMATCHED STRING OPERATION"
+\name\()_m26: .asciz "NO STRING DATA"
+\name\()_m27: .asciz "INCORRECT NUMBER OF ARGUMENTS"
+\name\()_m28: .asciz "UNFINISHED DEF"
+\name\()_m29: .asciz "NESTED DEF"
+\name\()_m30: .asciz "ILLEGAL TRANSFER"
 \name\()_m32: .asciz "SUBSCRIPT ERROR"
 \name\()_m33: .asciz "ILLEGAL RETURN"
 \name\()_m34: .asciz "OUT OF DATA"
@@ -115,7 +137,31 @@
 \name\()_m39: .asciz "TOO MANY GOSUBS"
 \name\()_m40: .asciz "DIMENSION ERROR"
 \name\()_m41: .asciz "SINGULAR MATRIX"
+\name\()_m42: .asciz "ON EVALUATED OUT OF RANGE"
+\name\()_m43: .asciz "END OF INPUT"
+\name\()_m44: .asciz "STRING TOO LONG"
+\name\()_m45: .asciz "ILLEGAL CHARACTER"
+\name\()_m46: .asciz "INPUT LINE TOO LONG"
+\name\()_m47: .asciz "OUT OF ROOM"
     .p2align 3
+.endm
+
+// ---------------------------------------------------------------------
+// BSK_EMIT_INPUT_MSGS name
+//   Emits, in the CURRENT section, the three INPUT diagnostics of
+//   LANGUAGE.md 7.15 as NUL-terminated strings WITH their final LF,
+//   labelled name_retype, name_more, name_excess (local labels; the
+//   length to write is name_retype_end - name_retype, etc., i.e. it
+//   includes the LF and excludes the NUL). Instantiated by both runtimes
+//   (rt_input.s), so the texts can never diverge from the documentation.
+// ---------------------------------------------------------------------
+.macro BSK_EMIT_INPUT_MSGS name
+\name\()_retype: .ascii "INPUT DATA NOT IN CORRECT FORMAT -- RETYPE IT\n"
+\name\()_retype_end: .byte 0
+\name\()_more:   .ascii "NOT ENOUGH INPUT -- ADD MORE\n"
+\name\()_more_end: .byte 0
+\name\()_excess: .ascii "TOO MUCH INPUT -- EXCESS IGNORED\n"
+\name\()_excess_end: .byte 0
 .endm
 
 .endif

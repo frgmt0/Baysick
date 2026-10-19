@@ -1,0 +1,2 @@
+10 CHANGE A$ TO B$
+20 END

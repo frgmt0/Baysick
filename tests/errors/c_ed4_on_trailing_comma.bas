@@ -1,0 +1,2 @@
+10 ON X GOTO 20,
+20 END

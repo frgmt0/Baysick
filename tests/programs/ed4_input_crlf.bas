@@ -1,0 +1,8 @@
+10 INPUT A$
+20 PRINT "["; A$; "]"
+30 INPUT N
+40 PRINT N
+50 INPUT B$
+60 PRINT "["; B$; "]"
+70 GOTO 50
+80 END

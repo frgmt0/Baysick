@@ -1,0 +1,3 @@
+10 DEF FNB(X,Y) = X + Y
+20 PRINT FNB(1)
+30 END

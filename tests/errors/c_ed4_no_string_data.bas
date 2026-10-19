@@ -1,0 +1,3 @@
+10 READ A$
+20 DATA 1, 2
+30 END

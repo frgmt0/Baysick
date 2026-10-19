@@ -43,7 +43,33 @@
 //  _bsk_gosub_push(x0=return address)   TOO MANY GOSUBS when full
 //  _bsk_gosub_pop() -> x0               return address; ILLEGAL RETURN when empty
 //  _bsk_end()                           noreturn: END/STOP -> exit 0
-//  _bsk_err(w0=ERR_* code)              noreturn: run-time error
+//  _bsk_err(w0=ERR_* code)              noreturn: run-time error (34, 43 exit 0)
+//
+//  Third and Fourth Edition (DESIGN.md 6.7; SD* = string descriptor below,
+//  "list" = RTA descriptor of a numeric list, "slist" = RTA descriptor of a
+//  string list whose elements are SD records):
+//  _bsk_saref1(x0=slist, d0=i) -> x0    address (SD*) of string element i
+//  _bsk_str_set(x0=dst SD*, x1=src SD*) dst := copy of src (OUT OF ROOM)
+//  _bsk_str_cmp(x0=a SD*, x1=b SD*) -> w0   -1 / 0 / +1 (trailing blanks ignored)
+//  _bsk_print_sv(x0=SD*)                PRINT a string variable/element item
+//  _bsk_print_tab(d0=x)                 PRINT TAB(x)
+//  _bsk_sread(x0=dst SD*)               next string DATA value (OUT OF DATA)
+//  _bsk_restore(w0=RESTORE_*)           RESTORE / RESTORE* / RESTORE$
+//  _bsk_input_begin()                   INPUT: read the first line
+//  _bsk_input_num() -> d0               INPUT: next numeric field
+//  _bsk_input_str(x0=dst SD*)           INPUT: next string field
+//  _bsk_input_end()                     INPUT: TOO MUCH INPUT check
+//  _bsk_mat_input(x0=list)              MAT INPUT of a numeric list (sets NUM)
+//  _bsk_smat_input(x0=slist)            MAT INPUT of a string list (sets NUM)
+//  _bsk_smat_read(x0=slist)             MAT READ of a string list, current length
+//  _bsk_smat_print(x0=slist, w1=MATPR_ZONED|MATPR_PACKED)
+//  _bsk_change_s2n(x0=list, x1=src SD*) CHANGE string TO list
+//  _bsk_change_n2s(x0=dst SD*, x1=list) CHANGE list TO string
+//  _bsk_on(d0=x, w0=n) -> d0            ON selector: trunc(x) in 1..n, else error 42
+//  _bsk_randomize()                     RANDOMIZE
+//  _bsk_sgn _bsk_cot (d0=x) -> d0       SGN, COT
+//  _bsk_num() -> d0  _bsk_det() -> d0   NUM, DET
+//  (MAT READ X$(n) redimensions with _bsk_mat_redim1 on the slist descriptor.)
 //
 //  MAT statements (DESIGN.md 6.5; x0/x1/x2 = RTA descriptors, LANGUAGE.md 7.14):
 //  _bsk_mat_redim1(x0=desc, d0=rows)              shape rows x 1
@@ -75,6 +101,9 @@
 //  _bsk_program               code: the BASIC main function (AAPCS64, no args)
 //  _bsk_data                  8-byte aligned array of IEEE-754 doubles (DATA values)
 //  _bsk_data_count            .quad number of entries in _bsk_data (may be 0)
+//  _bsk_sdata                 8-byte aligned array of SD records (string DATA
+//                             values, CAP 0), may be empty
+//  _bsk_sdata_count           .quad number of entries in _bsk_sdata (may be 0)
 
 // ---- Array descriptor (RTA_*), 32 bytes, emitted by the backend -----------------
 .equ RTA_DATA,          0   /* ptr  element storage, (b1+1)*(b2+1) doubles, zero-filled */
@@ -91,6 +120,21 @@
 // time (lists: B1 only; tables: B1, B2, ROWLEN = B2+1) within RTA_CAP, and
 // _bsk_aref1/_bsk_aref2 check subscripts against the current values. The
 // descriptor therefore lives in writable data (__DATA,__data / .data).
+
+// A STRING LIST uses the same 32-byte RTA descriptor with DIMS 1, B2 0,
+// ROWLEN 1, CAP b1+1, and RTA_DATA pointing at (b1+1) SD records (16 bytes
+// each, zero-filled = empty strings): element i is at RTA_DATA + 16*i.
+
+// ---- String descriptor (SD_*), 16 bytes ----------------------------------------
+// A string value: LEN bytes at PTR (no NUL; PTR may be 0 when LEN is 0).
+// CAP > 0: PTR is a malloc'd buffer of CAP bytes owned by this descriptor
+// (string variables and string list elements; grown with realloc, never
+// shrunk or freed). CAP = 0: PTR is not owned (string constants, string DATA,
+// a never-assigned variable). A zero-filled SD is the empty string.
+.equ SD_PTR,            0   /* ptr  bytes */
+.equ SD_LEN,            8   /* u32  length, 0..LIM_STRING_LEN */
+.equ SD_CAP,            12  /* u32  owned capacity in bytes, 0 = not owned */
+.equ SD_SIZE,           16
 
 // ---- Matrix view (MV_*), 32 bytes: a rows x cols block of doubles ---------------
 // Element (i,j), 0-based within the view, is at MV_DATA + 8*(i*MV_LD + j).
@@ -149,5 +193,10 @@
 .equ RNG_MULT,          16807
 .equ RNG_MOD,           2147483647  /* 2^31 - 1 */
 .equ RNG_SEED,          1964        /* state before the first RND call */
+.equ RNG_RANDOMIZE_MOD, 2147483646  /* RANDOMIZE: s = 1 + (v mod (2^31 - 2)) */
+
+// ---- Input (DESIGN.md 6.7) --------------------------------------------------
+.equ RT_INBUF_SIZE,     65536       /* read(0) chunk buffer */
+.equ TAB_MODULUS,       75          /* TAB(x): trunc(x) mod 75 */
 
 .endif

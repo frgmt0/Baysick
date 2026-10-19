@@ -1,0 +1,2 @@
+10 DEF FNA(X)
+20 END

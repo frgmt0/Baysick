@@ -1,0 +1,3 @@
+10 DEF FNA(X) = X
+20 PRINT FNA("A")
+30 END

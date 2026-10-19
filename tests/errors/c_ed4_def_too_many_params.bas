@@ -1,0 +1,2 @@
+10 DEF FNA(A,B,C,D,E,F,G,H,I) = A
+20 END

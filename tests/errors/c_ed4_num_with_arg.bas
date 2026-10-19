@@ -1,0 +1,2 @@
+10 PRINT NUM(1)
+20 END

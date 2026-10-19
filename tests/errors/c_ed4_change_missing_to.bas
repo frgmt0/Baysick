@@ -1,0 +1,2 @@
+10 CHANGE A$ A
+20 END

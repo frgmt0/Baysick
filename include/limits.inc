@@ -17,7 +17,9 @@
 .equ LIM_NUM_DIGITS,        9         /* max mantissa digits in a constant -> ILLEGAL CONSTANT */
 .equ LIM_EXP_DIGITS,        2         /* max exponent digits in a constant -> ILLEGAL CONSTANT */
 .equ LIM_DATA_VALUES,       100000    /* max DATA numbers in a program -> TOO MUCH DATA */
-.equ LIM_LABEL_BYTES,       65536     /* max total bytes of all PRINT string literals -> TOO MANY LABELS */
+.equ LIM_SDATA_VALUES,      100000    /* max DATA strings in a program -> TOO MUCH DATA */
+.equ LIM_LABEL_BYTES,       65536     /* max total bytes of string constants outside DATA -> TOO MANY LABELS */
+.equ LIM_FN_PARAMS,         8         /* max DEF parameters -> INCORRECT FORMAT */
 .equ LIM_FORS,              1000      /* max FOR statements in a program -> TOO MANY LOOPS */
 .equ LIM_EXPR_DEPTH,        32        /* max nesting of '(' (grouping, args, subscripts) -> FORMULA TOO COMPLEX */
 .equ LIM_DIM_DIGITS,        7         /* max digits in a DIM bound -> DIMENSION TOO LARGE */
@@ -28,9 +30,13 @@
 .equ NUM_LETTERS,           26
 .equ NUM_SCALAR_SLOTS,      286       /* 26 letters x (bare + digits 0..9) */
 .equ NUM_FUNCS,             27        /* main + FNA..FNZ */
+.equ NUM_STRING_SLOTS,      286       /* string variables A$..Z9$, same numbering as scalar slots */
 
 // ---- Runtime limits ----------------------------------------------------
 .equ LIM_GOSUB_DEPTH,       1024      /* pending GOSUBs -> TOO MANY GOSUBS */
+.equ LIM_STRING_LEN,        65536     /* max bytes in a string value -> STRING TOO LONG */
+.equ LIM_INPUT_LINE,        65536     /* max bytes in an input line (excl. CR LF) -> INPUT LINE TOO LONG */
+.equ LIM_CHAR_CODE,         255       /* CHANGE codes are 0..255 -> ILLEGAL CHARACTER */
 
 // ---- Compiler process exit codes ---------------------------------------
 .equ EXIT_OK,               0         /* compiled (and linked, unless -S/--emit-ir) */
@@ -40,7 +46,7 @@
 .equ EXIT_INTERNAL,         4         /* out of memory, IR verifier failure, internal bug */
 
 // ---- Compiled-program exit codes ---------------------------------------
-.equ EXIT_RUN_OK,           0         /* END, STOP, or OUT OF DATA */
+.equ EXIT_RUN_OK,           0         /* END, STOP, OUT OF DATA or END OF INPUT */
 .equ EXIT_RUN_ERROR,        1         /* any other run-time error */
 
 .endif

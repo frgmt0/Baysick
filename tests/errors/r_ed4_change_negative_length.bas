@@ -1,0 +1,3 @@
+10 LET A(0) = -0.6
+20 CHANGE A TO A$
+30 END

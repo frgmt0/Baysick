@@ -1,0 +1,82 @@
+; baysick-ir 1
+module slots=288 fors=1 funcs=1 strings=0 data=0
+array L dims=1 b1=10
+array V dims=1 b1=10
+sarray N dims=1 b1=10
+func main temps=22 labels=18
+  line 10
+  inbeg
+  t0 = innum
+  stv A, t0
+  t1 = svar B$
+  insv t1
+  t2 = ldv A
+  t3 = innum
+  ast1 L, t2, t3
+  inend
+  line 20
+  t4 = ldv A
+  t5 = onsel t4, 3
+  t6 = const 0x3FF0000000000000 ; 1
+  jcmp eq, t5, t6, @30
+  t7 = const 0x4000000000000000 ; 2
+  jcmp eq, t5, t7, @40
+  jmp @50
+  line 30
+  randomize
+  line 40
+  restore all
+  line 50
+  restore num
+  line 60
+  matinput V
+  line 70
+  smatinput N$
+  line 80
+  t8 = num
+  prnum t8
+  prsemi
+  t9 = ldv A
+  t10 = sgn t9
+  prnum t10
+  prsemi
+  t11 = ldv B
+  t12 = cot t11
+  prnum t12
+  prcomma
+  t13 = det
+  prnum t13
+  prnl
+  line 90
+  t14 = const 0x3FF0000000000000 ; 1
+  t15 = num
+  t16 = const 0x3FF0000000000000 ; 1
+  stv %lim0, t15
+  stv %step0, t16
+  jfor t14, t15, t16, L14
+  stv I, t14
+  jmp L15
+  label L14
+  t17 = sub t14, t16
+  stv I, t17
+  jmp L16
+  label L15
+  line 100
+  t18 = ldv I
+  t19 = ldv %step0
+  t20 = add t18, t19
+  t21 = ldv %lim0
+  jfor t20, t21, t19, L16
+  stv I, t20
+  jmp L15
+  label L16
+  line 110
+  gosub @130, L17
+  label L17
+  line 120
+  stop
+  line 130
+  return
+  line 150
+  end
+endfunc

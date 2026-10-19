@@ -5,7 +5,10 @@
 Baysick is a faithful re-implementation of **Dartmouth BASIC, Second Edition (October 1964)** —
 the fifteen statements of Kemeny and Kurtz's 1964 language plus the Second Edition's `MAT`
 matrix statements — as a native compiler written in modern **arm64 assembly** for macOS, much as
-the original compiler was hand-written in GE-225 assembly.
+the original compiler was hand-written in GE-225 assembly. The **Third and Fourth Editions**
+(1966/1968: strings, `INPUT`, `ON … GO TO`, `TAB`, `CHANGE`, multi-line `DEF`, `MAT INPUT`, …)
+are fully specified and their tests are in the corpus; their implementation is in progress (see
+Status).
 
 ```
 10 FOR X = 7 TO 100 STEP 7
@@ -48,6 +51,12 @@ Two targets:
   implemented and cross-tested with `make cross` against all program and run-phase error tests
   (module split: `docs/DESIGN.md` §2).
 
+Third and Fourth Edition: specified in `docs/LANGUAGE.md` (§3–§14, with page references to the
+1968 manual), `docs/IR.md` and `docs/DESIGN.md` (§2.2–§2.3, §5.3–§5.4, §6.7); the binary contract
+is in `include/*.inc`, its record sizes and counts staged behind `make BSK_ED4=1`. The new tests
+(`tests/programs/ed4_*`, `manual4_*`, `text_*`, `tests/errors/c_ed4_*`, `r_ed4_*`,
+`tests/ir/ed4_*`) fail until the modules implement them; every earlier test passes.
+
 ## Documents
 
 * `docs/LANGUAGE.md` — normative language spec (statements, MAT, number format, errors,
@@ -58,6 +67,8 @@ Two targets:
 * `docs/IR.md` — the IR: opcodes, layouts, canonical lowering, `--emit-ir` text format, and how
   to write a new backend.
 * `docs/BENCH.md` — matrix benchmarks: workloads, methodology, vendor comparison, goals.
+* `docs/SEA_BOOTSTRAP.md` — what writing the Sea compiler in BASIC would need, which edition to
+  implement next, and whether stdin/stdout through INPUT and PRINT is enough.
 * `include/*.inc` — the binary contract shared by all modules.
 
 ## Build and test
@@ -67,7 +78,8 @@ Requirements: Apple Silicon Mac, Xcode command line tools (`as`, `ld`, `ar`, `xc
 ```
 make                 # build/baysick and build/libbaysickrt.a
 make test            # assemble-check include files, build, run tests/run.sh
-make check-includes  # only the include-file check
+make check-includes  # only the include-file check (both staging-switch values)
+make BSK_ED4=1 test  # build with the Fourth Edition contract (make clean when switching)
 make bench           # matrix kernel benchmarks vs Accelerate (docs/BENCH.md)
 make clean
 ```
@@ -84,6 +96,12 @@ build/baysick prog.bas [-o prog] [-S] [--emit-ir] [--target arm64-macos|x86_64-l
 
 The compiler looks for its runtime next to itself (`build/libbaysickrt.a`) unless
 `BAYSICK_RUNTIME` names another path.
+
+Tests live in `tests/programs` (`NAME.bas`, expected `NAME.out`, optional `NAME.err`),
+`tests/errors` (`NAME.meta` with phase and exit status, `NAME.err`, optional `NAME.out`) and
+`tests/ir` (`NAME.ir`, the expected `--emit-ir` dump). A program or error test may have a
+`NAME.in` file, which becomes the program's standard input (otherwise `/dev/null`), on both
+targets.
 
 ### x86_64-linux
 
@@ -113,4 +131,7 @@ CI runs `make test` on macOS, packs the bundle, and runs it on an `ubuntu-latest
 
 * Long-term: use Baysick to bootstrap **Sea**, a fast matrix language (a MATLAB alternative with
   C/Rust-like syntax). MAT is the stepping stone: the matrix runtime, the IR matrix operations and
-  the SIMD kernels with CPU-feature dispatch exist on both targets.
+  the SIMD kernels with CPU-feature dispatch exist on both targets. `docs/SEA_BOOTSTRAP.md`
+  analyses what a compiler written in BASIC needs: the Fourth Edition's strings and INPUT are
+  not enough on their own, and the Fifth Edition (files, string functions) is the recommended
+  next step.

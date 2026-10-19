@@ -13,8 +13,9 @@
 #
 # Builds the runtime from the bundle (make -f Makefile.linux), then for every
 # case assembles + links the compiler's .s and compares the run exactly like
-# tests/run.sh (same sidecar formats, same output format, same exit status:
-# 0 all passed, 1 any failed, 2 setup error). docs/DESIGN.md section 8.3.
+# tests/run.sh (same sidecar formats, including the optional NAME.in stdin
+# file, same output format, same exit status: 0 all passed, 1 any failed,
+# 2 setup error). docs/DESIGN.md section 8.3.
 
 AS=${AS:-as}
 CC=${CC:-gcc}
@@ -65,11 +66,11 @@ PASS=0
 FAIL=0
 FAILED=""
 
-# run_limited SECONDS CMD... : run CMD with stdin from /dev/null, kill it after
-# SECONDS; returns CMD's exit status (137 if killed). Caller redirects output.
+# run_limited SECONDS INFILE CMD... : run CMD with stdin from INFILE, kill it
+# after SECONDS; returns CMD's exit status (137 if killed). Caller redirects output.
 run_limited() {
-    _t=$1; shift
-    "$@" </dev/null &
+    _t=$1; _in=$2; shift 2
+    "$@" <"$_in" &
     _cpid=$!
     (
         _i=0
@@ -85,6 +86,11 @@ run_limited() {
     _st=$?
     wait "$_wpid" 2>/dev/null
     return $_st
+}
+
+# stdin_for BASE : the program's standard input: BASE.in if it exists, else /dev/null
+stdin_for() {
+    if [ -f "$1.in" ]; then echo "$1.in"; else echo /dev/null; fi
 }
 
 pass() { PASS=$((PASS + 1)); }
@@ -142,7 +148,7 @@ for n in $(case_names programs); do
     base=$BUNDLE/cases/programs/$n
     if [ ! -f "$base.out" ]; then fail "$name" "missing $n.out"; continue; fi
     build "$name" "$base" || continue
-    run_limited "$TIMEOUT" "$TMP/prog" >"$TMP/r.out" 2>"$TMP/r.err"
+    run_limited "$TIMEOUT" "$(stdin_for "$base")" "$TMP/prog" >"$TMP/r.out" 2>"$TMP/r.err"
     st=$?
     experr=$TMP/empty
     [ -f "$base.err" ] && experr=$base.err
@@ -162,7 +168,7 @@ for n in $(case_names errors); do
     fi
     want=$(meta_get "$base.meta" exit)
     build "$name" "$base" || continue
-    run_limited "$TIMEOUT" "$TMP/prog" >"$TMP/r.out" 2>"$TMP/r.err"
+    run_limited "$TIMEOUT" "$(stdin_for "$base")" "$TMP/prog" >"$TMP/r.out" 2>"$TMP/r.err"
     st=$?
     expout=$TMP/empty
     [ -f "$base.out" ] && expout=$base.out

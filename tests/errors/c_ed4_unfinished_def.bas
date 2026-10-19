@@ -1,0 +1,3 @@
+10 DEF FNA(X)
+20 LET FNA = X
+30 END

@@ -14,6 +14,7 @@
 # tests/programs/NAME.bas   a program that must compile and run successfully
 #   NAME.out   REQUIRED  exact expected stdout bytes
 #   NAME.err   optional  exact expected stderr bytes (absent = stderr must be empty)
+#   NAME.in    optional  the program's standard input (absent = /dev/null)
 #   exit status of the program must be 0.
 #
 # tests/errors/NAME.bas     a program with a compile-time or run-time error
@@ -24,6 +25,8 @@
 #                        phase=run: the compiler must succeed silently; this is
 #                          the program's stderr, and the program must exit <status>.
 #   NAME.out   optional  (phase=run only) exact expected stdout; absent = empty
+#   NAME.in    optional  (phase=run only) the program's standard input
+#                        (absent = /dev/null)
 #
 # tests/ir/NAME.bas         golden IR test
 #   NAME.ir    REQUIRED  exact expected stdout of `baysick --emit-ir NAME.bas`
@@ -61,11 +64,11 @@ selected() {
     return 1
 }
 
-# run_limited SECONDS CMD... : run CMD with stdin from /dev/null, kill it after
-# SECONDS; returns CMD's exit status (137 if killed). Caller redirects output.
+# run_limited SECONDS INFILE CMD... : run CMD with stdin from INFILE, kill it
+# after SECONDS; returns CMD's exit status (137 if killed). Caller redirects output.
 run_limited() {
-    _t=$1; shift
-    "$@" </dev/null &
+    _t=$1; _in=$2; shift 2
+    "$@" <"$_in" &
     _cpid=$!
     (
         _i=0
@@ -81,6 +84,11 @@ run_limited() {
     _st=$?
     wait "$_wpid" 2>/dev/null
     return $_st
+}
+
+# stdin_for BASE : the program's standard input: BASE.in if it exists, else /dev/null
+stdin_for() {
+    if [ -f "$1.in" ]; then echo "$1.in"; else echo /dev/null; fi
 }
 
 pass() { PASS=$((PASS + 1)); }
@@ -118,7 +126,7 @@ for bas in "$ROOT"/tests/programs/*.bas; do
         fail "$name" "compile failed (status $st): $(head -3 "$TMP/c.err" | tr '\n' ' ')"
         continue
     fi
-    run_limited "$TIMEOUT" "$exe" >"$TMP/r.out" 2>"$TMP/r.err"
+    run_limited "$TIMEOUT" "$(stdin_for "$base")" "$exe" >"$TMP/r.out" 2>"$TMP/r.err"
     st=$?
     experr=$TMP/empty
     [ -f "$base.err" ] && experr=$base.err
@@ -158,7 +166,7 @@ for bas in "$ROOT"/tests/errors/*.bas; do
             fail "$name" "compile failed (status $st): $(head -3 "$TMP/c.err" | tr '\n' ' ')"
             continue
         fi
-        run_limited "$TIMEOUT" "$exe" >"$TMP/r.out" 2>"$TMP/r.err"
+        run_limited "$TIMEOUT" "$(stdin_for "$base")" "$exe" >"$TMP/r.out" 2>"$TMP/r.err"
         st=$?
         expout=$TMP/empty
         [ -f "$base.out" ] && expout=$base.out

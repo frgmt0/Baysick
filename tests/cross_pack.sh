@@ -12,7 +12,8 @@
 # Layout of the bundle (docs/DESIGN.md section 8.3), consumed by
 # tests/cross_run.sh on Linux: BUNDLE marker, Makefile.linux, include/*.inc,
 # src/runtime_x86_64_linux/*.s, the two include-check files, cross_run.sh and
-# cases/<programs|errors>/NAME.s plus the unchanged sidecars. A case whose
+# cases/<programs|errors>/NAME.s plus the unchanged sidecars (.out .err
+# .meta and the optional .in stdin file). A case whose
 # compilation fails gets NAME.packfail ("status <n>" line, then the compiler's
 # stderr) instead of NAME.s. compile-phase error tests are skipped.
 #
@@ -109,7 +110,7 @@ pack_case() {
         } > "$_dir/$_name.packfail" || setup_fail "cannot write $_dir/$_name.packfail"
         BAD=$((BAD + 1))
     fi
-    for _ext in out err meta; do
+    for _ext in out err meta in; do
         if [ -f "$_base.$_ext" ]; then
             cp "$_base.$_ext" "$_dir/$_name.$_ext" || setup_fail "cannot copy $_base.$_ext"
         fi

@@ -1,0 +1,27 @@
+10 REM STRING VARIABLES, LISTS AND ASSIGNMENT
+20 LET A$ = "HELLO"
+30 LET B$ = A$
+40 LET A$ = "WORLD"
+50 PRINT A$; " "; B$
+60 PRINT "["; C$; "]"
+70 LET C$ = ""
+80 PRINT "["; C$; "]"
+90 LET L$(0) = "ZERO"
+100 LET L$(10) = "TEN"
+110 FOR I = 1 TO 3
+120 LET L$(I) = "ITEM"
+130 NEXT I
+140 PRINT L$(0), L$(1), L$(10)
+150 LET Z9$ = "Z9"
+160 LET Z$ = "Z"
+170 LET Z = 7
+180 LET Z(1) = 8
+190 PRINT Z$; Z9$; Z; Z(1)
+200 LET S$ = "TRAILING   "
+210 PRINT S$; "|"
+220 PRINT S$
+230 LET T$ = "lower case, \ and 'quote'"
+240 PRINT T$
+250 LET L$(2.5) = "ROUNDED"
+260 PRINT L$(3)
+270 END

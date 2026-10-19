@@ -10,7 +10,10 @@
 //   operand mode  -> TK_NUMBER TK_STRING TK_VAR TK_ARRAY TK_FN
 //                    TK_BUILTIN TK_LPAREN TK_PLUS TK_MINUS ... TK_BAD
 //   operator mode -> arithmetic/relational/punctuation tokens, the
-//                    keywords THEN TO STEP, TK_EOL, or TK_BAD
+//                    keywords THEN TO STEP GOTO, TK_EOL, or TK_BAD
+// Operand mode also yields TK_SVAR TK_SARRAY TK_FN0 (Fourth Edition,
+// LANGUAGE.md 5.2); the scanner never decides "string not allowed here":
+// the parser reports MISMATCHED STRING OPERATION.
 // =====================================================================
 .ifndef BSK_TOKENS_INC
 .equ BSK_TOKENS_INC, 1
@@ -26,7 +29,7 @@
 .equ TK_VAR,            3   /* simple variable; TOK_SLOT = scalar slot (0..285) */
 .equ TK_ARRAY,          4   /* letter immediately followed by '('; TOK_INDEX = letter 0..25 ('(' consumed) */
 .equ TK_FN,             5   /* FNx immediately followed by '('; TOK_INDEX = 0..25 ('(' consumed) */
-.equ TK_BUILTIN,        6   /* builtin name; TOK_INDEX = BI_*; '(' consumed unless bare RND */
+.equ TK_BUILTIN,        6   /* builtin name; TOK_INDEX = BI_*; '(' consumed unless bare RND, NUM or DET */
 .equ TK_LPAREN,         7
 .equ TK_RPAREN,         8
 .equ TK_COMMA,          9
@@ -46,7 +49,19 @@
 .equ TK_TO,             23  /* keyword TO   (operator mode only) */
 .equ TK_STEP,           24  /* keyword STEP (operator mode only) */
 .equ TK_BAD,            25  /* anything else; TOK_ERR holds the error code to report */
+// Third and Fourth Edition tokens
+.equ TK_SVAR,           26  /* string variable A$..Z9$; TOK_SLOT = string slot (0..285) */
+.equ TK_SARRAY,         27  /* letter '$' '('; TOK_INDEX = letter 0..25 ('(' consumed) */
+.equ TK_GOTO,           28  /* keyword GOTO (operator mode only: IF ... GOTO, ON ... GOTO) */
+.equ TK_FN0,            29  /* FNx NOT followed by '('; TOK_INDEX = 0..25 */
+.ifndef BSK_ED4_CONTRACT
+.equ BSK_ED4_CONTRACT, 0
+.endif
+.if BSK_ED4_CONTRACT
+.equ TK_COUNT,          30
+.else
 .equ TK_COUNT,          26
+.endif
 
 // ---- Token record (filled by the scanner), 40 bytes --------------------
 .equ TOK_KIND,          0   /* u32 TK_* */
@@ -69,7 +84,15 @@
 .equ BI_SQR,            7
 .equ BI_INT,            8
 .equ BI_RND,            9
+.equ BI_SGN,            10  /* Third Edition */
+.equ BI_COT,            11  /* Fourth Edition */
+.equ BI_NUM,            12  /* Fourth Edition, never with an argument */
+.equ BI_DET,            13  /* Fourth Edition, never with an argument */
+.if BSK_ED4_CONTRACT
+.equ BI_COUNT,          14
+.else
 .equ BI_COUNT,          10
+.endif
 
 // ---- Statement keyword ids (matched as prefixes of the compacted text
 //      after the line number, in exactly this order) --------------------
@@ -89,12 +112,23 @@
 .equ KW_REM,            13
 .equ KW_STOP,           14
 .equ KW_MAT,            15  /* Second Edition matrix statements (LANGUAGE.md 7.14) */
+.equ KW_INPUT,          16  /* Third Edition (LANGUAGE.md 7.15) */
+.equ KW_RESTORE,        17  /* Third Edition (7.16); RESTORE* and RESTORE$ too */
+.equ KW_ON,             18  /* Fourth Edition (7.17) */
+.equ KW_RANDOMIZE,      19  /* Fourth Edition (7.18); also matches "RANDOM" */
+.equ KW_CHANGE,         20  /* Fourth Edition (7.19) */
+.equ KW_FNEND,          21  /* Fourth Edition (7.10) */
 
+.if BSK_ED4_CONTRACT
+.equ KW_COUNT,          22
+.else
 .equ KW_COUNT,          16
+.endif
 
 // ---- MAT sub-keywords (after "MAT", in this order) and MAT function ids --
-// "MAT" is followed by READ, PRINT, or an assignment "letter =" whose
-// right-hand side may start with one of these three-letter names:
+// "MAT" is followed by READ, PRINT, INPUT (Fourth Edition), or an
+// assignment "letter =" whose right-hand side may start with one of these
+// three-letter names:
 .equ MF_ZER,            0   /* ZER [ (r [, c]) ] */
 .equ MF_CON,            1   /* CON [ (r [, c]) ] */
 .equ MF_IDN,            2   /* IDN [ (n) ] */

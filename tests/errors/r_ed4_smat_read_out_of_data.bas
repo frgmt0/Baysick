@@ -1,0 +1,3 @@
+10 MAT READ A$(3)
+20 DATA X, Y
+30 END
