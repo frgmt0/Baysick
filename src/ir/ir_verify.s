@@ -29,11 +29,17 @@
 .equ Lirv_X_ARR2,   5
 .equ Lirv_X_FN,     6
 .equ Lirv_X_STR,    7
+.equ Lirv_X_ARRM,   8           // MAT target: array with either dimensionality
+// flags above the low nibble of byte 1 (the X kind), MAT field kinds, IR.md 3.1
+.equ Lirv_XF_AARR,  0x10        // IRI_A holds an array letter, not a temp
+.equ Lirv_XF_BARR,  0x20        // IRI_B holds an array letter, not a temp
+.equ Lirv_XF_BOPT,  0x40        // IRI_B is a temp or IR_NONE (matredim)
 // byte 2: meaning of IMM (low nibble), REL used (Lirv_I_REL)
 .equ Lirv_I_ZERO,   0
 .equ Lirv_I_ANY,    1
 .equ Lirv_I_LINE,   2
 .equ Lirv_I_LREF,   3
+.equ Lirv_I_MODE,   4           // MATPR_ZONED or MATPR_PACKED
 .equ Lirv_I_REL,    0x10
 // byte 3: placement
 .equ Lirv_P_ANY,    0
@@ -64,6 +70,17 @@
 .macro FAIL_M msg
     IRV_ADR x0, \msg
     b Lirv_fail_module
+.endm
+
+// Check that the u32 in \reg names a declared array (letter < 26, DIMS != 0,
+// either dimensionality, IR.md 6 rule 4). Clobbers w11, w12.
+.macro CHK_ARR reg
+    cmp \reg, #NUM_LETTERS
+    b.hs Lirv_e_array
+    mov w11, #IRA_SIZE
+    umaddl x11, \reg, w11, x19
+    ldr w11, [x11, #(IRM_ARRAYS + IRA_DIMS)]
+    cbz w11, Lirv_e_array
 .endm
 
 // Check the temp operand at record offset \off, used if bit \bit of the
@@ -287,8 +304,28 @@ Lirv_p2_loop:
     cbz x20, Lirv_e_fnonly
 11:
     // temp operands: read operands first, then the destination
+    // MAT opcodes: A / B may hold array letters (or an optional temp in B)
+    ubfx w10, w26, #8, #8
+    tbz w10, #4, 30f
+    ldr w9, [x27, #IRI_A]
+    CHK_ARR w9
+    b 31f
+30:
     CHK_USE IRI_A, 1
+31:
+    ubfx w10, w26, #8, #8
+    tbz w10, #5, 32f
+    ldr w9, [x27, #IRI_B]
+    CHK_ARR w9
+    b 34f
+32:
+    tbz w10, #6, 33f
+    ldr w9, [x27, #IRI_B]
+    cmn w9, #1                          // matredim: B may be IR_NONE
+    b.eq 34f
+33:
     CHK_USE IRI_B, 2
+34:
     CHK_USE IRI_C, 3
     ldr w9, [x27, #IRI_DST]
     tbz w26, #0, 12f
@@ -333,13 +370,19 @@ Lirv_p2_loop:
     b Lirv_imm_done
 17:
     cmp w10, #Lirv_I_LREF
-    b.ne Lirv_imm_done                  // Lirv_I_ANY: any bits
+    b.ne 24f
     ldr w11, [x21, #IRF_NLABELS]
     cmp x9, x11
     b.hs Lirv_e_label_range
+    b Lirv_imm_done
+24:
+    cmp w10, #Lirv_I_MODE
+    b.ne Lirv_imm_done                  // Lirv_I_ANY: any bits
+    cmp x9, #MATPR_PACKED
+    b.hi Lirv_e_matmode
 Lirv_imm_done:
     // X (byte 1)
-    ubfx w10, w26, #8, #8
+    ubfx w10, w26, #8, #4
     ldr w9, [x27, #IRI_X]
     cmp w10, #Lirv_X_NONE
     b.ne 18f
@@ -386,6 +429,11 @@ Lirv_imm_done:
     b.ne Lirv_e_array
     b Lirv_p2_next
 22:
+    cmp w10, #Lirv_X_ARRM
+    b.ne 25f
+    CHK_ARR w9
+    b Lirv_p2_next
+25:
     cmp w10, #Lirv_X_FN
     b.ne 23f
     // callfn target: a present FN function
@@ -426,6 +474,7 @@ Lirv_e_line:        FAIL_I Lirv_m_line
 Lirv_e_slot:        FAIL_I Lirv_m_slot
 Lirv_e_forslot:     FAIL_I Lirv_m_forslot
 Lirv_e_array:       FAIL_I Lirv_m_array
+Lirv_e_matmode:     FAIL_I Lirv_m_matmode
 Lirv_e_callfn:      FAIL_I Lirv_m_callfn
 Lirv_e_string:      FAIL_I Lirv_m_string
 Lirv_e_label_range: FAIL_I Lirv_m_label_range
@@ -557,6 +606,19 @@ Lirv_spec:
     SPEC 0, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_MAIN                      // prnl
     SPEC 0, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_MAIN                      // end
     SPEC 0, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_MAIN                      // stop
+    SPEC Lirv_T_A|Lirv_T_B, Lirv_X_ARRM|Lirv_XF_BOPT, Lirv_I_ZERO, Lirv_P_MAIN  // matredim
+    SPEC 0, Lirv_X_ARRM, Lirv_I_ZERO, Lirv_P_MAIN                      // matread
+    SPEC 0, Lirv_X_ARRM, Lirv_I_MODE, Lirv_P_MAIN                      // matprint
+    SPEC 0, Lirv_X_ARRM, Lirv_I_ZERO, Lirv_P_MAIN                      // matzer
+    SPEC 0, Lirv_X_ARRM, Lirv_I_ZERO, Lirv_P_MAIN                      // matcon
+    SPEC 0, Lirv_X_ARRM, Lirv_I_ZERO, Lirv_P_MAIN                      // matidn
+    SPEC 0, Lirv_X_ARRM|Lirv_XF_AARR, Lirv_I_ZERO, Lirv_P_MAIN         // matcopy
+    SPEC 0, Lirv_X_ARRM|Lirv_XF_AARR|Lirv_XF_BARR, Lirv_I_ZERO, Lirv_P_MAIN  // matadd
+    SPEC 0, Lirv_X_ARRM|Lirv_XF_AARR|Lirv_XF_BARR, Lirv_I_ZERO, Lirv_P_MAIN  // matsub
+    SPEC 0, Lirv_X_ARRM|Lirv_XF_AARR|Lirv_XF_BARR, Lirv_I_ZERO, Lirv_P_MAIN  // matmul
+    SPEC Lirv_T_A, Lirv_X_ARRM|Lirv_XF_BARR, Lirv_I_ZERO, Lirv_P_MAIN  // matscale
+    SPEC 0, Lirv_X_ARRM|Lirv_XF_AARR, Lirv_I_ZERO, Lirv_P_MAIN         // mattrn
+    SPEC 0, Lirv_X_ARRM|Lirv_XF_AARR, Lirv_I_ZERO, Lirv_P_MAIN         // matinv
 Lirv_spec_end:
 
 .if (Lirv_spec_end - Lirv_spec) != (4 * OP_COUNT)
@@ -580,6 +642,7 @@ Lirv_m_line:        .asciz "line number out of range"
 Lirv_m_slot:        .asciz "variable slot out of range"
 Lirv_m_forslot:     .asciz "stv to a FOR slot outside main"
 Lirv_m_array:       .asciz "array not declared with this dimensionality"
+Lirv_m_matmode:    .asciz "matprint mode is not 0 or 1"
 Lirv_m_callfn:      .asciz "callfn target is not a present FN function"
 Lirv_m_string:      .asciz "string id out of range"
 Lirv_m_label_range: .asciz "label id out of range"

@@ -10,7 +10,9 @@
 //            program line, ascending                   (fe_stmt.s)
 //   phase 3  whole-program checks (FOR WITHOUT NEXT, NO END, NO DATA,
 //            UNDEFINED NUMBER, UNDEFINED FUNCTION, RECURSIVE FUNCTION),
-//            then the module's FOR count and array table are filled in.
+//            then letters named only by MAT statements become 10 x 10
+//            tables and the module's FOR count and array table are
+//            filled in.
 //
 // Errors: every frontend function may call _fe_err / _fe_fail, which
 // record (code, line) and unwind straight back into _fe_compile by
@@ -185,6 +187,9 @@ Lfe_compile_stmt_done:
     bl _fe_fail
 1:
     bl Lfe_compile_check_fns
+
+    // ---- letters named only by MAT statements are 10 x 10 tables -----
+    bl _fe_mat_finish
 
     // ---- success: publish FOR count and the array table -------------
     mov x0, x19
@@ -505,6 +510,7 @@ Lfe_compile_state_tab:
     .quad _fe_has_read, 8
     .quad _fe_has_end, 8
     .quad _fe_undef_line, 8
+    .quad _fe_mat_names, 8
     .quad _fe_err_code, 8
     .quad _fe_err_line, 8
 Lfe_compile_state_tab_end:
@@ -518,7 +524,7 @@ Lfe_compile_state_tab_end:
     .globl _fe_fn_defline, _fe_fn_ref, _fe_fn_calls
     .globl _fe_nfors, _fe_forsp, _fe_forstack
     .globl _fe_strbytes, _fe_ndata, _fe_has_read, _fe_has_end
-    .globl _fe_undef_line
+    .globl _fe_undef_line, _fe_mat_names
 // scanner window over the current line's compacted statement text
 .zerofill __DATA,__bss,_fe_pos,8,3          // ptr: next byte to scan
 .zerofill __DATA,__bss,_fe_end,8,3          // ptr: one past the last byte
@@ -552,6 +558,8 @@ Lfe_compile_state_tab_end:
 .zerofill __DATA,__bss,_fe_has_read,8,3     // u32 1 if any READ
 .zerofill __DATA,__bss,_fe_has_end,8,3      // u32 1 if the END line was seen
 .zerofill __DATA,__bss,_fe_undef_line,8,3   // u32 first line jumping to a missing line
+// MAT: bit L set if letter L is named by a MAT statement (fe_mat.s)
+.zerofill __DATA,__bss,_fe_mat_names,8,3
 // error unwinding
 .zerofill __DATA,__bss,_fe_unwind_sp,8,3    // sp of _fe_compile's frame
 .zerofill __DATA,__bss,_fe_err_code,8,3     // u32 ERR_* being reported

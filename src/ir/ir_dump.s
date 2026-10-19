@@ -12,6 +12,8 @@
 //   %S            "s<n>" string id in X    %N   IMM as unsigned decimal
 //   %K            "0x" + 16 hex digits of IMM + " ; " + %.17g value
 //   %Q            relation name of REL ("eq" ... "ge")
+//   %a  %b        array letter in A / in B (MAT opcodes, IR.md 3.1)
+//   %P            MAT PRINT mode in IMM: "zoned" or "packed"
 // =====================================================================
 .include "baysick.inc"
 
@@ -247,6 +249,14 @@ Lird_insn:
     // template for this opcode
     IRD_ADR x10, Lird_formats
     ldr x22, [x10, x9, lsl #3]
+    // one-argument matredim (B == IR_NONE) uses the short template
+    cmp w9, #OP_MATREDIM
+    b.ne 5f
+    ldr w11, [x21, #IRI_B]
+    cmn w11, #1                         // IR_NONE == 0xFFFFFFFF
+    b.ne 5f
+    IRD_ADR x22, Lird_f_matredim1
+5:
 Lird_fmt_loop:
     ldrb w1, [x22], #1
     cbz w1, Lird_insn_ret
@@ -281,6 +291,12 @@ Lird_fmt_directive:
     b.eq Lird_fmt_N
     cmp w9, #'K'
     b.eq Lird_fmt_K
+    cmp w9, #'a'
+    b.eq Lird_fmt_a
+    cmp w9, #'b'
+    b.eq Lird_fmt_b
+    cmp w9, #'P'
+    b.eq Lird_fmt_P
     // only '%Q' is left (the templates are fixed)
     ldrh w1, [x21, #IRI_REL]
     mov x0, x19
@@ -321,6 +337,7 @@ Lird_fmt_label:
     b Lird_fmt_loop
 Lird_fmt_R:
     ldr w9, [x21, #IRI_X]
+Lird_fmt_letter:
     add w1, w9, #'A'
     mov x0, x19
     bl _ob_putc
@@ -331,6 +348,22 @@ Lird_fmt_F:
     add w1, w9, #'A'
     mov x0, x19
     bl _ob_putc
+    b Lird_fmt_loop
+Lird_fmt_a:
+    ldr w9, [x21, #IRI_A]
+    b Lird_fmt_letter
+Lird_fmt_b:
+    ldr w9, [x21, #IRI_B]
+    b Lird_fmt_letter
+Lird_fmt_P:
+    // "zoned" for IMM == MATPR_ZONED, otherwise "packed"
+    ldr x9, [x21, #IRI_IMM]
+    IRD_ADR x1, Lird_s_zoned
+    IRD_ADR x10, Lird_s_packed
+    cmp x9, #MATPR_ZONED
+    csel x1, x1, x10, eq
+    mov x0, x19
+    bl _ob_puts
     b Lird_fmt_loop
 Lird_fmt_S:
     IRD_PUTC 's'
@@ -529,6 +562,8 @@ Lird_s_lim:         .asciz "%lim"
 Lird_s_step:        .asciz "%step"
 Lird_s_rel:         .asciz "rel"
 Lird_s_badop:       .asciz "op "
+Lird_s_zoned:       .asciz "zoned"
+Lird_s_packed:      .asciz "packed"
 
     .section __TEXT,__const
 Lird_relnames:      // REL_EQ .. REL_GE, 3 bytes each
@@ -583,6 +618,21 @@ Lird_f_prnl:    .asciz "prnl"
 Lird_f_end:     .asciz "end"
 Lird_f_stop:    .asciz "stop"
 
+Lird_f_matredim: .asciz "matredim %R, %A, %B"
+Lird_f_matredim1: .asciz "matredim %R, %A"
+Lird_f_matread:  .asciz "matread %R"
+Lird_f_matprint: .asciz "matprint %R, %P"
+Lird_f_matzer:   .asciz "matzer %R"
+Lird_f_matcon:   .asciz "matcon %R"
+Lird_f_matidn:   .asciz "matidn %R"
+Lird_f_matcopy:  .asciz "matcopy %R, %a"
+Lird_f_matadd:   .asciz "matadd %R, %a, %b"
+Lird_f_matsub:   .asciz "matsub %R, %a, %b"
+Lird_f_matmul:   .asciz "matmul %R, %a, %b"
+Lird_f_matscale: .asciz "matscale %R, %A, %b"
+Lird_f_mattrn:   .asciz "mattrn %R, %a"
+Lird_f_matinv:   .asciz "matinv %R, %a"
+
     .section __DATA,__const
     .p2align 3
 Lird_formats:
@@ -597,6 +647,10 @@ Lird_formats:
     .quad Lird_f_gosub, Lird_f_return, Lird_f_read, Lird_f_prnum
     .quad Lird_f_prstr, Lird_f_prcomma, Lird_f_prsemi, Lird_f_prnl
     .quad Lird_f_end, Lird_f_stop
+    .quad Lird_f_matredim, Lird_f_matread, Lird_f_matprint, Lird_f_matzer
+    .quad Lird_f_matcon, Lird_f_matidn, Lird_f_matcopy, Lird_f_matadd
+    .quad Lird_f_matsub, Lird_f_matmul, Lird_f_matscale, Lird_f_mattrn
+    .quad Lird_f_matinv
 Lird_formats_end:
 
 // the template table must have exactly one entry per opcode

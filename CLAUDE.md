@@ -20,8 +20,6 @@ assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, 
   `src/backend/arm64_macos/`, `src/runtime/`, `src/backend/x86_64_linux/`,
   `src/runtime_x86_64_linux/`, cross testing (`Makefile.linux`, `tests/cross*.sh`, CI),
   benchmarks (`bench/`). Do not edit another module's files. MAT work split: DESIGN.md §2.1.
-- MAT contract staging: `OP_COUNT`/`KW_COUNT` switch with `BSK_MAT_CONTRACT`; build with
-  `make clean && make BSK_MAT=1 test` until the integration step (DESIGN.md §2.2) removes it.
 - Matrix kernels: GEMM may reassociate/use FMA (class R); every other MAT result must be
   bit-identical across targets and kernel variants (class E, DESIGN.md §6.6.4). Test products use
   exact data only. Never use undocumented CPU instructions; vendor BLAS is for `bench/` only.

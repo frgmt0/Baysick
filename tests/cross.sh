@@ -10,6 +10,7 @@
 # Environment:
 #   BAYSICK               compiler used by cross_pack.sh (default: build/baysick)
 #   BAYSICK_TEST_TIMEOUT  seconds per program, forwarded (default: 10)
+#   BAYSICK_KERNELS       if set, forwarded to the remote runs (kernel variant; name chars only)
 #   BAYSICK_CROSS_HOST    default host
 #
 # Packs a bundle (tests/cross_pack.sh) into a local temp directory, streams it
@@ -53,8 +54,17 @@ if ! sh "$ROOT/tests/cross_pack.sh" -o "$TMP/bundle" "$@"; then
     exit 2
 fi
 
+# Optional kernel variant for the remote runs; restricted to name characters so the remote
+# script stays free of single quotes and of anything the remote shell could interpret.
+KPFX=
+case "${BAYSICK_KERNELS:-}" in
+'') ;;
+*[!A-Za-z0-9_]*) echo "cross.sh: BAYSICK_KERNELS must contain only letters, digits and underscores" >&2; exit 2 ;;
+*) KPFX="BAYSICK_KERNELS=$BAYSICK_KERNELS " ;;
+esac
+
 # Remote script: no single quote anywhere, so it survives any login shell.
-REMOTE='d=$(mktemp -d "${TMPDIR:-/tmp}/baysick-cross.XXXXXX") || exit 2; trap "rm -rf \"\$d\"" EXIT; trap "rm -rf \"\$d\"; exit 2" HUP INT TERM PIPE; tar -C "$d" -xf - || exit 2; BAYSICK_TEST_TIMEOUT='"$TIMEOUT"' sh "$d/tests/cross_run.sh" "$@" "$d"'
+REMOTE='d=$(mktemp -d "${TMPDIR:-/tmp}/baysick-cross.XXXXXX") || exit 2; trap "rm -rf \"\$d\"" EXIT; trap "rm -rf \"\$d\"; exit 2" HUP INT TERM PIPE; tar -C "$d" -xf - || exit 2; BAYSICK_TEST_TIMEOUT='"$TIMEOUT"' '"$KPFX"'sh "$d/tests/cross_run.sh" "$@" "$d"'
 
 # Run the transfer in the foreground of a subshell; ssh gets the tar stream on stdin.
 COPYFILE_DISABLE=1 tar --no-xattrs -C "$TMP/bundle" -cf - . | ssh -o BatchMode=yes -- "$HOST" "sh -c '$REMOTE' sh $VERBOSE"

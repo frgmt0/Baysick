@@ -4,6 +4,7 @@
 #
 # Defines: main, bsk_end, bsk_curline   (docs/DESIGN.md sections 6, 6.4)
 #
+# main first selects the matrix kernels (bsk_kern_init, rt_kinit.s).
 # All other runtime state is initialised statically in the file that
 # owns it (print counters and buffer: rt_print.s, RND state: rt_rnd.s,
 # DATA cursor: rt_data.s, GOSUB stack: rt_gosub.s), so main has nothing
@@ -16,9 +17,10 @@
 # ---------------------------------------------------------------------
 # main -- process entry point of every compiled BASIC program (called
 #   by glibc's start code).
-#   Purpose : run the compiled main function bsk_program; if it ever
-#             returns (it should end with bsk_end), terminate exactly
-#             like END.
+#   Purpose : select the matrix kernel variant (bsk_kern_init,
+#             DESIGN.md 6.6.2), then run the compiled main function
+#             bsk_program; if that ever returns (it should end with
+#             bsk_end), terminate exactly like END.
 #   Inputs  : %edi = argc, %rsi = argv (ignored; programs read no input)
 #   Outputs : never returns
 #   Clobbers: everything (control never comes back)
@@ -31,6 +33,7 @@
 main:
     pushq %rbp                      # entered with %rsp = 8 (mod 16)
     movq %rsp, %rbp                 # now 0 (mod 16): calls are aligned
+    call bsk_kern_init              # choose the matrix kernel variant
     call bsk_program                # run the BASIC program
     call bsk_end                    # fell off the end: behave like END
     ud2                             # bsk_end does not return

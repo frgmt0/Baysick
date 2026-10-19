@@ -470,6 +470,77 @@ Lbk_x64_in_op_end:
     CALLRT Lbk_x64_in_rt_end
     b Lbk_x64_in_next
 
+// ---- MAT statements (DESIGN.md 5.4.5): array letters in X / A / B --------
+Lbk_x64_in_op_matredim:
+    // %rdi = &.Ldesc_<X>; %xmm0 = A; with B: %xmm1 = B, bsk_mat_redim2,
+    // else bsk_mat_redim1
+    bl Lbk_x64_in_desc_addr
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    ldr w0, [x21, #IRI_B]
+    cmn w0, #1                      // IR_NONE: a column vector
+    b.eq 1f
+    mov x1, #1
+    bl Lbk_x64_in_load
+    CALLRT Lbk_x64_in_rt_mat_redim2
+    b Lbk_x64_in_next
+1:
+    CALLRT Lbk_x64_in_rt_mat_redim1
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_mat1:
+    // READ / ZER / CON / IDN: %rdi = &.Ldesc_<X>; call bsk_mat_<op>
+    bl Lbk_x64_in_desc_addr
+    bl Lbk_x64_in_mat_call
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_matprint:
+    // %rdi = &.Ldesc_<X>; %esi = IMM (MATPR_*); call bsk_mat_print
+    bl Lbk_x64_in_desc_addr
+    ldr x2, [x21, #IRI_IMM]
+    cmp x2, #MATPR_PACKED
+    b.hi Lbk_x64_in_bad_mode
+    FMT Lbk_x64_in_matprint_fmt
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_mat2:
+    // COPY / TRN / INV: %rdi = &.Ldesc_<X>, %rsi = &.Ldesc_<A>
+    bl Lbk_x64_in_desc_addr
+    ldr w0, [x21, #IRI_A]
+    adrp x1, Lbk_x64_in_reg_rsi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rsi@PAGEOFF
+    bl Lbk_x64_in_desc_reg
+    bl Lbk_x64_in_mat_call
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_mat3:
+    // ADD / SUB / MUL: %rdi = X, %rsi = A, %rdx = B
+    bl Lbk_x64_in_desc_addr
+    ldr w0, [x21, #IRI_A]
+    adrp x1, Lbk_x64_in_reg_rsi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rsi@PAGEOFF
+    bl Lbk_x64_in_desc_reg
+    ldr w0, [x21, #IRI_B]
+    adrp x1, Lbk_x64_in_reg_rdx@PAGE
+    add x1, x1, Lbk_x64_in_reg_rdx@PAGEOFF
+    bl Lbk_x64_in_desc_reg
+    bl Lbk_x64_in_mat_call
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_matscale:
+    // %rdi = &.Ldesc_<X>, %rsi = &.Ldesc_<B>, %xmm0 = temp A
+    bl Lbk_x64_in_desc_addr
+    ldr w0, [x21, #IRI_B]
+    adrp x1, Lbk_x64_in_reg_rsi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rsi@PAGEOFF
+    bl Lbk_x64_in_desc_reg
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    bl Lbk_x64_in_mat_call
+    b Lbk_x64_in_next
+
 // common tail: store %xmm0 into the DST temp's slot
 Lbk_x64_in_store_dst:
     ldr w0, [x21, #IRI_DST]
@@ -488,6 +559,8 @@ Lbk_x64_in_bad_label:
     FAIL Lbk_x64_in_err_label
 Lbk_x64_in_bad_string:
     FAIL Lbk_x64_in_err_string
+Lbk_x64_in_bad_mode:
+    FAIL Lbk_x64_in_err_mode
 
 // ---- dispatch table: entry k = Lbk_x64_in_op_<opcode k> - table --------
     .p2align 2
@@ -534,6 +607,19 @@ Lbk_x64_in_table:
     .long Lbk_x64_in_op_prnl - Lbk_x64_in_table         // OP_PRNL     39
     .long Lbk_x64_in_op_end - Lbk_x64_in_table          // OP_END      40
     .long Lbk_x64_in_op_end - Lbk_x64_in_table          // OP_STOP     41
+    .long Lbk_x64_in_op_matredim - Lbk_x64_in_table     // OP_MATREDIM 42
+    .long Lbk_x64_in_op_mat1 - Lbk_x64_in_table         // OP_MATREAD  43
+    .long Lbk_x64_in_op_matprint - Lbk_x64_in_table     // OP_MATPRINT 44
+    .long Lbk_x64_in_op_mat1 - Lbk_x64_in_table         // OP_MATZER   45
+    .long Lbk_x64_in_op_mat1 - Lbk_x64_in_table         // OP_MATCON   46
+    .long Lbk_x64_in_op_mat1 - Lbk_x64_in_table         // OP_MATIDN   47
+    .long Lbk_x64_in_op_mat2 - Lbk_x64_in_table         // OP_MATCOPY  48
+    .long Lbk_x64_in_op_mat3 - Lbk_x64_in_table         // OP_MATADD   49
+    .long Lbk_x64_in_op_mat3 - Lbk_x64_in_table         // OP_MATSUB   50
+    .long Lbk_x64_in_op_mat3 - Lbk_x64_in_table         // OP_MATMUL   51
+    .long Lbk_x64_in_op_matscale - Lbk_x64_in_table     // OP_MATSCALE 52
+    .long Lbk_x64_in_op_mat2 - Lbk_x64_in_table         // OP_MATTRN   53
+    .long Lbk_x64_in_op_mat2 - Lbk_x64_in_table         // OP_MATINV   54
 Lbk_x64_in_table_end:
 .if (Lbk_x64_in_table_end - Lbk_x64_in_table) != 4 * OP_COUNT
     .error "x64_insn.s dispatch table does not cover OP_COUNT opcodes"
@@ -681,6 +767,48 @@ Lbk_x64_in_desc_addr:
 Lbk_x64_in_desc_bad:
     FAIL Lbk_x64_in_err_letter
 
+// ---------------------------------------------------------------------
+// Lbk_x64_in_desc_reg -- emit "    leaq .Ldesc_<L>(%rip), %<reg>" for an
+// array letter held in an operand field.
+// In:  w0 = array letter, x1 = register name ("rsi", "rdx")
+// Checks: the letter names an array in use.
+// Frame: 16 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_desc_reg:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov x3, x1
+    mov w2, w0
+    cmp w2, #NUM_LETTERS
+    b.hs Lbk_x64_in_desc_bad
+    add x9, x20, #IRM_ARRAYS
+    add x9, x9, x2, lsl #4
+    ldr w9, [x9, #IRA_DIMS]
+    cbz w9, Lbk_x64_in_desc_bad
+    FMT Lbk_x64_in_desc_reg_fmt
+    ldp x29, x30, [sp], #16
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_x64_in_mat_call -- emit "    call bsk_mat_<op>" for the current MAT
+// record (name from Lbk_x64_in_mat_names, indexed by opcode - OP_MATREAD).
+// In:  x21 = current record
+// Frame: 16 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_mat_call:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    ldrh w9, [x21, #IRI_OP]
+    sub x9, x9, #OP_MATREAD
+    adrp x10, Lbk_x64_in_mat_names@PAGE
+    add x10, x10, Lbk_x64_in_mat_names@PAGEOFF
+    ldr x2, [x10, x9, lsl #3]
+    FMT Lbk_x64_in_call_fmt
+    ldp x29, x30, [sp], #16
+    ret
+
 // ======================================================================
 // Text templates (GNU as AT&T; "%%" is a literal '%' for _bk_x64_fmt)
 // ======================================================================
@@ -741,6 +869,12 @@ Lbk_x64_in_call_fn:
     .asciz "    call .Lfn_%L\n"
 Lbk_x64_in_desc_fmt:
     .asciz "    leaq .Ldesc_%L(%%rip), %%rdi\n"
+Lbk_x64_in_desc_reg_fmt:
+    .asciz "    leaq .Ldesc_%L(%%rip), %%%s\n"
+Lbk_x64_in_matprint_fmt:
+    .asciz "    movl $%u, %%esi\n    call bsk_mat_print\n"
+Lbk_x64_in_reg_rsi:     .asciz "rsi"
+Lbk_x64_in_reg_rdx:     .asciz "rdx"
 Lbk_x64_in_ld_elem:
     .asciz "    movsd (%%rax), %%xmm0\n"
 Lbk_x64_in_st_elem:
@@ -795,6 +929,19 @@ Lbk_x64_in_rt_abs:      .asciz "bsk_abs"
 Lbk_x64_in_rt_log:      .asciz "bsk_log"
 Lbk_x64_in_rt_sqr:      .asciz "bsk_sqr"
 Lbk_x64_in_rt_int:      .asciz "bsk_int"
+Lbk_x64_in_rt_mat_redim1: .asciz "bsk_mat_redim1"
+Lbk_x64_in_rt_mat_redim2: .asciz "bsk_mat_redim2"
+Lbk_x64_in_rt_mat_read: .asciz "bsk_mat_read"
+Lbk_x64_in_rt_mat_zer:  .asciz "bsk_mat_zer"
+Lbk_x64_in_rt_mat_con:  .asciz "bsk_mat_con"
+Lbk_x64_in_rt_mat_idn:  .asciz "bsk_mat_idn"
+Lbk_x64_in_rt_mat_copy: .asciz "bsk_mat_copy"
+Lbk_x64_in_rt_mat_add:  .asciz "bsk_mat_add"
+Lbk_x64_in_rt_mat_sub:  .asciz "bsk_mat_sub"
+Lbk_x64_in_rt_mat_mul:  .asciz "bsk_mat_mul"
+Lbk_x64_in_rt_mat_scale: .asciz "bsk_mat_scale"
+Lbk_x64_in_rt_mat_trn:  .asciz "bsk_mat_trn"
+Lbk_x64_in_rt_mat_inv:  .asciz "bsk_mat_inv"
 Lbk_x64_in_addsd:       .asciz "addsd"
 Lbk_x64_in_subsd:       .asciz "subsd"
 Lbk_x64_in_mulsd:       .asciz "mulsd"
@@ -817,6 +964,7 @@ Lbk_x64_in_err_rel:     .asciz "x86_64-linux backend: bad relation code"
 Lbk_x64_in_err_label:   .asciz "x86_64-linux backend: bad label id"
 Lbk_x64_in_err_string:  .asciz "x86_64-linux backend: bad string id"
 Lbk_x64_in_err_slot:    .asciz "x86_64-linux backend: bad variable slot"
+Lbk_x64_in_err_mode:    .asciz "x86_64-linux backend: bad MAT PRINT mode"
 Lbk_x64_in_err_frame:   .asciz "x86_64-linux backend: too many temps for a 32-bit frame"
 
 // ---- name tables (pointers) ---------------------------------------------
@@ -825,6 +973,12 @@ Lbk_x64_in_err_frame:   .asciz "x86_64-linux backend: too many temps for a 32-bi
 // indexed by opcode - OP_ADD
 Lbk_x64_in_arith_names:
     .quad Lbk_x64_in_addsd, Lbk_x64_in_subsd, Lbk_x64_in_mulsd
+// indexed by opcode - OP_MATREAD (OP_MATPRINT, entry 1, has its own case)
+Lbk_x64_in_mat_names:
+    .quad Lbk_x64_in_rt_mat_read, 0, Lbk_x64_in_rt_mat_zer
+    .quad Lbk_x64_in_rt_mat_con, Lbk_x64_in_rt_mat_idn, Lbk_x64_in_rt_mat_copy
+    .quad Lbk_x64_in_rt_mat_add, Lbk_x64_in_rt_mat_sub, Lbk_x64_in_rt_mat_mul
+    .quad Lbk_x64_in_rt_mat_scale, Lbk_x64_in_rt_mat_trn, Lbk_x64_in_rt_mat_inv
 // indexed by opcode - OP_SIN
 Lbk_x64_in_builtin_names:
     .quad Lbk_x64_in_rt_sin, Lbk_x64_in_rt_cos, Lbk_x64_in_rt_tan

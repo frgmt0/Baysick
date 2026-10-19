@@ -72,8 +72,7 @@
 .equ BI_COUNT,          10
 
 // ---- Statement keyword ids (matched as prefixes of the compacted text
-//      after the line number, in exactly this order; KW_MAT counts only
-//      when BSK_MAT_CONTRACT is 1, see below) ---------------------------
+//      after the line number, in exactly this order) --------------------
 .equ KW_LET,            0
 .equ KW_PRINT,          1
 .equ KW_END,            2
@@ -91,15 +90,7 @@
 .equ KW_STOP,           14
 .equ KW_MAT,            15  /* Second Edition matrix statements (LANGUAGE.md 7.14) */
 
-// Contract staging switch (DESIGN.md 2.2), same switch as in ir.inc.
-.ifndef BSK_MAT_CONTRACT
-.equ BSK_MAT_CONTRACT, 0
-.endif
-.if BSK_MAT_CONTRACT
 .equ KW_COUNT,          16
-.else
-.equ KW_COUNT,          15
-.endif
 
 // ---- MAT sub-keywords (after "MAT", in this order) and MAT function ids --
 // "MAT" is followed by READ, PRINT, or an assignment "letter =" whose

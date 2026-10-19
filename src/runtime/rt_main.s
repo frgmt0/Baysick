@@ -7,7 +7,8 @@
 // All other runtime state is initialised statically in the file that
 // owns it (print counters and buffer: rt_print.s, RND state: rt_rnd.s,
 // DATA cursor: rt_data.s, GOSUB stack: rt_gosub.s), so _main has
-// nothing to set up before it transfers control to the program.
+// nothing to set up before it transfers control to the program except
+// the matrix kernel selection (_bsk_kern_init, rt_kinit.s).
 // =====================================================================
 .include "baysick.inc"
 
@@ -15,8 +16,9 @@
 
 // ---------------------------------------------------------------------
 // _main -- process entry point of every compiled BASIC program.
-//   Purpose : run the compiled main function _bsk_program; if it ever
-//             returns (it should end with _bsk_end), terminate exactly
+//   Purpose : select the matrix kernels (_bsk_kern_init, DESIGN.md
+//             6.6.2), then run the compiled main function _bsk_program;
+//             if it ever returns (it should end with _bsk_end), terminate exactly
 //             like END.
 //   Inputs  : w0 = argc, x1 = argv (ignored; programs read no input)
 //   Outputs : never returns
@@ -29,6 +31,7 @@
 _main:
     stp x29, x30, [sp, #-16]!       // frame record
     mov x29, sp
+    bl _bsk_kern_init               // select the matrix kernel variant
     bl _bsk_program                 // run the BASIC program
     bl _bsk_end                     // fell off the end: behave like END
     // _bsk_end does not return; nothing follows.

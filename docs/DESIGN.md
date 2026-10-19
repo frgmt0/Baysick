@@ -149,25 +149,13 @@ changes only its own files:
 | BENCH | `bench/`, `make bench`, `make bench-cross` (BENCH.md) |
 | T | nothing new: the MAT corpus flows through `cross_pack.sh` unchanged |
 
-### 2.2 Contract staging and integration
+### 2.2 Contract counts
 
 The MAT contract raises `OP_COUNT` from 42 to 55 and `KW_COUNT` from 15 to 16. Existing modules
-size tables by these counts (dumper, verifier, both backends, the keyword loop), so the counts are
-behind one switch until every module is updated:
-
-* `include/ir.inc` and `include/tokens.inc` define `BSK_MAT_CONTRACT` as 0 unless it is already
-  defined; `OP_COUNT`/`KW_COUNT` are 42/15 when it is 0 and 55/16 when it is 1. Every other new
-  constant (opcodes 42–54, `KW_MAT`, `MF_*`, `MATPR_*`, `ERR_DIMENSION_ERROR`,
-  `ERR_SINGULAR_MATRIX`, `RTA_CAP`, `MV_*`, `KS_*`, `KF_*`, `KV_*`, the sizes) is unconditional.
-* `make BSK_MAT=1 …` passes `-Wa,-defsym,BSK_MAT_CONTRACT=1` to every `as` run (objects do not
-  record the setting: `make clean` when switching). During the MAT implementation phase every
-  implementer builds and tests with `make clean && make BSK_MAT=1 test` and
-  `make BSK_MAT=1 cross` (the x86_64 runtime does not use either count, so `Makefile.linux` needs
-  no switch).
-* **Integration step** (once F, D, B and BX have landed): delete the switch from `ir.inc`,
-  `tokens.inc`, `tests/include_asserts.inc` and `Makefile`, keeping only the `BSK_MAT_CONTRACT = 1`
-  values, then `make clean && make test && make cross`. This section's staging text is removed
-  in the same change.
+size tables by these counts (dumper, verifier, both backends, the keyword loop), and the build
+asserts them (`tests/include_asserts.inc`: `OP_COUNT == OP_MATINV + 1`, `KW_COUNT == KW_MAT + 1`).
+There is no build switch; the counts are plain constants in `include/ir.inc` and
+`include/tokens.inc`.
 
 ## 3. Conventions inside the compiler and runtime
 
@@ -991,8 +979,9 @@ function. The table is the only registration point. Selection in `_bsk_kern_init
 
 The exported `_bsk_kern_gemm` … `_bsk_kern_inv` are trampolines: load the current record, load
 the slot, branch to it (arm64 `ldr x16, [x16, #KV_GEMM]` / `br x16`; x86_64 `jmp *KV_GEMM(%rax)`),
-arguments untouched. `_bsk_kern_use(name)` re-selects by name (`baseline` allowed; 0 on success,
-−1 and no change if the name is unknown or not usable); `_bsk_kern_name()` returns the current
+arguments untouched. `_bsk_kern_use(name)` re-selects by name (only the names of usable variants and `baseline` are
+accepted; `auto` is not a name here, it returns −1 like any unknown name; 0 on success, −1 and no
+change if the name is unknown or not usable); `_bsk_kern_name()` returns the current
 `KV_NAME`; `_bsk_kern_variants()` returns a static NULL-terminated array of the usable names, in
 table order. The MAT layer calls only the trampolines (or reads the current record directly).
 
@@ -1040,6 +1029,11 @@ table order. The MAT layer calls only the trampolines (or reads the current reco
   (`neon`: `zip1`/`zip2` on `.2d` building 2 × 2 or 4 × 4 tiles; `sse2`: `unpcklpd`/`unpckhpd`).
 * **inv** — the §7.14.6 algorithm with the pivot-row division and the row updates vectorised
   2-wide over `j` (`fdiv`/`divpd`; `fmul` then `fsub` / `mulpd` then `subpd`; never `fmla`).
+  The row updates may use a delayed or blocked schedule (the x86_64 runtime updates in panels of
+  16 pivot columns with a register-blocked micro-kernel), provided every element receives exactly
+  the pinned operations in the pinned order (one rounded product, one rounded subtraction, true
+  divisions). Updates whose product is zero may be skipped as LANGUAGE.md §7.14.6 allows (the
+  arm64 runtime skips the products with the untouched, exactly zero columns of X).
 * Benchmarks and initial goals: BENCH.md.
 
 #### 6.6.6 Static buffers
@@ -1051,6 +1045,7 @@ pages cost nothing:
 |--------|------|-------|
 | MAT result temporary | `RT_MAT_SCRATCH_ELEMS` doubles (8 MiB) | `rt_mat.s` (aliasing, §6.5) |
 | INV workspace W | `RT_KERN_INV_MAXN²` doubles (8 MiB) | inv kernel |
+| INV index buffer `_bsk_rt_kinv_idx` (arm64) | 3 × `RT_KERN_INV_MAXN` u32 (12 KiB): row-of, unit-position and column-of bookkeeping for the column order of X | `rt_kneon_inv.s` |
 | GEMM packing buffers | runtime-private, at most 8 MiB in total | gemm kernel |
 
 #### 6.6.7 Adding a kernel
@@ -1115,7 +1110,6 @@ under that platform's ABI, and its own section here.
 * `make cross-pack` (depends on `all`): `sh tests/cross_pack.sh -o build/x86_64-linux-bundle`.
 * `make cross` (depends on `all`): `sh tests/cross.sh` (default host `desktop`).
 * `make bench` / `make bench-cross`: BENCH.md (owned by BENCH).
-* `make BSK_MAT=1 …`: the MAT contract switch of §2.2 (removed at integration).
 * Kernel variants: `BAYSICK_KERNELS=<variant> sh tests/run.sh` runs the corpus with a chosen
   variant (§6.6.4); expected outputs are the same for every variant.
 * `COMPILER_DIRS` (the "not implemented yet" check) lists `src/backend/x86_64_linux` too.
@@ -1225,7 +1219,10 @@ sh tests/cross.sh [-v] [-H HOST] [PATTERN...]
   `tar -C "$d" -xf -`, `BAYSICK_TEST_TIMEOUT=<value> sh "$d/tests/cross_run.sh" [-v] "$d"`, and
   exits with its status. Nothing is left on the remote machine.
 * Environment: `BAYSICK` (passed to `cross_pack.sh`), `BAYSICK_TEST_TIMEOUT` (forwarded),
-  `BAYSICK_CROSS_HOST`.
+  `BAYSICK_KERNELS` (forwarded when set, so the remote runs use that kernel variant, §6.6.4; it must
+  consist of letters, digits and underscores, else exit 2, which keeps the remote script free of
+  single quotes: the remote command becomes `BAYSICK_TEST_TIMEOUT=<value> BAYSICK_KERNELS=<value> sh
+  "$d/tests/cross_run.sh" …`), `BAYSICK_CROSS_HOST`.
 * Exit: the status of `cross_run.sh` (0/1/2); 2 if packing fails, `ssh` itself fails
   (status 255) or the remote status is anything else (e.g. 127 no `sh`, 137 killed).
 * `make cross-pack` removes `build/x86_64-linux-bundle` first, so it can be run repeatedly

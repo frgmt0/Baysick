@@ -8,6 +8,7 @@
 //   _bsk_rt_finish_output   pending-line newline + flush (END / errors);
 //                           reports whether stdout broke
 //   _bsk_rt_write_all       write(2) loop handling short writes / EINTR
+//   _bsk_rt_print_bol       newline if col != 0 (MAT PRINT, rt_mat.s)
 //
 // Column model (LANGUAGE.md section 8): `col` is the logical column,
 // `out` the number of characters physically written on this line.
@@ -331,6 +332,23 @@ _bsk_print_semi:
     .p2align 2
 _bsk_print_nl:
     b Lrt_print_newline
+
+// ---------------------------------------------------------------------
+// _bsk_rt_print_bol -- start of a MAT PRINT item (DESIGN.md 6.5):
+//   newline if col != 0, so the matrix starts on a new line.
+//   Inputs  : none
+//   Outputs : none
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: none
+//   Frame   : none (tail call or return)
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_print_bol
+    .p2align 2
+_bsk_rt_print_bol:
+    adrp x9, _bsk_rt_col@PAGE
+    ldr x10, [x9, _bsk_rt_col@PAGEOFF]
+    cbnz x10, Lrt_print_newline     // mid-line: newline (tail call)
+    ret
 
 // ---------------------------------------------------------------------
 // _bsk_rt_finish_output -- termination step for END, STOP, OUT OF DATA

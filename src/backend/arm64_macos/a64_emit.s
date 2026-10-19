@@ -194,9 +194,14 @@ Lbk_em_desc_loop:
     ldr w5, [x22, #IRA_B1]
     ldr w6, [x22, #IRA_B2]
     bl _bk_arm64_fmt
-    // ... "rowlen, letter, 0"
+    // ... "rowlen, letter, cap" with cap = (b1 + 1) * (b2 + 1)
     ldr x2, [sp, #72]
     mov x3, x21
+    ldr w4, [x22, #IRA_B1]
+    ldr w5, [x22, #IRA_B2]
+    add x4, x4, #1
+    add x5, x5, #1
+    mul x4, x4, x5
     mov x0, x20
     adrp x1, Lbk_em_desc_tail@PAGE
     add x1, x1, Lbk_em_desc_tail@PAGEOFF
@@ -285,7 +290,7 @@ Lbk_em_desc_fmt:
     .ascii "    .quad _bsk_arr_%L\n"
     .asciz "    .long %u, %u, %u, "
 Lbk_em_desc_tail:
-    .asciz "%u, %u, 0\n"
+    .asciz "%u, %u, %u\n"
 Lbk_em_vars:
     .asciz "    .zerofill __DATA,__bss,_bsk_vars,%u,3\n"
 Lbk_em_arr:

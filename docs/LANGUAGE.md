@@ -510,7 +510,7 @@ parentheses ([M64] p. 52: "note parentheses").
 | Error | When |
 |-------|------|
 | `ILLEGAL VARIABLE` | a name is required and the text there is not a letter (`MAT = A`, `MAT READ`, `MAT PRINT A,,B`), or is a letter followed by a digit (`MAT C = A1 + B`); a `MAT READ` target's dimensionality conflicts with the letter's (§4.2, e.g. `DIM A(5)` and `MAT READ A(2,2)`) |
-| `INCORRECT FORMAT` | `=` missing after the target; a right-hand side not of the forms above (`MAT C = 2*A`, `MAT C = SIN(A)`, `MAT D = A + B - C`, `MAT C = (2)A`, `MAT C = TRN A`, `MAT C = A(1)`); `)` missing after the name in TRN/INV; anything other than `,`, `;` or end of line after a MAT PRINT name (`MAT PRINT A(1)`); text left over at the end; `MATRIX = 1` (an assignment to `R` whose `=` is missing) |
+| `INCORRECT FORMAT` | `=` missing after the target; a right-hand side not of the forms above (`MAT C = 2*A`, `MAT C = SIN(A)`, `MAT D = A + B - C`, `MAT C = (2)A`, `MAT C = TRN A`, `MAT C = A(1)`, `MAT C =` with an empty right-hand side); `)` missing after the name in TRN/INV; anything other than `,`, `;` or end of line after a MAT PRINT name (`MAT PRINT A(1)`); text left over at the end; `MATRIX = 1` (an assignment to `R` whose `=` is missing) |
 | `ILLEGAL FORMULA` | inside a dimension list or IDN's argument list exactly as in a subscript list (§5.2): a missing `)`, a third dimension, a second argument to IDN; inside `( expression )` of the scalar multiple as for a parenthesised expression; any other §5 error in an expression |
 | `FORMULA TOO COMPLEX`, `ILLEGAL CONSTANT` | as in any expression (the `(` of a dimension list, of IDN's argument and of the scalar multiple count toward the depth limit, §5.1) |
 | `NO DATA` | MAT READ (or READ) present, no DATA values (§7.4) |
@@ -673,7 +673,9 @@ a multiplication by `1/d`), and `f·W(p,j)` is rounded before the subtraction (*
 multiply-add**). Ties in the pivot search go to the smallest row index. Columns `1 … p` of W are
 never read after step p. The result is therefore **bit-identical on every target and kernel
 variant**, except that the sign of a zero result element is unspecified (an implementation may
-skip any update whose product `f·y` is zero).
+skip an update only when its product `f·y` is actually zero, i.e. one factor is zero and the other
+is finite. `f = 0` with `y = ±infinity` (or NaN) gives NaN and must not be skipped: it is performed,
+and the NaN reaches the §7.14.4 OVERFLOW check like any other non-finite result).
 
 **Baysick decision (singular matrices):** [M64] gives neither the method nor the behaviour for a
 singular matrix. [M68] p. 59–60 does not stop and sets `DET` to 0 — but `DET` is not part of the

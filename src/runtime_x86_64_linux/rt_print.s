@@ -9,6 +9,7 @@
 #   bsk_rt_finish_output    pending-line newline + flush (END / errors);
 #                           reports whether stdout broke
 #   bsk_rt_write_all        write(2) loop handling short writes / EINTR
+#   bsk_rt_print_fresh      newline if col != 0 (MAT PRINT, rt_mat.s)
 #
 # Column model (LANGUAGE.md section 8): `col` is the logical column,
 # `out` the number of characters physically written on this line.
@@ -351,6 +352,25 @@ bsk_print_semi:
 bsk_print_nl:
     jmp .Lrt_print_newline
     .size bsk_print_nl, . - bsk_print_nl
+
+# ---------------------------------------------------------------------
+# bsk_rt_print_fresh -- start a fresh line: newline if col != 0
+#   (MAT PRINT, DESIGN.md 6.5 / LANGUAGE.md 7.14.5 step 2).
+#   Inputs  : none
+#   Outputs : none
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: none
+#   Frame   : none (tail jump; .Lrt_print_newline sees our alignment)
+# ---------------------------------------------------------------------
+    .globl bsk_rt_print_fresh
+    .hidden bsk_rt_print_fresh
+    .type bsk_rt_print_fresh, @function
+    .p2align 4
+bsk_rt_print_fresh:
+    cmpq $0, .Lrt_print_col(%rip)
+    jne .Lrt_print_newline          # mid-line: end it
+    ret                             # already at column 0
+    .size bsk_rt_print_fresh, . - bsk_rt_print_fresh
 
 # ---------------------------------------------------------------------
 # bsk_rt_finish_output -- termination step for END, STOP, OUT OF DATA

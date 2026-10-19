@@ -1289,6 +1289,8 @@ Lfe_stmt_keywords:
     .ascii "REM\0\0\0\0"
     .byte 4
     .ascii "STOP\0\0\0"
+    .byte 3
+    .ascii "MAT\0\0\0\0"
 
 // Statement handlers in KW_* order.
     .section __DATA,__const
@@ -1309,3 +1311,4 @@ Lfe_stmt_handlers:
     .quad Lfe_stmt_dim
     .quad Lfe_stmt_rem
     .quad Lfe_stmt_stop
+    .quad _fe_mat                       // fe_mat.s (counted when KW_COUNT = 16)

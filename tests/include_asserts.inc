@@ -35,13 +35,8 @@ ASSERT ((TOK_ERR + 8) == TOK_SIZE),                        "TOK layout"
 ASSERT ((OB_CAP + 8) == OB_SIZE),                          "OB layout"
 ASSERT (SLOT_FOR_BASE == NUM_SCALAR_SLOTS),                "FOR slots must follow scalar slots"
 ASSERT (NUM_SCALAR_SLOTS == NUM_LETTERS*SLOT_PER_LETTER),  "scalar slot count"
-.if BSK_MAT_CONTRACT
 ASSERT (OP_COUNT == (OP_MATINV + 1)),                      "OP_COUNT"
 ASSERT (KW_COUNT == (KW_MAT + 1)),                         "KW_COUNT"
-.else
-ASSERT (OP_COUNT == (OP_STOP + 1)),                        "OP_COUNT (First Edition staging)"
-ASSERT (KW_COUNT == (KW_STOP + 1)),                        "KW_COUNT (First Edition staging)"
-.endif
 ASSERT ((OP_INT - OP_SIN) == 8),                           "builtin opcodes must be contiguous"
 ASSERT ((BI_INT - BI_SIN) == (OP_INT - OP_SIN)),           "builtin ids parallel builtin opcodes"
 ASSERT (TK_COUNT == (TK_BAD + 1)),                         "TK_COUNT"

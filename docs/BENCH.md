@@ -67,6 +67,14 @@ BASIC user experiences, including the scalar fill loops.
   until both **at least 5 repetitions** and **at least 1.0 s** of total time have elapsed (at most
   1000); each repetition is timed separately. The reported time is the **median** repetition;
   the minimum and maximum are written to the TSV file too.
+* **Batching of very short calls.** If a single call takes less than 100 µs (measured on a warm-up
+  call), each timed repetition runs the call back to back `ceil(100 µs / t)` times (at most
+  100000) and records the batch time divided by the batch size, so the clock resolution does not
+  dominate microsecond kernels. This is legitimate because every call is identical and independent
+  (the output is fully overwritten, inputs are unmodified; there is no state to carry between
+  calls), so the per-call mean over a batch measures the same quantity as one call. It is not
+  applied to a measurement that has an untimed prepare step (the vendor INV call, which needs a
+  fresh input before every call).
 * Rate = work / median time (GFLOP/s or GB/s, 10⁹ units).
 * The output matrix is fully overwritten each repetition (GEMM: β = 0), so repetitions are
   independent; inputs are not modified (INV works on a copy for the vendor call, whose `dgetrf`
@@ -85,9 +93,12 @@ kernel, variant and size):
   term is computed by a plain C loop for n ≤ 512; above that the bound
   `2·k·2⁻⁵³·k·max|a|·max|b|` is used).
 * add, sub, scale, transpose: **bit-for-bit** equality with a plain C reference loop compiled
-  with `-ffp-contract=off` (class E, DESIGN.md §6.6.4); the vendor result must agree too.
-* INV: bit-for-bit equality with the baseline variant's result (class E), and
-  `max|X − X_ref| ≤ 10⁻⁸·max|X_ref|` against the vendor inverse.
+  with `-ffp-contract=off` (class E, DESIGN.md §6.6.4); the vendor result must agree too. The scale
+  kernel uses the factor k = 0.1 (inexact in binary, so the multiplication rounds).
+* INV: bit-for-bit equality with the baseline variant's result (class E), except that a position
+  where both values are zero compares equal whatever their signs (the sign of a zero element is
+  unspecified, LANGUAGE.md §7.14.6, DESIGN.md §6.6.4); and `max|X − X_ref| ≤ 10⁻⁸·max|X_ref|`
+  against the vendor inverse.
 * Every non-baseline variant is additionally compared with the baseline: bit-identical for the
   class-E kernels, within the GEMM bound for GEMM.
 * End-to-end programs: their stdout must equal `bench/programs/NAME.out` (derived like any test
@@ -97,7 +108,7 @@ kernel, variant and size):
 
 The harness calls `_bsk_kern_init`, then measures **every usable variant** listed by
 `_bsk_kern_variants()` (switching with `_bsk_kern_use`), so a new kernel (DESIGN.md §6.6.7)
-appears in the results without harness changes. End-to-end programs run once per variant with
+appears in the results without harness changes. End-to-end programs run for every variant (3 repetitions, median; 1 in quick mode) with
 `BAYSICK_KERNELS=<variant>` in their environment.
 
 ### 3.4 Peak measurement
@@ -149,12 +160,32 @@ with its `cblas.h` and LAPACK symbols; Arch: `pacman -S openblas`, Debian/Ubuntu
 `apt install libopenblas-dev`). The harness checks that the BLAS it linked is OpenBLAS (it calls
 `openblas_get_config()`, which reference BLAS does not have); if not, `bench-cross` stops with
 `bench-cross: OpenBLAS not found on <host>` and exit status 2 — it never reports a "vendor"
-number from the reference BLAS. (As of this writing the `desktop` host has only the reference
-`blas`/`cblas` 3.12 packages; OpenBLAS must be installed there before `make bench-cross` can run.)
+number from the reference BLAS. The `desktop` host has OpenBLAS 0.3.34.
 
 `BENCH_QUICK=1` (environment) limits sizes to n ≤ 512 (INV n ≤ 250) and the time per measurement
 to 0.2 s, for a smoke run. Exit status: 0 measured and validated; 1 a validation failure;
 2 setup error (missing compiler, vendor library, host).
+
+**Drivers in detail.**
+
+* `sh bench/run_mac.sh [--vendor-only]`: `--vendor-only` builds the harness without the Baysick
+  runtime (`-DBENCH_VENDOR_ONLY`; no archive or compiler needed) and runs only the peak loops, the
+  Accelerate calls and the vendor-versus-C-reference validation, as a self-test of the measuring
+  instrument. Without it the script needs `build/libbaysickrt.a` and `build/baysick` (run `make`
+  first) and checks that the archive exports the `_bsk_kern_*` API.
+* `sh bench/run_linux.sh BUNDLE_DIR` is the Linux half, run by `bench/cross.sh` on the host from
+  the unpacked bundle. It probes for OpenBLAS (status 42 if missing), builds the runtime with
+  `Makefile.linux`, builds and runs the harness and the e2e programs, and, only when the harness
+  succeeded, prints the TSV between the lines `@@BENCH-TSV-BEGIN@@` and `@@BENCH-TSV-END@@`.
+  `bench/cross.sh` passes everything else through and writes the lines between the markers to
+  `build/bench/x86_64-linux.tsv`.
+* Host selection for `make bench-cross`: `make bench-cross BENCH_CROSS_ARGS='-H HOST'` (the
+  arguments go to `bench/cross.sh`; default as described above).
+* Harness options (`bench/bench.c`): `--tsv FILE` writes the TSV rows (§5); `--e2e DIR` also times
+  the compiled programs `DIR/e2e_gemm`, `e2e_inv`, `e2e_mixed` for every usable variant (3
+  repetitions each, the median is reported; 1 repetition in quick mode, `BENCH_QUICK=1`), checking
+  the stdout of every repetition against `DIR/NAME.out`; `--only LIST` restricts the run to a comma-separated subset
+  of `peak gemm add sub scale trn inv e2e`.
 
 `make bench` is never part of `make test` or CI (timings on shared CI machines are meaningless).
 

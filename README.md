@@ -74,8 +74,7 @@ make clean
 
 `BAYSICK_KERNELS=baseline` (or a variant name such as `neon`) in a compiled program's
 environment selects its matrix kernel variant; the default picks the best one the CPU supports
-(`docs/DESIGN.md` §6.6). During the MAT implementation phase, build with `make BSK_MAT=1`
-(`docs/DESIGN.md` §2.2).
+(`docs/DESIGN.md` §6.6).
 
 Usage:
 

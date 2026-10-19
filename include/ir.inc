@@ -77,19 +77,7 @@
 .equ MATPR_ZONED,   0   /* "MAT PRINT A," or last item: 15-column zones */
 .equ MATPR_PACKED,  1   /* "MAT PRINT A;": packed (';' rule) */
 
-// Contract staging switch (DESIGN.md 2.2). 0: the First Edition counts the
-// current modules are built with. 1: the MAT contract (opcodes 0..54).
-// Build with `make BSK_MAT=1` during the MAT implementation phase; the
-// integration step deletes the switch and keeps only the BSK_MAT_CONTRACT=1
-// values.
-.ifndef BSK_MAT_CONTRACT
-.equ BSK_MAT_CONTRACT, 0
-.endif
-.if BSK_MAT_CONTRACT
 .equ OP_COUNT,      55
-.else
-.equ OP_COUNT,      42
-.endif
 
 // ---- Relation codes (u16 IRI_REL, OP_JCMP only; 0 otherwise) ------------
 .equ REL_NONE,      0

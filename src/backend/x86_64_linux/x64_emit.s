@@ -149,7 +149,7 @@ Lbk_x64_em_desc_loop:
     mov w10, #1
     csel w6, w10, w6, eq
     // ".Ldesc_<L>:", ".quad .Lbsk_arr_<L>",
-    // ".long dims, b1, b2, rowlen, letter, 0"
+    // ".long dims, b1, b2, rowlen, letter, cap"
     mov x0, x20
     adrp x1, Lbk_x64_em_desc_fmt@PAGE
     add x1, x1, Lbk_x64_em_desc_fmt@PAGEOFF
@@ -159,7 +159,7 @@ Lbk_x64_em_desc_loop:
     ldr w5, [x22, #IRA_B1]
     mov w7, w6
     ldr w6, [x22, #IRA_B2]
-    // six fields fit x2..x7; the helper appends ", <letter>, 0"
+    // six fields fit x2..x7; the helper appends ", <letter>, <cap>"
     bl Lbk_x64_em_desc_call
 Lbk_x64_em_desc_next:
     add x21, x21, #1
@@ -221,7 +221,7 @@ Lbk_x64_em_return:
 // Lbk_x64_em_desc_call -- file-local: format one array descriptor.
 // Private convention: x0 = OutBuf*, x1 = format, x2 = letter (label),
 // x3 = letter (storage label), x4 = dims, x5 = b1, x6 = b2, x7 = rowlen,
-// x21 = letter (the RTA_LETTER field). Calls _bk_x64_fmt with the six
+// x21 = letter (the RTA_LETTER field), x22 = the IRA entry. Calls _bk_x64_fmt with the six
 // register arguments x2..x7 followed by the letter: _bk_x64_fmt reads
 // only x2..x7, so the letter is emitted by a second call.
 // Clobbers: x0-x17, d0-d7, d16-d31
@@ -235,7 +235,12 @@ Lbk_x64_em_desc_call:
     str x19, [sp, #16]
     mov x19, x0
     bl _bk_x64_fmt
-    // ", <letter>, 0" closes the .long line
+    // ", <letter>, <cap>" closes the .long line; cap = (b1+1)*(b2+1)
+    ldr w9, [x22, #IRA_B1]
+    ldr w10, [x22, #IRA_B2]
+    add x9, x9, #1
+    add x10, x10, #1
+    mul x3, x9, x10
     mov x0, x19
     adrp x1, Lbk_x64_em_desc_tail@PAGE
     add x1, x1, Lbk_x64_em_desc_tail@PAGEOFF
@@ -276,7 +281,7 @@ Lbk_x64_em_desc_fmt:
     .ascii "    .quad .Lbsk_arr_%L\n"
     .asciz "    .long %u, %u, %u, %u"
 Lbk_x64_em_desc_tail:
-    .asciz ", %u, 0\n"
+    .asciz ", %u, %u\n"
 Lbk_x64_em_vars:
     .ascii "    .bss\n"
     .ascii "    .p2align 3\n"

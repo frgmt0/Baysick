@@ -254,7 +254,7 @@ Lcli_m_unknown: .asciz "unknown option '%s'"
 Lcli_m_missing: .asciz "missing argument for '%s'"
 Lcli_m_target:  .asciz "unknown target '%s'"
 Lcli_version_text:
-    .asciz "baysick 0.1.0 (Dartmouth BASIC, First Edition 1964)\n"
+    .asciz "baysick 0.2.0 (Dartmouth BASIC, Second Edition 1964)\n"
 Lcli_help_text:
     .ascii "usage: baysick <file.bas> [-o out] [-S] [--emit-ir] [--target arm64-macos] [--keep-temps]\n"
     .ascii "       baysick --help | -h | --version\n"

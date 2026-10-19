@@ -477,6 +477,93 @@ Lbk_in_op_end:
     FMT Lbk_in_bl_fmt
     b Lbk_in_next
 
+// ---- MAT statements (docs/DESIGN.md 5.3) ---------------------------------
+// MAT REDIM: x0 = &Ldesc_<X>, d0 = rows (A); with B: d1 = cols, redim2.
+Lbk_in_op_matredim:
+    mov w0, #0
+    mov x1, #IRI_X
+    bl Lbk_in_desc_reg
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_in_load
+    ldr w9, [x21, #IRI_B]
+    cmn w9, #1                      // IR_NONE: one-dimensional form
+    b.eq 1f
+    mov w0, w9
+    mov x1, #1
+    bl Lbk_in_load
+    adrp x2, Lbk_in_rt_mat_redim2@PAGE
+    add x2, x2, Lbk_in_rt_mat_redim2@PAGEOFF
+    b 2f
+1:
+    adrp x2, Lbk_in_rt_mat_redim1@PAGE
+    add x2, x2, Lbk_in_rt_mat_redim1@PAGEOFF
+2:
+    FMT Lbk_in_bl_fmt
+    b Lbk_in_next
+
+// MAT READ / ZER / CON / IDN: x0 = &Ldesc_<X>; bl _bsk_mat_<name>.
+Lbk_in_op_mat0:
+    mov w0, #0
+    mov x1, #IRI_X
+    bl Lbk_in_desc_reg
+    b Lbk_in_mat_call
+
+// MAT PRINT: x0 = &Ldesc_<X>, w1 = IMM (MATPR_*).
+Lbk_in_op_matprint:
+    mov w0, #0
+    mov x1, #IRI_X
+    bl Lbk_in_desc_reg
+    ldr x2, [x21, #IRI_IMM]
+    FMT Lbk_in_mov_w1
+    b Lbk_in_mat_call
+
+// MAT COPY / TRN / INV: x0 = &Ldesc_<X>, x1 = &Ldesc_<A>.
+Lbk_in_op_mat1:
+    mov w0, #0
+    mov x1, #IRI_X
+    bl Lbk_in_desc_reg
+    mov w0, #1
+    mov x1, #IRI_A
+    bl Lbk_in_desc_reg
+    b Lbk_in_mat_call
+
+// MAT ADD / SUB / MUL: x0 = X, x1 = A, x2 = B descriptors.
+Lbk_in_op_mat2:
+    mov w0, #0
+    mov x1, #IRI_X
+    bl Lbk_in_desc_reg
+    mov w0, #1
+    mov x1, #IRI_A
+    bl Lbk_in_desc_reg
+    mov w0, #2
+    mov x1, #IRI_B
+    bl Lbk_in_desc_reg
+    b Lbk_in_mat_call
+
+// MAT scale: x0 = &Ldesc_<X>, x1 = &Ldesc_<B>, d0 = scalar temp A.
+Lbk_in_op_matscale:
+    mov w0, #0
+    mov x1, #IRI_X
+    bl Lbk_in_desc_reg
+    mov w0, #1
+    mov x1, #IRI_B
+    bl Lbk_in_desc_reg
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_in_load
+    // fall through
+
+// common tail: bl <runtime name of the current MAT opcode>
+Lbk_in_mat_call:
+    ldrh w9, [x21, #IRI_OP]
+    sub w9, w9, #OP_MATREDIM
+    adrp x10, Lbk_in_mat_names@PAGE
+    add x10, x10, Lbk_in_mat_names@PAGEOFF
+    ldr x2, [x10, x9, lsl #3]
+    FMT Lbk_in_bl_fmt
+    b Lbk_in_next
+
 // common tail: store d0 into the DST temp's slot
 Lbk_in_store_dst:
     ldr w0, [x21, #IRI_DST]
@@ -540,9 +627,25 @@ Lbk_in_table:
     .long Lbk_in_op_prnl - Lbk_in_table         // OP_PRNL     39
     .long Lbk_in_op_end - Lbk_in_table          // OP_END      40
     .long Lbk_in_op_end - Lbk_in_table          // OP_STOP     41
+    .long Lbk_in_op_matredim - Lbk_in_table     // OP_MATREDIM 42
+    .long Lbk_in_op_mat0 - Lbk_in_table         // OP_MATREAD  43
+    .long Lbk_in_op_matprint - Lbk_in_table     // OP_MATPRINT 44
+    .long Lbk_in_op_mat0 - Lbk_in_table         // OP_MATZER   45
+    .long Lbk_in_op_mat0 - Lbk_in_table         // OP_MATCON   46
+    .long Lbk_in_op_mat0 - Lbk_in_table         // OP_MATIDN   47
+    .long Lbk_in_op_mat1 - Lbk_in_table         // OP_MATCOPY  48
+    .long Lbk_in_op_mat2 - Lbk_in_table         // OP_MATADD   49
+    .long Lbk_in_op_mat2 - Lbk_in_table         // OP_MATSUB   50
+    .long Lbk_in_op_mat2 - Lbk_in_table         // OP_MATMUL   51
+    .long Lbk_in_op_matscale - Lbk_in_table     // OP_MATSCALE 52
+    .long Lbk_in_op_mat1 - Lbk_in_table         // OP_MATTRN   53
+    .long Lbk_in_op_mat1 - Lbk_in_table         // OP_MATINV   54
 Lbk_in_table_end:
 .if (Lbk_in_table_end - Lbk_in_table) != 4 * OP_COUNT
     .error "a64_insn.s dispatch table does not cover OP_COUNT opcodes"
+.endif
+.if (OP_MATINV != OP_MATREDIM + 12) || (OP_MATPRINT != OP_MATREDIM + 2) || (OP_MATSCALE != OP_MATREDIM + 10)
+    .error "a64_insn.s MAT name table assumes opcodes 42..54 in contract order"
 .endif
 .if (OP_SUB != OP_ADD + 1) || (OP_MUL != OP_ADD + 2) || (OP_INT != OP_SIN + 8)
     .error "a64_insn.s name tables assume consecutive opcodes"
@@ -742,6 +845,35 @@ Lbk_in_desc_addr:
 Lbk_in_desc_bad:
     FAIL Lbk_in_err_letter
 
+// ---------------------------------------------------------------------
+// Lbk_in_desc_reg -- emit "adrp/add x<n>, Ldesc_<L>" where L is the
+// array letter held in the current record's field at offset x1.
+// In:  w0 = register number n, x1 = field offset (IRI_X/IRI_A/IRI_B),
+//      x21 = current record
+// Checks: the field is a letter of an array in use.
+// Frame: 16 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_in_desc_reg:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    ldr w3, [x21, x1]
+    cmp w3, #NUM_LETTERS
+    b.hs Lbk_in_desc_reg_bad
+    add x9, x20, #IRM_ARRAYS
+    add x9, x9, x3, lsl #4
+    ldr w9, [x9, #IRA_DIMS]
+    cbz w9, Lbk_in_desc_reg_bad
+    mov w2, w0
+    mov x4, x2
+    mov x5, x2
+    mov x6, x3
+    FMT Lbk_in_desc_reg_fmt
+    ldp x29, x30, [sp], #16
+    ret
+Lbk_in_desc_reg_bad:
+    FAIL Lbk_in_err_letter
+
 // ======================================================================
 // Text templates
 // ======================================================================
@@ -794,6 +926,11 @@ Lbk_in_bl_fn:
 Lbk_in_desc_fmt:
     .ascii "    adrp x0, Ldesc_%L@PAGE\n"
     .asciz "    add x0, x0, Ldesc_%L@PAGEOFF\n"
+Lbk_in_desc_reg_fmt:
+    .ascii "    adrp x%u, Ldesc_%L@PAGE\n"
+    .asciz "    add x%u, x%u, Ldesc_%L@PAGEOFF\n"
+Lbk_in_mov_w1:
+    .asciz "    mov w1, #%u\n"
 Lbk_in_ldr_elem:
     .asciz "    ldr d0, [x0]\n"
 Lbk_in_str_elem:
@@ -859,6 +996,20 @@ Lbk_in_rt_abs:      .asciz "_bsk_abs"
 Lbk_in_rt_log:      .asciz "_bsk_log"
 Lbk_in_rt_sqr:      .asciz "_bsk_sqr"
 Lbk_in_rt_int:      .asciz "_bsk_int"
+Lbk_in_rt_mat_redim1: .asciz "_bsk_mat_redim1"
+Lbk_in_rt_mat_redim2: .asciz "_bsk_mat_redim2"
+Lbk_in_rt_mat_read:   .asciz "_bsk_mat_read"
+Lbk_in_rt_mat_print:  .asciz "_bsk_mat_print"
+Lbk_in_rt_mat_zer:    .asciz "_bsk_mat_zer"
+Lbk_in_rt_mat_con:    .asciz "_bsk_mat_con"
+Lbk_in_rt_mat_idn:    .asciz "_bsk_mat_idn"
+Lbk_in_rt_mat_copy:   .asciz "_bsk_mat_copy"
+Lbk_in_rt_mat_add:    .asciz "_bsk_mat_add"
+Lbk_in_rt_mat_sub:    .asciz "_bsk_mat_sub"
+Lbk_in_rt_mat_mul:    .asciz "_bsk_mat_mul"
+Lbk_in_rt_mat_scale:  .asciz "_bsk_mat_scale"
+Lbk_in_rt_mat_trn:    .asciz "_bsk_mat_trn"
+Lbk_in_rt_mat_inv:    .asciz "_bsk_mat_inv"
 Lbk_in_fadd:        .asciz "fadd"
 Lbk_in_fsub:        .asciz "fsub"
 Lbk_in_fmul:        .asciz "fmul"
@@ -892,6 +1043,14 @@ Lbk_in_builtin_names:
     .quad Lbk_in_rt_sin, Lbk_in_rt_cos, Lbk_in_rt_tan, Lbk_in_rt_atn
     .quad Lbk_in_rt_exp, Lbk_in_rt_abs, Lbk_in_rt_log, Lbk_in_rt_sqr
     .quad Lbk_in_rt_int
+// indexed by opcode - OP_MATREDIM (the redim slot is never read: the
+// handler picks redim1/redim2 itself)
+Lbk_in_mat_names:
+    .quad Lbk_in_rt_mat_redim1, Lbk_in_rt_mat_read, Lbk_in_rt_mat_print
+    .quad Lbk_in_rt_mat_zer, Lbk_in_rt_mat_con, Lbk_in_rt_mat_idn
+    .quad Lbk_in_rt_mat_copy, Lbk_in_rt_mat_add, Lbk_in_rt_mat_sub
+    .quad Lbk_in_rt_mat_mul, Lbk_in_rt_mat_scale, Lbk_in_rt_mat_trn
+    .quad Lbk_in_rt_mat_inv
 // indexed by relation - REL_EQ: condition that SKIPS the jump
 Lbk_in_inverse_cc:
     .quad Lbk_in_cc_ne              // eq -> ne
