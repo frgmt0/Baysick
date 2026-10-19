@@ -314,3 +314,7 @@ interface for the descriptor and §Runtime ABI for the calls). A minimal, correc
    `_bsk_gosub_push` and jumps; `return` calls `_bsk_gosub_pop` and jumps indirectly to the result.
 
 Nothing else is needed; all language rules live in the runtime or are explicit opcodes.
+
+Two backends follow this recipe and are specified instruction by instruction: `arm64-macos`
+(DESIGN.md §5.3) and `x86_64-linux` (DESIGN.md §5.4). The IR is identical for both; only the
+descriptor, the emitted syntax and the runtime ABI names/registers (DESIGN.md §6.4) differ.

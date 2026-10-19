@@ -20,13 +20,13 @@
 .equ SCAN_OPERATOR,     1
 
 // ---- Token kinds ------------------------------------------------------
-.equ TK_EOL,            0   // end of compacted line
-.equ TK_NUMBER,         1   // numeric constant; value in TOK_VALUE (double bits)
-.equ TK_STRING,         2   // "..." ; TOK_PTR/TOK_LEN = contents without quotes
-.equ TK_VAR,            3   // simple variable; TOK_SLOT = scalar slot (0..285)
-.equ TK_ARRAY,          4   // letter immediately followed by '('; TOK_INDEX = letter 0..25 ('(' consumed)
-.equ TK_FN,             5   // FNx immediately followed by '('; TOK_INDEX = 0..25 ('(' consumed)
-.equ TK_BUILTIN,        6   // builtin name; TOK_INDEX = BI_*; '(' consumed unless bare RND
+.equ TK_EOL,            0   /* end of compacted line */
+.equ TK_NUMBER,         1   /* numeric constant; value in TOK_VALUE (double bits) */
+.equ TK_STRING,         2   /* "..." ; TOK_PTR/TOK_LEN = contents without quotes */
+.equ TK_VAR,            3   /* simple variable; TOK_SLOT = scalar slot (0..285) */
+.equ TK_ARRAY,          4   /* letter immediately followed by '('; TOK_INDEX = letter 0..25 ('(' consumed) */
+.equ TK_FN,             5   /* FNx immediately followed by '('; TOK_INDEX = 0..25 ('(' consumed) */
+.equ TK_BUILTIN,        6   /* builtin name; TOK_INDEX = BI_*; '(' consumed unless bare RND */
 .equ TK_LPAREN,         7
 .equ TK_RPAREN,         8
 .equ TK_COMMA,          9
@@ -35,27 +35,27 @@
 .equ TK_MINUS,          12
 .equ TK_STAR,           13
 .equ TK_SLASH,          14
-.equ TK_POW,            15  // '^' (also from UTF-8 '↑')
-.equ TK_EQ,             16  // '='
-.equ TK_NE,             17  // '<>'
-.equ TK_LT,             18  // '<'
-.equ TK_LE,             19  // '<='
-.equ TK_GT,             20  // '>'
-.equ TK_GE,             21  // '>='
-.equ TK_THEN,           22  // keyword THEN (operator mode only)
-.equ TK_TO,             23  // keyword TO   (operator mode only)
-.equ TK_STEP,           24  // keyword STEP (operator mode only)
-.equ TK_BAD,            25  // anything else; TOK_ERR holds the error code to report
+.equ TK_POW,            15  /* '^' (also from UTF-8 '↑') */
+.equ TK_EQ,             16  /* '=' */
+.equ TK_NE,             17  /* '<>' */
+.equ TK_LT,             18  /* '<' */
+.equ TK_LE,             19  /* '<=' */
+.equ TK_GT,             20  /* '>' */
+.equ TK_GE,             21  /* '>=' */
+.equ TK_THEN,           22  /* keyword THEN (operator mode only) */
+.equ TK_TO,             23  /* keyword TO   (operator mode only) */
+.equ TK_STEP,           24  /* keyword STEP (operator mode only) */
+.equ TK_BAD,            25  /* anything else; TOK_ERR holds the error code to report */
 .equ TK_COUNT,          26
 
 // ---- Token record (filled by the scanner), 40 bytes --------------------
-.equ TOK_KIND,          0   // u32 TK_*
-.equ TOK_INDEX,         4   // u32 letter / builtin / fn index
-.equ TOK_SLOT,          8   // u32 scalar slot for TK_VAR
-.equ TOK_LEN,           12  // u32 string length
-.equ TOK_PTR,           16  // ptr  string contents / token start
-.equ TOK_VALUE,         24  // u64 IEEE-754 bits for TK_NUMBER
-.equ TOK_ERR,           32  // u32 ERR_* for TK_BAD (ILLEGAL CONSTANT, ILLEGAL FORMULA, ...)
+.equ TOK_KIND,          0   /* u32 TK_* */
+.equ TOK_INDEX,         4   /* u32 letter / builtin / fn index */
+.equ TOK_SLOT,          8   /* u32 scalar slot for TK_VAR */
+.equ TOK_LEN,           12  /* u32 string length */
+.equ TOK_PTR,           16  /* ptr  string contents / token start */
+.equ TOK_VALUE,         24  /* u64 IEEE-754 bits for TK_NUMBER */
+.equ TOK_ERR,           32  /* u32 ERR_* for TK_BAD (ILLEGAL CONSTANT, ILLEGAL FORMULA, ...) */
 .equ TOK_SIZE,          40
 
 // ---- Builtin function ids (TOK_INDEX for TK_BUILTIN), source order ------

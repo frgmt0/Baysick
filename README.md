@@ -22,17 +22,20 @@ to whole numbers, `E` form below 0.1, and so on.
 
 ## Status
 
-The design phase is complete: the language specification, architecture, IR, contract include
-files, build system and test corpus exist; the compiler and runtime sources are being written
-(see `docs/DESIGN.md` §2 for the module split). Until then `make` stops with a message saying
-which modules are missing.
+Two targets:
+
+* **`arm64-macos`** (default) — complete: `make test` passes the whole corpus.
+* **`x86_64-linux`** — cross target: the compiler, still running on the Mac, emits GNU `as`
+  x86_64 assembly; it is assembled and linked on an x86_64 Linux machine against an x86_64
+  runtime (also hand-written assembly). Specified in `docs/DESIGN.md` §5.4, §6.4 and §8; the
+  backend and runtime are being implemented (module split: `docs/DESIGN.md` §2).
 
 ## Documents
 
 * `docs/LANGUAGE.md` — normative language spec (statements, number format, errors, limits),
   based on the 1964 Dartmouth manual, with every deviation marked "Baysick decision".
-* `docs/DESIGN.md` — modules and file ownership, conventions, CLI, backend interface, runtime ABI,
-  and how an x86_64-linux port would work.
+* `docs/DESIGN.md` — modules and file ownership, conventions, CLI, backend interface, runtime ABI
+  for both targets, the Linux build and the cross-test setup.
 * `docs/IR.md` — the IR: opcodes, layouts, canonical lowering, `--emit-ir` text format, and how
   to write a new backend.
 * `include/*.inc` — the binary contract shared by all modules.
@@ -51,14 +54,35 @@ make clean
 Usage:
 
 ```
-build/baysick prog.bas [-o prog] [-S] [--emit-ir] [--target arm64-macos] [--keep-temps]
+build/baysick prog.bas [-o prog] [-S] [--emit-ir] [--target arm64-macos|x86_64-linux] [--keep-temps]
 ```
 
 The compiler looks for its runtime next to itself (`build/libbaysickrt.a`) unless
 `BAYSICK_RUNTIME` names another path.
 
+### x86_64-linux
+
+`build/baysick --target x86_64-linux prog.bas` writes `prog.s` (x86_64 GNU assembler text) and
+runs no tools. On an x86_64 Linux machine with GNU `as`, `ar`, `make` and `gcc`, build the
+runtime once from a checkout and link:
+
+```
+make -f Makefile.linux                       # build-x86_64-linux/libbaysickrt.a
+as --64 -o prog.o prog.s
+gcc -no-pie -o prog prog.o build-x86_64-linux/libbaysickrt.a -lm
+```
+
+Cross testing from the Mac (compile here, assemble/link/run there over `ssh`, nothing left
+behind on the remote machine):
+
+```
+make cross                                   # sh tests/cross.sh, host "desktop"
+sh tests/cross.sh -H otherhost [-v] [PATTERN...]
+make cross-pack                              # only build build/x86_64-linux-bundle (used by CI)
+```
+
+CI runs `make test` on macOS, packs the bundle, and runs it on an `ubuntu-latest` x86_64 job.
+
 ## Future
 
-* An `x86_64-linux` backend emitting GNU assembler text to be assembled on an x86_64 Arch Linux
-  machine, plus a matching runtime (`docs/DESIGN.md` §7).
 * Long-term: use Baysick as the foundation for **Sea**, an implementation of C.

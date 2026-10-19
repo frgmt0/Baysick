@@ -57,9 +57,15 @@ $(BUILD)/obj/%.o: src/%.s $(INCLUDES)
 	@mkdir -p $(dir $@)
 	$(AS) $(ASFLAGS) -o $@ $<
 
-check-includes: $(INCLUDES) tests/include_check.s
+# The include files are shared with the x86_64-linux runtime (GNU as), where
+# `//` only starts a comment at the beginning of a line: a trailing comment
+# must be written /* ... */ (docs/DESIGN.md section 3.4). The grep enforces it.
+check-includes: $(INCLUDES) tests/include_check.s tests/include_asserts.inc
 	@mkdir -p $(BUILD)
-	$(AS) $(ASFLAGS) -o $(BUILD)/include_check.o tests/include_check.s
+	@if grep -nE '^[[:space:]]*[^[:space:]/].*//' $(INCLUDES) tests/include_asserts.inc; then \
+	  echo "make: trailing // comment in a shared include file (use /* ... */)" >&2; exit 1; \
+	fi
+	$(AS) $(ASFLAGS) -I tests -o $(BUILD)/include_check.o tests/include_check.s
 	@echo "include files assemble and layout assertions hold"
 
 test: check-includes all

@@ -27,19 +27,33 @@ backend interface and the runtime ABI. Language behaviour: `docs/LANGUAGE.md`. I
 The compiler (`build/baysick`) and the runtime (`build/libbaysickrt.a`) are both hand-written
 arm64 assembly for Apple's assembler. They use libSystem (libc/libm) as the system interface.
 
+There are two targets. **`arm64-macos`** (default) runs the whole pipeline above. **`x86_64-linux`**
+is a cross target: the same compiler, running on the Mac, emits GNU `as` x86_64 assembly (§5.4)
+and stops there (as if `-S` were given); the `.s` file is assembled and linked on an x86_64 Linux
+machine against the x86_64 runtime (`src/runtime_x86_64_linux/`, x86_64 assembly, §6.4), which is
+built on Linux with `make -f Makefile.linux` (§8).
+
 ## 2. Repository layout and ownership
 
-Four implementers work in parallel. **Each owns only its directory**; it may add, split or
-rename files *inside* its directory (the Makefile globs `*.s`). Nobody edits another module's
-files. The only shared files are `include/*.inc` (read-only for implementers; changed only by
-the architect together with the docs).
+Implementers work in parallel. **Each owns only its directory or files**; it may add, split or
+rename files *inside* its directory (the Makefiles glob `*.s`). Nobody edits another module's
+files. The shared files are `include/*.inc` and `tests/include_asserts.inc` (read-only for
+implementers; changed only by the architect together with the docs).
 
-| Module | Owner | Directory | Exports (Mach-O symbols) |
-|--------|-------|-----------|--------------------------|
+| Module | Owner | Directory / files | Exports |
+|--------|-------|-------------------|---------|
 | Frontend | implementer F | `src/frontend/` | `_fe_compile` |
-| IR + Driver | implementer D | `src/ir/`, `src/driver/` | `_main` (compiler), `_ir_*` (ir.inc), `_drv_alloc`, `_drv_fatal`, `_ob_*` (driver.inc), `_drv_targets` |
-| Backend | implementer B | `src/backend/arm64_macos/` | `_bk_arm64_macos_desc` |
-| Runtime | implementer R | `src/runtime/` | everything in runtime.inc "defined by the runtime" |
+| IR + Driver | implementer D | `src/ir/`, `src/driver/` (except the one `targets.s` line owned by BX) | `_main` (compiler), `_ir_*` (ir.inc), `_drv_alloc`, `_drv_fatal`, `_ob_*` (driver.inc), `_drv_targets` |
+| Backend arm64-macos | implementer B | `src/backend/arm64_macos/` | `_bk_arm64_macos_desc` |
+| Runtime arm64-macos | implementer R | `src/runtime/` | everything in runtime.inc "defined by the runtime" (Mach-O names) |
+| Backend x86_64-linux | implementer BX | `src/backend/x86_64_linux/`, plus the line `.quad _bk_x86_64_linux_desc` in `src/driver/targets.s` | `_bk_x86_64_linux_desc` (Mach-O symbol inside the compiler) |
+| Runtime x86_64-linux | implementer RX | `src/runtime_x86_64_linux/` | the §6.4 ELF symbols (`main`, `bsk_*`) |
+| Cross testing + CI | implementer T | `Makefile.linux`, `tests/cross_pack.sh`, `tests/cross_run.sh`, `tests/cross.sh`, the `cross`/`cross-pack` targets and `COMPILER_DIRS` entry in `Makefile`, `.github/workflows/ci.yml` | — |
+
+BX writes arm64 assembly for Apple `as` (it is part of the compiler, §3); RX writes x86_64
+assembly for GNU `as` (§6.4). BX and RX never call into each other's or the arm64 modules'
+private code: their only shared contract is §5.4 (what the emitted `.s` contains) and §6.4 (what
+the runtime provides).
 
 Required initial file split (owners may refine within their directory):
 
@@ -72,11 +86,25 @@ src/runtime/rt_array.s      _bsk_aref1 _bsk_aref2
 src/runtime/rt_data.s       _bsk_read
 src/runtime/rt_gosub.s      _bsk_gosub_push _bsk_gosub_pop
 src/runtime/rt_error.s      _bsk_err, message table (BSK_EMIT_ERRMSG_TABLE)
+src/backend/x86_64_linux/x64_desc.s   _bk_x86_64_linux_desc + argv templates (§5.4)
+src/backend/x86_64_linux/x64_emit.s   _bk_x64_emit: module-level emission (§5.4 skeleton)
+src/backend/x86_64_linux/x64_insn.s   frames and per-opcode emission (§5.4 tables)
+src/backend/x86_64_linux/x64_text.s   text helpers (formatted output of x86 operands/immediates)
+src/runtime_x86_64_linux/rt_main.s    main, bsk_end, bsk_curline
+src/runtime_x86_64_linux/rt_print.s   column logic, output buffer, bsk_print_*
+src/runtime_x86_64_linux/rt_numfmt.s  number formatting (LANGUAGE.md §9)
+src/runtime_x86_64_linux/rt_math.s    bsk_div bsk_pow bsk_chk and builtins
+src/runtime_x86_64_linux/rt_rnd.s     bsk_rnd
+src/runtime_x86_64_linux/rt_array.s   bsk_aref1 bsk_aref2
+src/runtime_x86_64_linux/rt_data.s    bsk_read
+src/runtime_x86_64_linux/rt_gosub.s   bsk_gosub_push bsk_gosub_pop
+src/runtime_x86_64_linux/rt_error.s   bsk_err, message table (BSK_EMIT_ERRMSG_TABLE)
 ```
 
 Dependencies (who calls whom): driver → frontend, ir, backend (via descriptor); frontend → ir
-builder, `_drv_alloc`, libc `_strtod`; backend → `_ob_*`, `_drv_alloc` (reads the Module
-directly through `ir.inc` offsets); ir → `_drv_alloc`, `_ob_*`; runtime → libSystem only.
+builder, `_drv_alloc`, libc `_strtod`; backends → `_ob_*`, `_drv_alloc` (read the Module
+directly through `ir.inc` offsets); ir → `_drv_alloc`, `_ob_*`; runtime → libSystem only;
+x86_64 runtime → glibc/libm only (§6.4).
 Because every cross-module call is declared in an include file, each module can be unit-assembled
 alone, and integration only needs the link.
 
@@ -138,6 +166,25 @@ and copying (`_memcpy`); the old block is abandoned. Text output is built in `Ou
 * `.p2align 2` before code, `.p2align 3` before 8-byte data.
 * Every source file begins `.include "baysick.inc"` (assembled with `-I include`).
 
+The rules above are for the compiler and the arm64 runtime. The x86_64 runtime has its own
+style rules (§6.4.4).
+
+**Shared include files** (`include/*.inc`, `tests/include_asserts.inc`) are assembled by Apple
+`as` (arm64) *and* by GNU `as` (x86_64, `--64`), so they use only the syntax both accept:
+
+* comments: `//` only as the first non-blank characters of a line (GNU `as` for x86 treats `/`
+  as a comment character only at the start of a line); a trailing comment after code is written
+  `/* … */`; never `;` or `#` comments;
+* only arch-neutral directives: `.equ`, `.ifndef`/`.if`/`.endif`, `.macro`/`.endm`, `.quad`,
+  `.asciz`, `.p2align`, `.error`; no instructions, no section directives (the instantiating file
+  chooses the section);
+* a condition passed to a macro is fully parenthesised (`ASSERT (A == B), "…"`), because GNU `as`
+  reads a bare `NAME == x` argument as the keyword argument `NAME=`.
+
+`make check-includes` rejects trailing `//` comments (grep) and assembles `tests/include_check.s`
+with Apple `as`; `make -f Makefile.linux check-includes` assembles `tests/include_check_x86_64.s`
+with GNU `as`. Both include `tests/include_asserts.inc`.
+
 ## 4. Driver and CLI
 
 ### 4.1 Command line
@@ -150,7 +197,10 @@ baysick --version            "baysick 0.1.0 (Dartmouth BASIC, First Edition 1964
 
 * Options and the input file may appear in any order; exactly one input file is required.
   `-o` and `--target` take the next argument. If an option is repeated, the last one wins.
-* Default `--target` is `arm64-macos`.
+* Default `--target` is `arm64-macos`. The other target is `x86_64-linux` (§5.4); its descriptor
+  has no `BKF_HOST_NATIVE`, so `baysick --target x86_64-linux prog.bas` writes `prog.s` (or the
+  `-o` path) exactly like `-S` and runs no tools; `--keep-temps` has no effect there. The usage
+  and help texts are unchanged (they name the default target only).
 * Output naming: *stem* = the input path with a trailing `.bas` removed, or the input path with
   `.out` appended if it does not end in `.bas`.
 
@@ -376,6 +426,209 @@ Overflow check after `fadd/fsub/fmul` (result in `d0`):
 Unconditional branches (`b`, range ±128 MiB) are used for all jumps; conditional branches only
 skip a few instructions, so program size never breaks branch ranges.
 
+### 5.4 x86_64-linux target (implementer BX; normative for the emitted text)
+
+The backend lives in `src/backend/x86_64_linux/` and is part of the compiler: **arm64 assembly
+for Apple `as`**, AAPCS64, all §3 rules, global symbols prefixed `_bk_x64_` (the descriptor is
+`_bk_x86_64_linux_desc`). It *emits* x86_64 text as specified here. BX also adds the line
+`.quad _bk_x86_64_linux_desc` to `_drv_targets` (`src/driver/targets.s`) after the arm64 entry,
+before the terminating 0.
+
+#### 5.4.1 Descriptor
+
+| Field | Value |
+|-------|-------|
+| `BKD_NAME` | `"x86_64-linux"` |
+| `BKD_EMIT` | `_bk_x64_emit` |
+| `BKD_AS_ARGV` | `"as" "--64" "-o" PH_OBJ PH_ASM` |
+| `BKD_LD_ARGV` | `"gcc" "-no-pie" "-o" PH_EXE PH_OBJ PH_RUNTIME "-lm"` |
+| `BKD_FLAGS` | `0` (no `BKF_HOST_NATIVE`) |
+| `BKD_ASM_SUFFIX` / `BKD_OBJ_SUFFIX` | `".s"` / `".o"` |
+| `BKD_RUNTIME_NAME` | `"libbaysickrt.a"` |
+
+Because `BKF_HOST_NATIVE` is clear the macOS driver never substitutes or spawns the templates
+(§4.1: the target behaves as `-S`). They are nevertheless real, complete argv templates (no
+`PH_SDK`): they record the exact commands that turn the `.s` into an executable on Linux, and
+`tests/cross_run.sh` runs precisely these commands (`PH_RUNTIME` =
+`build-x86_64-linux/libbaysickrt.a`, §8). The runtime provides `main`; `gcc` supplies the C start
+files and libc; `-no-pie` matches the absolute pointers in `.data` (array descriptors) and the
+direct `call bsk_*` / `bsk_curline(%rip)` references, all resolved at static link time.
+
+#### 5.4.2 Syntax and naming
+
+* **GNU `as`, AT&T syntax** (its default; never `.intel_syntax`), x86_64 ELF, `#` comments, one
+  instruction per line, 4-space indent, labels in column 0. Chosen over `.intel_syntax noprefix`
+  because it is GNU `as`'s, `gcc -S`'s and `objdump -d`'s default (generated code can be diffed
+  against both without translation); `$imm`, `sym(%rip)` and `(%reg)` make immediate vs memory
+  operands explicit (Intel `mov rax, sym` silently loads memory where `offset sym` was meant, and
+  a noprefix symbol can collide with a register name); operand size comes from the mnemonic
+  suffix (`movq`, `movl`), never from `qword ptr`. The x86_64 runtime uses the same syntax.
+* **Symbols:** ELF, no leading underscore. The output defines exactly three global symbols:
+  `bsk_program`, `bsk_data`, `bsk_data_count`. Everything else is an assembler-local `.L` name
+  (not in the object's symbol table):
+
+  | Name | Meaning |
+  |------|---------|
+  | `.Lbsk_L<id>` | label id `<id>` of `main` (line and internal labels alike) |
+  | `.Lfn_<L>` | FN function `<L>` (`A`…`Z`) |
+  | `.Lstr_<id>` | PRINT string literal `<id>` |
+  | `.Ldesc_<L>` | 32-byte `RTA_*` descriptor of array `<L>` |
+  | `.Lbsk_vars` | the `NSLOTS` global cells |
+  | `.Lbsk_arr_<L>` | element storage of array `<L>` |
+
+  Numeric local labels `1:`, `2:`, `3:` (referenced as `1f` …) are used only inside one opcode's
+  sequence below. All numbers in the output are decimal except `0x` + 16 uppercase hex digits for
+  IEEE bit patterns.
+
+#### 5.4.3 Output skeleton (in this order)
+
+```
+# generated by baysick
+    .text
+    .globl bsk_program
+    .type bsk_program, @function
+    .p2align 4
+bsk_program:            main function
+    .p2align 4
+.Lfn_A:                 each present FN function, letter order, each preceded by .p2align 4
+    .section .rodata
+.Lstr_0:                each literal as lines "    .byte 65, 32, 61" (decimal, at most 16 per
+                        line); an empty literal is the label alone
+    .p2align 3
+    .globl bsk_data
+    .type bsk_data, @object
+bsk_data:               "    .quad 0x<16 uppercase hex>" per DATA value (none if NDATA = 0)
+    .globl bsk_data_count
+    .type bsk_data_count, @object
+bsk_data_count:
+    .quad <NDATA>
+    .data
+    .p2align 3
+.Ldesc_<L>:             per used array, letter order:
+    .quad .Lbsk_arr_<L>
+    .long <dims>, <b1>, <b2>, <rowlen>, <letter>, 0
+    .bss
+    .p2align 3
+.Lbsk_vars:
+    .zero <8*NSLOTS>
+    .p2align 3          per used array, letter order:
+.Lbsk_arr_<L>:
+    .zero <8*(b1+1)*(b2+1)>
+    .section .note.GNU-stack,"",@progbits
+```
+
+`.section .rodata`, `.data` and `.bss` headers are emitted even when no item follows them. The
+final `.note.GNU-stack` line marks the stack non-executable (without it GNU `ld` warns and makes
+the stack executable). `rowlen` = `b2+1` for tables, `1` for lists; `b2` = 0 for lists (as §5.3).
+
+#### 5.4.4 Frames and temps
+
+Temps live in 8-byte stack slots; slot(t) = t − *base* and the temp-area width W are defined
+exactly as in §5.3 (slots reused per `line`). Every generated function:
+
+```
+    pushq %rbp
+    movq  %rsp, %rbp
+    pushq %rbx                       # rbx = &.Lbsk_vars for the whole function
+    subq  $<F>, %rsp                 # F = align16(8*W + 16) - 8
+    leaq  .Lbsk_vars(%rip), %rbx
+    movsd %xmm0, <8*W>(%rsp)         # FN functions only: save the argument
+    … body …
+    movq  -8(%rbp), %rbx             # epilogue, FN functions only (emitted by `ret`)
+    leave
+    ret
+```
+
+* Temp slot *s* is `<8*s>(%rsp)`; the FN argument slot is `<8*W>(%rsp)`. `%rsp` never moves
+  inside the body. Alignment: at entry `%rsp` ≡ 8 (mod 16); after the two pushes it is still ≡ 8;
+  F ≡ 8 (mod 16), so `%rsp` ≡ 0 at every `call` in the body, as the System V ABI requires.
+  F ≥ 8W + 8, so the temps and the argument slot fit.
+* Global cell *x* is `<8*x>(%rbx)`. `%rbx` is callee-saved in the System V ABI, so it survives
+  every runtime call; it is saved/restored because the caller (`main` in the runtime, or the
+  calling BASIC function) relies on it.
+* All displacements fit a signed 32-bit displacement (largest global offset
+  8 × (286 + 2·1000 − 1) = 18288); the assembler chooses the encoding.
+* Registers used by generated code: `%rax %rcx %rdi %rsi %xmm0 %xmm1 %xmm2` as scratch, `%rbx`
+  globals base, `%rbp` frame pointer. No value is kept in a register across a `call`.
+* `bsk_program` never returns (main ends with `end`); FN functions return through the epilogue,
+  result in `%xmm0`.
+
+#### 5.4.5 Per-opcode translation
+
+`S(t)` denotes `<8*slot(t)>(%rsp)`, `V(x)` denotes `<8*x>(%rbx)`, "store" means
+`movsd %xmm0, S(DST)`.
+
+| Op | x86_64 sequence |
+|----|-----------------|
+| `line` | `.Lbsk_L<id>:` then `movl $<n>, bsk_curline(%rip)` (`bsk_curline` is the runtime's u32) |
+| `label` | `.Lbsk_L<id>:` |
+| `const` | `movabsq $0x<16 uppercase hex>, %rax` / `movq %rax, S(DST)` |
+| `ldv` | `movsd V(x), %xmm0` / store |
+| `stv` | `movsd S(A), %xmm0` / `movsd %xmm0, V(x)` |
+| `add sub mul` | `movsd S(A), %xmm0` / `addsd`\|`subsd`\|`mulsd S(B), %xmm0` / overflow check (below) / store |
+| `div` `pow` | `movsd S(A), %xmm0` / `movsd S(B), %xmm1` / `call bsk_div`\|`call bsk_pow` / store |
+| `neg` | `movq S(A), %rax` / `btcq $63, %rax` / `movq %rax, S(DST)` (sign-bit flip, never errors) |
+| builtins | `movsd S(A), %xmm0` / `call bsk_sin` … `bsk_int` / store |
+| `rnd` | `call bsk_rnd` / store |
+| `ald1` | `leaq .Ldesc_<L>(%rip), %rdi` / `movsd S(A), %xmm0` / `call bsk_aref1` / `movsd (%rax), %xmm0` / store |
+| `ald2` | `leaq .Ldesc_<L>(%rip), %rdi` / `movsd S(A), %xmm0` / `movsd S(B), %xmm1` / `call bsk_aref2` / `movsd (%rax), %xmm0` / store |
+| `ast1` | `leaq .Ldesc_<L>(%rip), %rdi` / `movsd S(A), %xmm0` / `call bsk_aref1` / `movsd S(B), %xmm0` / `movsd %xmm0, (%rax)` |
+| `ast2` | `leaq .Ldesc_<L>(%rip), %rdi` / `movsd S(A), %xmm0` / `movsd S(B), %xmm1` / `call bsk_aref2` / `movsd S(C), %xmm0` / `movsd %xmm0, (%rax)` |
+| `callfn` | `movsd S(A), %xmm0` / `call .Lfn_<L>` / store |
+| `param` | `movsd <8*W>(%rsp), %xmm0` / store |
+| `ret` | `movsd S(A), %xmm0` / epilogue (`movq -8(%rbp), %rbx` / `leave` / `ret`) |
+| `jmp` | `jmp .Lbsk_L<id>` |
+| `jcmp` | `movsd S(A), %xmm0` / `ucomisd S(B), %xmm0` / `j<cc> .Lbsk_L<id>` with eq→`je`, ne→`jne`, lt→`jb`, le→`jbe`, gt→`ja`, ge→`jae` |
+| `jfor` | sequence below |
+| `gosub` | `leaq .Lbsk_L<ret>(%rip), %rdi` / `call bsk_gosub_push` / `jmp .Lbsk_L<target>` |
+| `return` | `call bsk_gosub_pop` / `jmp *%rax` |
+| `read` | `call bsk_read` / store |
+| `prnum` | `movsd S(A), %xmm0` / `call bsk_print_num` |
+| `prstr` | `leaq .Lstr_<id>(%rip), %rdi` / `movl $<len>, %esi` / `call bsk_print_str` |
+| `prcomma prsemi prnl` | `call bsk_print_comma` / `call bsk_print_semi` / `call bsk_print_nl` |
+| `end` `stop` | `call bsk_end` |
+
+**Compare semantics.** In AT&T order, `ucomisd X, %xmm0` compares `%xmm0` *with* X and sets only
+ZF/PF/CF (OF = SF = 0): ZF = 1 if equal, CF = 1 if `%xmm0` < X, PF = 1 if unordered. The
+*unsigned* condition codes are therefore the correct ones (`jb jbe ja jae`; never `jl jle jg
+jge`). NaN cannot occur (every arithmetic result is checked), so PF is never consulted.
+x86 conditional jumps reach ±2 GiB, so `jcmp` branches straight to its label (no inverse-and-skip
+as on arm64).
+
+`jfor A=v, B=l, C=s, X` (exhausted(v,l,s) = (s ≥ 0 and v > l) or (s < 0 and v < l)):
+
+```
+    movsd   S(A), %xmm0              # v
+    movsd   S(B), %xmm1              # l
+    xorpd   %xmm2, %xmm2             # 0.0
+    ucomisd S(C), %xmm2              # compare 0.0 with s
+    ja      2f                       # 0 > s: negative step
+    ucomisd %xmm1, %xmm0             # s >= 0 (also s = -0): exhausted if v > l
+    ja      .Lbsk_L<X>
+    jmp     3f
+2:
+    ucomisd %xmm1, %xmm0             # s < 0: exhausted if v < l
+    jb      .Lbsk_L<X>
+3:
+```
+
+**Overflow check** after `addsd/subsd/mulsd` (result in `%xmm0`; an integer compare of the bit
+pattern: `|x|` < +∞ exactly when x is finite, NaN patterns compare above +∞):
+
+```
+    movq    %xmm0, %rax
+    btrq    $63, %rax                # bits of |x|
+    movabsq $0x7FF0000000000000, %rcx  # bits of +infinity
+    cmpq    %rcx, %rax
+    jb      1f                       # finite
+    movl    $38, %edi                # ERR_OVERFLOW
+    call    bsk_err
+1:
+```
+
+The error code is written as its decimal value (the emitted file includes nothing); BX takes it
+from `ERR_OVERFLOW` in `errors.inc`, never from a literal in its own source.
+
 ## 6. Runtime ABI
 
 ### 6.1 Program startup and state
@@ -439,35 +692,246 @@ apply LANGUAGE.md §9 itself. Integers below 10⁹ are converted with integer ar
 * Each `line` instruction stores the BASIC line number in `_bsk_curline`; run-time messages use
   the value current at the time of the error.
 
-## 7. Porting: an `x86_64-linux` backend and runtime (not implemented)
+### 6.4 Runtime ABI on x86_64-linux (implementer RX)
 
-The design keeps every target-specific decision behind the descriptor and the runtime ABI:
+`src/runtime_x86_64_linux/` implements **the same entry points with exactly the §6.1–6.3
+semantics** — same state, same initial values, same PRINT column logic, same number format
+algorithm, same RND arithmetic, same error texts, exit statuses and broken-stdout rule
+(LANGUAGE.md §10) — for x86_64 Linux (glibc), under ELF names and the System V AMD64 ABI. Every
+test in `tests/programs` and every run-phase test in `tests/errors` must produce byte-identical
+stdout/stderr and the same exit status on both targets.
 
-1. **Backend** `src/backend/x86_64_linux/` exporting `_bk_x86_64_linux_desc` (added to
-   `_drv_targets`). `BKD_FLAGS = 0`, so the macOS driver only writes the `.s` file. It emits GNU
-   `as` syntax (AT&T, or `.intel_syntax noprefix`) for ELF: no leading underscore on symbols
-   (`bsk_program`, `bsk_print_num`, …), sections `.text/.rodata/.data/.bss`, RIP-relative
-   addressing (`lea Lstr_0(%rip), %rdi`), System V ABI (args `rdi rsi rdx …`, `xmm0–xmm7`, result
-   `rax`/`xmm0`, callee-saved `rbx rbp r12–r15`, 16-byte stack alignment at `call`).
-   Translation is the same as §5.3: temps in `[rbp - 8*(slot+1)]`, `ucomisd` + `jcc`, `gosub` as
-   `lea Lret(%rip), %rdi; call bsk_gosub_push; jmp Ltarget`, `return` as
-   `call bsk_gosub_pop; jmp *%rax`. Emit `.section .note.GNU-stack,"",@progbits`.
-2. **Runtime** `src/runtime_x86_64_linux/` implementing the same entry points with the same
-   semantics (§6.2) under ELF names, using glibc/musl `write`, `exit`, `snprintf` (variadic
-   doubles in `xmm0` with `al` = number of vector registers used), libm. It is built on the Linux
-   machine into `libbaysickrt.a`.
-3. **On the Arch Linux box** the user runs:
-   `as -o prog.o prog.s && gcc -no-pie -o prog prog.o libbaysickrt.a -lm`.
-   The runtime provides `main`; gcc supplies the C start files.
-4. Nothing in the frontend, IR, verifier, dumper, tests (`tests/programs` outputs are
-   target-independent by construction) or LANGUAGE.md changes.
+#### 6.4.1 Calling convention
+
+System V AMD64 for every global function: integer/pointer arguments `%rdi %rsi %rdx %rcx %r8
+%r9`, doubles `%xmm0–%xmm7`, results `%rax` / `%xmm0`; callee-saved `%rbx %rbp %r12–%r15`;
+everything else (incl. all `%xmm`) caller-saved; `%rsp` ≡ 0 (mod 16) at every `call` (≡ 8 at
+function entry); direction flag clear on entry and exit; MXCSR and the x87 control word never
+changed. Runtime functions may clobber every caller-saved register (generated code keeps nothing
+in registers across calls, §5.4.4).
+
+#### 6.4.2 Symbols and register mapping
+
+Names are the §6.2 names without the leading underscore. Register mapping from the arm64 ABI:
+`d0`→`%xmm0`, `d1`→`%xmm1`, pointer/integer argument `x0`→`%rdi`, `x1`→`%rsi`, `w0` (error
+code) → `%edi`, pointer result `x0`→`%rax`, double result `d0`→`%xmm0`.
+
+| Symbol | In | Out |
+|--------|----|-----|
+| `main` | (argc, argv ignored) | never returns: `call bsk_program`, then `call bsk_end` |
+| `bsk_curline` | — | u32 data, `.bss`, `.globl`, 4-byte aligned, initially 0 |
+| `bsk_print_num` | `%xmm0` | — |
+| `bsk_print_str` | `%rdi` ptr, `%rsi` len | — |
+| `bsk_print_comma` `bsk_print_semi` `bsk_print_nl` | — | — |
+| `bsk_read` | — | `%xmm0` |
+| `bsk_div` `bsk_pow` | `%xmm0` a, `%xmm1` b | `%xmm0` |
+| `bsk_chk` | `%xmm0` | `%xmm0` |
+| `bsk_sin bsk_cos bsk_tan bsk_atn bsk_exp bsk_abs bsk_log bsk_sqr bsk_int` | `%xmm0` | `%xmm0` |
+| `bsk_rnd` | — | `%xmm0` |
+| `bsk_aref1` | `%rdi` desc, `%xmm0` i | `%rax` element address |
+| `bsk_aref2` | `%rdi` desc, `%xmm0` i, `%xmm1` j | `%rax` element address |
+| `bsk_gosub_push` | `%rdi` code address | — |
+| `bsk_gosub_pop` | — | `%rax` code address |
+| `bsk_end` | — | noreturn |
+| `bsk_err` | `%edi` ERR_* code | noreturn |
+
+Defined by every compiled program (§5.4.3): `bsk_program` (code, System V, no arguments),
+`bsk_data` (8-byte aligned doubles), `bsk_data_count` (u64). The `RTA_*` descriptor layout is
+unchanged (`runtime.inc`). `main` is entered from glibc's start code with `%rsp` ≡ 8 (mod 16), so
+it pushes `%rbp` before its first `call`.
+
+#### 6.4.3 System interface
+
+Only glibc and libm, always called through the PLT (`call write@PLT`):
+
+| Need | Function |
+|------|----------|
+| output | `write(fd, buf, len)`; errno via `__errno_location()` (returns `int*`); `EINTR` = 4 on Linux |
+| termination | `exit(status)` (the C function, as `_exit` symbol is on Mach-O) |
+| number format | `snprintf(buf, n, "%.5e", fabs(x))`: variadic, so **`%al` = number of vector registers used** — `movl $1, %eax` (one double in `%xmm0`) immediately before `call snprintf@PLT` |
+| builtins | `sin cos tan atan exp log pow` (libm) and `trunc` for `bsk_int`; `bsk_sqr` uses `sqrtsd` of `fabs(x)`; `bsk_abs` clears the sign bit |
+
+Integers below 10⁹ are converted with `cvttsd2si` (the `fcvtzu` analogue); everything else in
+`rt_numfmt` follows §6.2. Instruction set: the x86-64 baseline (SSE2) only — no SSE4.1
+(`roundsd`), AVX or BMI — so the runtime runs on any x86_64 machine. No stdio, no `signal`
+calls: a closed pipe raises `SIGPIPE` exactly as on macOS.
+
+#### 6.4.4 Assembly style for the x86_64 runtime
+
+* GNU `as` 2.38 or newer, AT&T syntax (§5.4.2), assembled with `as --64 --fatal-warnings -I
+  include` (no C preprocessor); `#` comments (anywhere on a line); 4-space indent.
+* Every file begins with `.include "baysick.inc"` and uses the include constants by name
+  (`ERR_*`, `RTA_*`, `PRINT_*`, `RNG_*`, `LIM_GOSUB_DEPTH`, `RT_OUTBUF_SIZE`, `EXIT_RUN_*`); every
+  file ends with `.section .note.GNU-stack,"",@progbits`.
+* Global entry points `.globl` + `.type name, @function`; runtime-private cross-file symbols are
+  named `bsk_rt_*` and declared `.globl` + `.hidden` (the ELF counterpart of
+  `.private_extern`); file-local labels `.Lrt_<file>_<function>_<what>`; numeric labels only for
+  jumps of a few instructions.
+* Sections: code `.text` (`.p2align 4` per function); constants `.section .rodata`; tables of
+  pointers (e.g. `BSK_EMIT_ERRMSG_TABLE .Lrt_errmsg` for `bsk_err`) in
+  `.section .data.rel.ro,"aw",@progbits`; mutable data `.data`; zero-initialised state `.bss`
+  with `.p2align` + label + `.zero <n>`.
+* The function header block of §3.4 (purpose, inputs, outputs, clobbers, callee-saved registers
+  used and their role, frame size), in System V terms; a comment at least every few
+  instructions.
+
+## 7. Targets and porting
+
+The design keeps every target-specific decision behind the descriptor and the runtime ABI. Two
+targets exist:
+
+| Target | Backend (in the compiler) | Emits | Runtime | Built / linked where |
+|--------|---------------------------|-------|---------|----------------------|
+| `arm64-macos` | `src/backend/arm64_macos/` (§5.2–5.3) | Apple `as` arm64 Mach-O | `src/runtime/` (§6.1–6.3) | the Mac, by the driver |
+| `x86_64-linux` | `src/backend/x86_64_linux/` (§5.4) | GNU `as` AT&T x86_64 ELF | `src/runtime_x86_64_linux/` (§6.4) | the `.s` on the Mac; runtime, `as` and `gcc -no-pie … -lm` on Linux (§8) |
+
+On a Linux machine with a built runtime (`make -f Makefile.linux`), a program compiled on the
+Mac with `build/baysick --target x86_64-linux prog.bas` becomes an executable with:
+
+```
+as --64 -o prog.o prog.s
+gcc -no-pie -o prog prog.o build-x86_64-linux/libbaysickrt.a -lm
+```
+
+Nothing in the frontend, IR, verifier, dumper, `tests/` corpus (outputs are target-independent by
+construction) or LANGUAGE.md depends on the target. A further target needs: a backend directory
+exporting a descriptor (§5.1) listed in `_drv_targets`, a runtime implementing §6.2's semantics
+under that platform's ABI, and its own section here.
 
 ## 8. Build and test
 
+### 8.1 macOS (`Makefile`)
+
 * `make` builds `build/baysick` from `src/frontend/*.s src/ir/*.s src/driver/*.s
-  src/backend/*/*.s` and `build/libbaysickrt.a` from `src/runtime/*.s`, using only `as`, `ld`,
-  `ar` and `xcrun`. The compiler is linked with the same `ld` options as user programs (§5.2),
-  without the runtime.
+  src/backend/*/*.s` (both backends: they are compiler code) and `build/libbaysickrt.a` from
+  `src/runtime/*.s`, using only `as`, `ld`, `ar` and `xcrun`. The compiler is linked with the same
+  `ld` options as user programs (§5.2), without the runtime. The macOS `Makefile` never touches
+  `src/runtime_x86_64_linux/` (x86_64 sources cannot be assembled by Apple `as`).
 * `make test` runs `tests/run.sh` (it builds nothing; it requires `build/baysick` and
-  `build/libbaysickrt.a`).
+  `build/libbaysickrt.a`). It tests the default target only.
+* `make check-includes`: §3.4 (trailing-comment grep + `tests/include_check.s`).
+* `make cross-pack` (depends on `all`): `sh tests/cross_pack.sh -o build/x86_64-linux-bundle`.
+* `make cross` (depends on `all`): `sh tests/cross.sh` (default host `desktop`).
+* `COMPILER_DIRS` (the "not implemented yet" check) lists `src/backend/x86_64_linux` too.
 * Test sidecar formats are documented at the top of `tests/run.sh`.
+
+### 8.2 Linux runtime build (`Makefile.linux`)
+
+Run on x86_64 Linux with GNU make, GNU `as` ≥ 2.38 and `ar` (no compiler is needed to build the
+runtime; `gcc` only links test programs):
+
+```
+make -f Makefile.linux                  build-x86_64-linux/libbaysickrt.a
+make -f Makefile.linux check-includes   assemble tests/include_check_x86_64.s
+make -f Makefile.linux clean            rm -rf build-x86_64-linux
+```
+
+* Variables (overridable on the command line or from the environment): `AS ?= as`, `AR ?= ar`;
+  fixed `ASFLAGS := --64 --fatal-warnings -I include`; build directory `build-x86_64-linux`.
+* Objects: `src/runtime_x86_64_linux/<name>.s` → `build-x86_64-linux/obj/<name>.o` (depend on
+  every `include/*.inc`); archive `build-x86_64-linux/libbaysickrt.a` via `rm -f $@` +
+  `$(AR) rcs $@ <objs>`; `.DEFAULT_GOAL := all`; `all clean check-includes` are `.PHONY`.
+* `check-includes`: `$(AS) $(ASFLAGS) -I tests -o build-x86_64-linux/include_check.o
+  tests/include_check_x86_64.s`, then prints `include files assemble and layout assertions hold`.
+* If `src/runtime_x86_64_linux/` has no `*.s` files, `all` fails with
+  `make: no assembly sources in: src/runtime_x86_64_linux` (like the macOS `check-sources`).
+* If `uname -sm` is not `Linux x86_64`, every target fails at once with
+  `Makefile.linux: build the x86_64 runtime on x86_64 Linux (uname -sm is '<value>')`.
+
+### 8.3 Cross testing x86_64-linux
+
+The run half executes on Linux; compiling happens only on the Mac (the compiler is a macOS arm64
+binary). `tests/programs/*.bas` and the **run-phase** cases of `tests/errors/` are tested;
+compile-phase errors and `tests/ir/` are target-independent (they never reach a backend) and are
+covered by `make test`.
+
+**Bundle.** A self-contained directory, produced on the Mac, consumed on Linux:
+
+```
+<bundle>/BUNDLE                          one line: "baysick-x86_64-linux-bundle 1"
+<bundle>/Makefile.linux                  copies of the repository files
+<bundle>/include/*.inc
+<bundle>/src/runtime_x86_64_linux/*.s
+<bundle>/tests/cross_run.sh
+<bundle>/tests/include_check_x86_64.s
+<bundle>/tests/include_asserts.inc
+<bundle>/cases/programs/NAME.s NAME.out [NAME.err]           from tests/programs/NAME.*
+<bundle>/cases/errors/NAME.s NAME.meta NAME.err [NAME.out]   run-phase tests/errors/NAME.*
+<bundle>/cases/<kind>/NAME.packfail      instead of NAME.s when compiling on the Mac failed:
+                                         "status <n>" line, then the compiler's stderr
+```
+
+**`tests/cross_pack.sh`** (macOS, POSIX sh):
+
+```
+sh tests/cross_pack.sh -o BUNDLE_DIR [PATTERN...]
+```
+
+* `-o BUNDLE_DIR` is required; the directory must not exist or must be empty (else exit 2).
+  PATTERN selects tests whose name (`programs/NAME`, `errors/NAME`) contains a pattern, as in
+  `tests/run.sh`.
+* Environment: `BAYSICK` (compiler, default `build/baysick`).
+* For each selected case: `"$BAYSICK" --target x86_64-linux -S NAME.bas -o
+  BUNDLE_DIR/cases/<kind>/NAME.s`. It must exit 0 with empty stdout and stderr; otherwise the
+  `.s` is removed and `NAME.packfail` written. Sidecars are copied unchanged. A `tests/errors`
+  case with `phase=compile` is skipped silently.
+* Exit: 0 = bundle complete (even if some `.packfail` exist — the run half reports them as
+  failures); 2 = setup error (compiler missing, bad `-o`, copy failure). Prints
+  `packed: <n> cases (<m> failed to compile)`.
+
+**`tests/cross_run.sh`** (Linux, POSIX sh):
+
+```
+sh tests/cross_run.sh [-v] [BUNDLE_DIR]
+```
+
+* `BUNDLE_DIR` defaults to the directory above the script's own directory. `-v` shows diffs as
+  in `tests/run.sh`.
+* Environment: `BAYSICK_TEST_TIMEOUT` (seconds per program, default 10), `AS` (default `as`),
+  `CC` (default `gcc`).
+* Setup (any failure → message on stderr, exit 2): `BUNDLE` marker present and equal to the line
+  above; `make -C BUNDLE_DIR -f Makefile.linux check-includes all AS="$AS"`.
+* Per case, in a `mktemp -d` work directory removed on exit: `NAME.packfail` → FAIL
+  `compile (on the Mac) failed: …`; else `$AS --64 -o prog.o NAME.s` then
+  `$CC -no-pie -o prog prog.o BUNDLE_DIR/build-x86_64-linux/libbaysickrt.a -lm` (the §5.4.1
+  templates); each must exit 0 **with empty stderr** (a warning such as a missing
+  `.note.GNU-stack` is a failure) → else FAIL `assemble failed` / `link failed`. Then run with
+  stdin `/dev/null` and the timeout, and compare exactly like `tests/run.sh`: programs: exit 0,
+  stdout = `.out`, stderr = `.err` or empty; run-phase errors: exit = `exit=` of `.meta`,
+  stderr = `.err`, stdout = `.out` or empty.
+* Output format and exit status identical to `tests/run.sh` (`FAIL <name>: <reason>` lines, then
+  `----` and `passed: P  failed: F`, `failed tests: …`); exit 0 all passed, 1 any failed,
+  2 setup error.
+
+**`tests/cross.sh`** (macOS; one command for the developer):
+
+```
+sh tests/cross.sh [-v] [-H HOST] [PATTERN...]
+```
+
+* Host: `-H HOST`, else `$BAYSICK_CROSS_HOST`, else `desktop` (an `ssh` destination with key
+  authentication; `ssh -o BatchMode=yes` is used, so a password prompt is an error).
+* Steps: `cross_pack.sh` into a local `mktemp -d` directory (removed on exit); stream it as
+  `tar -C <bundle> -cf - .` into **one** `ssh` call whose remote command is
+  `sh -c '<script>' sh [-v]`, where `<script>` contains no single quote (so it works under any
+  login shell) and does: `d=$(mktemp -d "${TMPDIR:-/tmp}/baysick-cross.XXXXXX")`,
+  `trap 'rm -rf "$d"' EXIT HUP INT TERM` (written with double quotes inside the script),
+  `tar -C "$d" -xf -`, `BAYSICK_TEST_TIMEOUT=<value> sh "$d/tests/cross_run.sh" [-v] "$d"`, and
+  exits with its status. Nothing is left on the remote machine.
+* Environment: `BAYSICK` (passed to `cross_pack.sh`), `BAYSICK_TEST_TIMEOUT` (forwarded),
+  `BAYSICK_CROSS_HOST`.
+* Exit: the status of `cross_run.sh` (0/1/2); 2 if packing fails or `ssh` itself fails
+  (status 255).
+
+### 8.4 CI (`.github/workflows/ci.yml`)
+
+* Job `macos-arm64` (unchanged steps, then): step `Pack x86_64-linux test bundle` runs
+  `make cross-pack`; step `Upload x86_64-linux test bundle` uses `actions/upload-artifact@v4`
+  with `name: x86_64-linux-bundle`, `path: build/x86_64-linux-bundle/`,
+  `if-no-files-found: error`, `retention-days: 7`.
+* Job `x86_64-linux`: `needs: macos-arm64`, `runs-on: ubuntu-latest`, `timeout-minutes: 15`, no
+  checkout (the bundle is self-contained, so Linux tests exactly what the Mac packed). Steps:
+  `actions/download-artifact@v4` (`name: x86_64-linux-bundle`, `path: bundle`); `Toolchain info`
+  (`uname -m`, `as --version | head -1`, `gcc --version | head -1`); `Cross tests`:
+  `sh bundle/tests/cross_run.sh bundle`; on failure, upload `bundle/build-x86_64-linux/` as
+  artifact `build-x86_64-linux` (`if-no-files-found: ignore`).

@@ -9,7 +9,7 @@
 .equ BSK_DRIVER_INC, 1
 
 // ---- Arena -----------------------------------------------------------------
-.equ ARENA_CHUNK,       1048576 // bytes per arena chunk (requests larger than
+.equ ARENA_CHUNK,       1048576 /* bytes per arena chunk (requests larger than */
                                 // ARENA_CHUNK/4 get their own malloc)
 .equ ARENA_ALIGN,       16
 //  _drv_alloc(x0=size) -> x0 = ptr, 16-byte aligned, zero-filled.
@@ -18,9 +18,9 @@
 //      Memory is never freed (process lifetime).
 
 // ---- Output buffer (OB_*), 24 bytes -----------------------------------------
-.equ OB_DATA,           0       // ptr  bytes (arena or malloc owned by ob_*)
-.equ OB_LEN,            8       // u64  bytes used
-.equ OB_CAP,            16      // u64  capacity
+.equ OB_DATA,           0       /* ptr  bytes (arena or malloc owned by ob_*) */
+.equ OB_LEN,            8       /* u64  bytes used */
+.equ OB_CAP,            16      /* u64  capacity */
 .equ OB_SIZE,           24
 .equ OB_INITIAL_CAP,    65536
 //  _ob_init(x0=OutBuf*)                    empty buffer
