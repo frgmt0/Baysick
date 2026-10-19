@@ -436,10 +436,12 @@ value      := expression          (numeric targets)
 `LET X = Y3 = A(3,1) = 1`). Parsing: after `LET` (and after each `=`), if the text there is a
 target immediately followed by `=`, it is another target; otherwise the rest is the value. All
 targets must be of one kind; a string target among numeric ones, a numeric value for string
-targets or a string reference for numeric targets → `MISMATCHED STRING OPERATION`. Missing or
-illegal first target → `ILLEGAL VARIABLE`; missing `=` → `INCORRECT FORMAT`; `LET FNA = …`
-outside the multi-line body of FNA → `ILLEGAL VARIABLE`; a string reference followed by more text
-→ `INCORRECT FORMAT`, except an arithmetic operator → `MISMATCHED STRING OPERATION` (§4.5).
+targets or a string reference for numeric targets → `MISMATCHED STRING OPERATION`. A missing
+value for string targets (`LET A$ =` with nothing after the `=`) → `ILLEGAL FORMULA`; anything
+else that is not a string reference there (`LET A$ = 5`, `LET A$ = B`) →
+`MISMATCHED STRING OPERATION` (§4.5). Missing or illegal first target → `ILLEGAL VARIABLE`;
+missing `=` → `INCORRECT FORMAT`; `LET FNA = …` outside the multi-line body of FNA →
+`ILLEGAL VARIABLE`; a string reference followed by more text → `INCORRECT FORMAT`, except an arithmetic operator → `MISMATCHED STRING OPERATION` (§4.5).
 
 **Evaluation order:** the subscripts of every target, targets left to right; then the value;
 then the stores, targets left to right (each subscript checked at its store). So
@@ -539,9 +541,9 @@ and `"10" < "9"`.
 FOR simple-variable "=" expression "TO" expression [ "STEP" expression ]
 NEXT simple-variable
 ```
-Array elements are not allowed as loop variables (`ILLEGAL VARIABLE`); a string variable as loop
-variable (`FOR A$ = …`, also `NEXT A$`) → `MISMATCHED STRING OPERATION`; a string reference as a
-bound or step →
+Array elements are not allowed as loop variables (`ILLEGAL VARIABLE`); a string variable or
+string list element as loop variable (`FOR A$ = …`, `FOR A$(1) = …`, also `NEXT A$`) →
+`MISMATCHED STRING OPERATION`; a string reference as a bound or step →
 `MISMATCHED STRING OPERATION` (§4.5). Inside a multi-line DEF body (§7.10) the loop variable may
 be one of the function's parameters (its local cell).
 
@@ -614,7 +616,8 @@ parameter list (if any) is followed by end of line starts a **multi-line** defin
 followed by `=` is a **single-line** definition; anything else → `INCORRECT FORMAT`. DEF may
 appear anywhere ([M64] p. 41); it is processed at compile time. Parameters must be distinct
 simple variables: a missing, string, array or repeated parameter (`DEF FNA()`, `DEF FNA(X$)`,
-`DEF FNA(X,X)`) → `ILLEGAL VARIABLE`; more than **8** (`LIM_FN_PARAMS`) → `INCORRECT FORMAT`;
+`DEF FNA(X,X)`) → `ILLEGAL VARIABLE`; more than **8** (`LIM_FN_PARAMS`) → `INCORRECT FORMAT`,
+reported as soon as a ninth parameter starts, whatever it is (`DEF FNA(A,B,C,D,E,F,G,H,1)` too);
 `DEF FN` not followed by a letter, or a missing `)` → `INCORRECT FORMAT`.
 
 **Calls.** `FNx` without `(` calls FN*x* with no arguments; `FNx(e1, …, ek)` with k arguments.
@@ -1022,10 +1025,11 @@ list, like a one-dimension MAT READ target, §7.11), so `MAT INPUT V` alone give
 
 Execution (input lines and fields as in §7.15):
 
-1. Read a line. If its last non-blank byte outside quotes is `&`, the line is continued: remove
-   the `&` — and one comma immediately before it (blanks ignored), so `1,2,&` and `1,2 &` both
-   end with the field `2` — and read another line (on a terminal, prompting again with `?`),
-   repeatedly ([M68] p. 57: "by ending the line of input with & (before carriage return) the
+1. Read a line. If its last non-blank byte outside quotes is `&`, the line is continued: the
+   line's text ends before the `&`, or, if the last non-blank byte before the `&` is a comma,
+   before that comma, so blanks between that comma and the `&` are dropped and `1,2,&`,
+   `1,2, &` and `1,2 &` all end with the field `2` — and read another line (on a terminal,
+   prompting again with `?`), repeatedly ([M68] p. 57: "by ending the line of input with & (before carriage return) the
    machine will ask for more input on the next line"). The fields of all these lines, in order,
    are the input (a field cannot span a line break).
 2. If any field is not in correct format for the list's kind (a numeric field, or a string field
@@ -1156,13 +1160,17 @@ CHANGE letter "TO" string-target               list to string
   bound → `SUBSCRIPT ERROR`; `n > 65 536` → `STRING TOO LONG`; each code `c = floor(L(i) + 0.5)`,
   `i = 1 … n`, must be in 0–255, else `ILLEGAL CHARACTER`; then the string of those n bytes is
   assigned ([M68] p. 69: "we must give the number of characters which are to be in the string as
-  the zero component of the vector").
+  the zero component of the vector"). A string list element target `A$(i)` is a target as in
+  §7.1: its subscript i is evaluated before the list is converted, but checked only at the store,
+  after the conversion's own checks above, so `CHANGE L TO A$(99)` with an illegal code in L
+  gives `ILLEGAL CHARACTER`, not `SUBSCRIPT ERROR`.
 
 Recognition: after `CHANGE`, a string reference (§4.4) starts the first form; else a letter
 followed by `TO` starts the second. Errors: `TO` missing → `INCORRECT FORMAT`; a string where the
 list must be or a list where the string must be (`CHANGE A TO B`, `CHANGE A$ TO B$`) →
-`MISMATCHED STRING OPERATION`; the list name followed by a digit or `(` → `ILLEGAL VARIABLE`;
-text left over → `INCORRECT FORMAT`.
+`MISMATCHED STRING OPERATION`; a string constant where the string target must be
+(`CHANGE A TO "X"`: not a variable) → `ILLEGAL VARIABLE`; the list name followed by a digit or
+`(` → `ILLEGAL VARIABLE`; text left over → `INCORRECT FORMAT`.
 
 **Codes.** A string is a sequence of bytes and the code of a character is its byte value: ASCII
 for 0–127 — which is the [M68] p. 68 table (32 = space, 33 = `!`, …, 65 = `A`, …, 90 = `Z`; 128

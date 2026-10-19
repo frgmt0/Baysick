@@ -62,6 +62,7 @@
 .equ RT_INV_I,     72               # row index in the trailing phase
 .equ RT_INV_RHI,   80               # end of the current row range
 .equ RT_INV_BC,    88               # pe - p0
+.equ RT_INV_DET,   96               # double det: running product of the pivots
 .equ RT_INV_FRAME, 104
 
     .text
@@ -405,12 +406,18 @@
 #   Inputs  : %rdi = X view (n x n), %rsi = A view (n x n),
 #             n <= RT_KERN_INV_MAXN, no overlap, A finite
 #   Outputs : %rax = KS_OK, KS_SINGULAR or KS_NONFINITE
+#             DET: after KS_OK or KS_NONFINITE, bsk_rt_kinv_det (rt_kinit.s)
+#             holds the pinned product of the pivots (LANGUAGE.md
+#             7.14.6: det := 1; at step p, after the exchange, det :=
+#             -det if r != p, then det := det * d, one IEEE
+#             multiplication); after KS_SINGULAR it is unchanged.
 #   Clobbers: all caller-saved registers
 #   Callee-saved used: %rbx = n, %r12 = p / row index, %r13 = W base,
 #             %r14 = X data, %r15 = X row stride in bytes,
 #             %rbp = frame pointer
 #   Frame   : 48 bytes of saved registers + RT_INV_FRAME locals (W
-#             view, tol, X view, panel bounds, W stride, loop state);
+#             view, tol, X view, panel bounds, W stride, loop state,
+#             det);
 #             %rsp = 0 (mod 16) at calls
 # ---------------------------------------------------------------------
     .globl bsk_rt_ksse2_inv
@@ -490,6 +497,7 @@ bsk_rt_ksse2_inv:
     leaq 8(%rax,%r15), %rax         # next diagonal element
     subq $1, %rcx
     jnz 1b
+    movsd %xmm0, RT_INV_DET(%rsp)   # det := 1 before step 1
 
     movq $0, RT_INV_P0(%rsp)        # first panel
 .Lrt_inv_panel:
@@ -535,6 +543,9 @@ bsk_rt_ksse2_inv:
     # ---- row exchange (W columns p0 .. n-1 with the multipliers, X) ---
     cmpq %r12, %rcx
     je .Lrt_inv_noswap
+    movq RT_INV_DET(%rsp), %rax
+    btcq $63, %rax                  # r != p: det := -det (exact)
+    movq %rax, RT_INV_DET(%rsp)
     movq %rcx, RT_INV_I(%rsp)       # r
     movq RT_INV_P0(%rsp), %rdx
     movq %r12, %rdi
@@ -604,6 +615,9 @@ bsk_rt_ksse2_inv:
     imulq %r8, %rax
     addq %r13, %rax
     leaq (%rax,%r12,8), %rax        # &W(p,p)
+    movsd RT_INV_DET(%rsp), %xmm0
+    mulsd (%rax), %xmm0             # det := det * d (one rounding)
+    movsd %xmm0, RT_INV_DET(%rsp)
     movq (%rax), %rcx
     btrq $63, %rcx                  # |d| bits
     movabsq $RT_INV_INF_BITS, %rdx
@@ -711,12 +725,15 @@ bsk_rt_ksse2_inv:
     # ---- result check -------------------------------------------------
     movq RT_INV_XVIEW(%rsp), %rdi
     call bsk_rt_ksse2_chkfin        # %rax = KS_OK / KS_NONFINITE
-    jmp .Lrt_inv_out
+    jmp .Lrt_inv_setdet
 .Lrt_inv_singular:
-    movl $KS_SINGULAR, %eax
+    movl $KS_SINGULAR, %eax         # DET cell unchanged
     jmp .Lrt_inv_out
 .Lrt_inv_nonfinite:
     movl $KS_NONFINITE, %eax
+.Lrt_inv_setdet:
+    movsd RT_INV_DET(%rsp), %xmm0   # publish the pinned pivot product
+    movsd %xmm0, bsk_rt_kinv_det(%rip)
 .Lrt_inv_out:
     addq $RT_INV_FRAME, %rsp
     popq %r15

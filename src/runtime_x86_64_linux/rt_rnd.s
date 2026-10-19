@@ -1,7 +1,7 @@
 # =====================================================================
 # src/runtime_x86_64_linux/rt_rnd.s -- RND generator (LANGUAGE.md 6).
 #
-# Defines: bsk_rnd
+# Defines: bsk_rnd bsk_randomize
 # Park-Miller "minimal standard" Lehmer generator:
 #   s := (RNG_MULT * s) mod RNG_MOD      (exact 64-bit integers)
 #   RND := s / RNG_MOD                    (one IEEE division)
@@ -35,6 +35,47 @@ bsk_rnd:
     divsd %xmm1, %xmm0                  # RND = s / 2147483647.0
     ret
     .size bsk_rnd, . - bsk_rnd
+
+# ---------------------------------------------------------------------
+# bsk_randomize -- RANDOMIZE (LANGUAGE.md 7.18, DESIGN.md 6.7).
+#   Purpose : v = 64 bits from getentropy(&v, 8); if that fails,
+#             v = time(NULL); then s := 1 + (v mod RNG_RANDOMIZE_MOD)
+#             with v taken as an unsigned 64-bit integer, so s stays
+#             in 1 .. 2^31 - 2 (a valid Lehmer state, never 0).
+#   Inputs  : none
+#   Outputs : none
+#   Clobbers: all caller-saved registers (libc calls)
+#   Callee-saved used: %rbp = frame pointer
+#   Frame   : 8 bytes (saved %rbp) + 16 bytes (v at (%rsp), pad);
+#             %rsp = 0 (mod 16) at the calls
+# ---------------------------------------------------------------------
+    .globl bsk_randomize
+    .type bsk_randomize, @function
+    .p2align 4
+bsk_randomize:
+    pushq %rbp
+    movq %rsp, %rbp
+    subq $16, %rsp                      # v at (%rsp)
+    movq $0, (%rsp)
+    movq %rsp, %rdi
+    movl $8, %esi
+    call getentropy@PLT                 # 0 = success, -1 = failure
+    testl %eax, %eax
+    jz 1f
+    xorl %edi, %edi
+    call time@PLT                       # fallback: seconds since epoch
+    movq %rax, (%rsp)
+1:
+    movq (%rsp), %rax                   # v (unsigned)
+    xorl %edx, %edx
+    movl $RNG_RANDOMIZE_MOD, %ecx
+    divq %rcx                           # %rdx = v mod (2^31 - 2)
+    addq $1, %rdx                       # s = 1 + remainder
+    movq %rdx, .Lrt_rnd_state(%rip)
+    movq %rbp, %rsp
+    popq %rbp
+    ret
+    .size bsk_randomize, . - bsk_randomize
 
 # ---------------------------------------------------------------------
 # State: the generator value s (u64), initially RNG_SEED.

@@ -7,6 +7,7 @@
 #   bsk_mat_zer bsk_mat_con bsk_mat_idn
 #   bsk_mat_copy bsk_mat_trn bsk_mat_inv
 #   bsk_mat_add bsk_mat_sub bsk_mat_mul bsk_mat_scale
+#   bsk_smat_print (MAT PRINT of a string list)
 #
 # This file owns every BASIC rule of the MAT statements: shapes,
 # conformability, the storage ("fits") test, redimensioning, aliasing,
@@ -384,6 +385,50 @@ bsk_mat_print:
     jnz .Lrt_mat_print_row
     RT_MAT_LEAVE
     .size bsk_mat_print, . - bsk_mat_print
+
+# ---------------------------------------------------------------------
+# bsk_smat_print -- one MAT PRINT item that is a string list
+#   (LANGUAGE.md 7.14.5 steps 2-3, DESIGN.md 6.5).
+#   Purpose : current bound 0 -> DIMENSION ERROR; newline if col != 0;
+#             one row of the string items X$(1) .. X$(n), each but the
+#             last followed by the ',' rule (zoned) or nothing (packed);
+#             then newline.
+#   Inputs  : %rdi = string-list descriptor, %esi = MATPR_ZONED /
+#             MATPR_PACKED
+#   Outputs : none
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: %rbx = current element (SD*), %r12 = mode,
+#             %r13 = n, %r14 = element index; frame RT_MAT_ENTER
+# ---------------------------------------------------------------------
+    .globl bsk_smat_print
+    .type bsk_smat_print, @function
+    .p2align 4
+bsk_smat_print:
+    RT_MAT_ENTER
+    movl RTA_B1(%rdi), %r13d        # current bound n
+    testq %r13, %r13
+    jz .Lrt_mat_dimerr              # a list of no elements
+    movl %esi, %r12d                # layout mode
+    movq RTA_DATA(%rdi), %rbx
+    addq $SD_SIZE, %rbx             # element 1
+    movl $1, %r14d
+    call bsk_rt_print_fresh         # a matrix starts on a new line
+.Lrt_mat_sprint_loop:
+    movq %rbx, %rdi
+    call bsk_print_sv               # the string item
+    cmpq %r13, %r14
+    jae .Lrt_mat_sprint_end         # no separator after the last one
+    cmpl $MATPR_PACKED, %r12d
+    je 1f                           # packed: no movement at all
+    call bsk_print_comma            # zoned: next 15-column zone
+1:
+    addq $SD_SIZE, %rbx
+    addq $1, %r14
+    jmp .Lrt_mat_sprint_loop
+.Lrt_mat_sprint_end:
+    call bsk_print_nl               # newline after the row
+    RT_MAT_LEAVE
+    .size bsk_smat_print, . - bsk_smat_print
 
 # ---------------------------------------------------------------------
 # .Lrt_mat_fillcur -- fill the current matrix of a descriptor.

@@ -8,6 +8,8 @@
 #   bsk_kern_features
 #   bsk_kern_gemm bsk_kern_add bsk_kern_sub bsk_kern_scale
 #   bsk_kern_trn bsk_kern_copy bsk_kern_fill bsk_kern_inv
+# Defines (private to the runtime, .globl + .hidden):
+#   bsk_rt_kinv_det   the DET cell written by the inv kernels
 #
 # The variant table holds KV_* records, best variant first, baseline
 # last (KV_REQUIRES = 0): "avx2" (KF_X64_AVX2 | KF_X64_FMA, which
@@ -410,5 +412,20 @@ bsk_kern_features:
     .zero 8 * (RT_KINIT_NVAR + 1)
 .Lrt_kinit_done:
     .zero 4
+
+# ---------------------------------------------------------------------
+# bsk_rt_kinv_det -- the DET cell (DESIGN.md 6.6.1, LANGUAGE.md 7.14.6):
+# double, initially 0. Every inv kernel stores the pinned product of its
+# pivots here after a KS_OK or KS_NONFINITE return (never after
+# KS_SINGULAR); bsk_det (rt_ed4.s) reads it. Defined here, in a kernel
+# file, so the inv kernels keep the link-isolation rule.
+# ---------------------------------------------------------------------
+    .p2align 3
+    .globl bsk_rt_kinv_det
+    .hidden bsk_rt_kinv_det
+    .type bsk_rt_kinv_det, @object
+    .size bsk_rt_kinv_det, 8
+bsk_rt_kinv_det:
+    .zero 8
 
     .section .note.GNU-stack,"",@progbits

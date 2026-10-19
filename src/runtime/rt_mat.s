@@ -6,6 +6,7 @@
 //   _bsk_mat_zer _bsk_mat_con _bsk_mat_idn
 //   _bsk_mat_copy _bsk_mat_trn _bsk_mat_inv
 //   _bsk_mat_add _bsk_mat_sub _bsk_mat_mul _bsk_mat_scale
+//   _bsk_smat_print (MAT PRINT of a string list, DESIGN.md 6.5)
 //
 // Owns every BASIC rule of the MAT statements -- shapes, conformability,
 // redimensioning, aliasing, DIMENSION ERROR / OVERFLOW / SINGULAR MATRIX,
@@ -380,6 +381,52 @@ Lrt_mat_print_eol:
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
     ldp x29, x30, [sp], #96
+    ret
+
+// ---------------------------------------------------------------------
+// _bsk_smat_print -- one MAT PRINT item that is a string list
+//   (LANGUAGE.md 7.14.5 steps 2-3).
+//   Purpose : current bound n = 0 -> DIMENSION ERROR; newline if
+//             col != 0; then one row: the §8 string items X$(1) .. X$(n),
+//             each but the last followed by the ',' rule (zoned) or
+//             nothing (packed); newline after the row.
+//   Inputs  : x0 = string-list descriptor, w1 = MATPR_ZONED or MATPR_PACKED
+//   Outputs : none
+//   Errors  : DIMENSION ERROR (current bound 0)
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: x19 = address of the next element, x20 = elements
+//             left, x21 = mode
+//   Frame   : 48 bytes (frame record + x19..x21, padded)
+// ---------------------------------------------------------------------
+    .globl _bsk_smat_print
+    .p2align 2
+_bsk_smat_print:
+    ldr w9, [x0, #RTA_B1]
+    cbz w9, Lrt_mat_dimerr          // an empty list is no vector
+    stp x29, x30, [sp, #-48]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]
+    str x21, [sp, #32]
+    ldr x19, [x0, #RTA_DATA]
+    add x19, x19, #SD_SIZE          // element 1
+    mov w20, w9                     // n
+    mov w21, w1                     // mode
+    bl _bsk_rt_print_bol            // the list starts on a new line
+Lrt_mat_sprint_elem:
+    mov x0, x19
+    bl _bsk_print_sv                // string item
+    add x19, x19, #SD_SIZE
+    subs x20, x20, #1
+    b.eq Lrt_mat_sprint_eol         // that was the last element
+    cmp w21, #MATPR_PACKED
+    b.eq Lrt_mat_sprint_elem        // packed: nothing between strings
+    bl _bsk_print_comma             // zoned: next zone
+    b Lrt_mat_sprint_elem
+Lrt_mat_sprint_eol:
+    bl _bsk_print_nl                // newline after the row
+    ldr x21, [sp, #32]
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #48
     ret
 
 // ---------------------------------------------------------------------

@@ -9,6 +9,10 @@
 //                           reports whether stdout broke
 //   _bsk_rt_write_all       write(2) loop handling short writes / EINTR
 //   _bsk_rt_print_bol       newline if col != 0 (MAT PRINT, rt_mat.s)
+//   _bsk_rt_print_tabcol    col = max(col, m) (TAB, rt_ed4.s)
+//   _bsk_rt_print_flush     flush the stdout buffer (INPUT diagnostics)
+//   _bsk_rt_print_prompt    the INPUT prompt on a terminal (rt_input.s)
+//   _bsk_rt_print_home      col = out = 0 after a terminal input line
 //
 // Column model (LANGUAGE.md section 8): `col` is the logical column,
 // `out` the number of characters physically written on this line.
@@ -348,6 +352,101 @@ _bsk_rt_print_bol:
     adrp x9, _bsk_rt_col@PAGE
     ldr x10, [x9, _bsk_rt_col@PAGEOFF]
     cbnz x10, Lrt_print_newline     // mid-line: newline (tail call)
+    ret
+
+// ---------------------------------------------------------------------
+// _bsk_rt_print_tabcol -- the column move of a TAB item (LANGUAGE.md 8):
+//   if col < m then col = m (lazy: no character is written).
+//   Inputs  : x0 = target column m (0..74)
+//   Outputs : none
+//   Clobbers: x9, x10
+//   Callee-saved used: none
+//   Frame   : none (leaf)
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_print_tabcol
+    .p2align 2
+_bsk_rt_print_tabcol:
+    adrp x9, _bsk_rt_col@PAGE
+    ldr x10, [x9, _bsk_rt_col@PAGEOFF]
+    cmp x10, x0
+    b.hs 1f                         // already at or past m: ignored
+    str x0, [x9, _bsk_rt_col@PAGEOFF] // move forward to m
+1:
+    ret
+
+// ---------------------------------------------------------------------
+// _bsk_rt_print_flush -- write the buffered stdout bytes now (before an
+//   INPUT diagnostic on stderr, so the two streams stay in order).
+//   Inputs  : none
+//   Outputs : none
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: none
+//   Frame   : none (tail call)
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_print_flush
+    .p2align 2
+_bsk_rt_print_flush:
+    b Lrt_print_flush
+
+// ---------------------------------------------------------------------
+// _bsk_rt_print_prompt -- the INPUT prompt on a terminal (LANGUAGE.md
+//   7.15, DESIGN.md 6.7): write the pending lazy spaces (col - out),
+//   then "?" and a space; col = out = col + 2; flush stdout.
+//   Inputs  : none
+//   Outputs : none
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: x19 = spaces still to write
+//   Frame   : 32 bytes (frame record + x19)
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_print_prompt
+    .p2align 2
+_bsk_rt_print_prompt:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    str x19, [sp, #16]
+    adrp x9, _bsk_rt_col@PAGE
+    ldr x10, [x9, _bsk_rt_col@PAGEOFF]
+    adrp x11, _bsk_rt_out@PAGE
+    ldr x11, [x11, _bsk_rt_out@PAGEOFF]
+    sub x19, x10, x11               // pending lazy spaces
+Lrt_print_prompt_pad:
+    cbz x19, Lrt_print_prompt_q
+    mov w0, #' '
+    bl Lrt_print_putc
+    sub x19, x19, #1
+    b Lrt_print_prompt_pad
+Lrt_print_prompt_q:
+    mov w0, #'?'
+    bl Lrt_print_putc
+    mov w0, #' '
+    bl Lrt_print_putc               // this space is written, not lazy
+    adrp x9, _bsk_rt_col@PAGE
+    ldr x10, [x9, _bsk_rt_col@PAGEOFF]
+    add x10, x10, #2                // col = col + 2
+    str x10, [x9, _bsk_rt_col@PAGEOFF]
+    adrp x11, _bsk_rt_out@PAGE
+    str x10, [x11, _bsk_rt_out@PAGEOFF] // out = col
+    bl Lrt_print_flush              // the user must see the prompt
+    ldr x19, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret
+
+// ---------------------------------------------------------------------
+// _bsk_rt_print_home -- after a line was read from a terminal the cursor
+//   is at the start of a line: col = out = 0 (nothing is written).
+//   Inputs  : none
+//   Outputs : none
+//   Clobbers: x9
+//   Callee-saved used: none
+//   Frame   : none (leaf)
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_print_home
+    .p2align 2
+_bsk_rt_print_home:
+    adrp x9, _bsk_rt_col@PAGE
+    str xzr, [x9, _bsk_rt_col@PAGEOFF]
+    adrp x9, _bsk_rt_out@PAGE
+    str xzr, [x9, _bsk_rt_out@PAGEOFF]
     ret
 
 // ---------------------------------------------------------------------

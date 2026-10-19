@@ -2,6 +2,8 @@
 // src/runtime/rt_array.s -- array element addressing with bounds checks.
 //
 // Defines: _bsk_aref1 _bsk_aref2   (DESIGN.md section 6.2)
+//          _bsk_saref1             (string lists, DESIGN.md section 6.7;
+//                                   here to share the subscript macro)
 // A subscript s is converted to r = floor(s + 0.5) (LANGUAGE.md 7.11),
 // evaluated exactly: r = floor(s), plus 1 if s - floor(s) >= 0.5. The
 // IEEE sum s + 0.5 is NOT used: it can round up (s = 0.5 - 2^-54 gives
@@ -84,7 +86,29 @@ _bsk_aref2:
     add x0, x9, x10, lsl #3
     ret
 
-// Shared error exit for both functions.
+// ---------------------------------------------------------------------
+// _bsk_saref1 -- address of string list element L$(i) (DESIGN.md 6.7).
+//   Purpose : the subscript rule of _bsk_aref1 against the current
+//             RTA_B1; a string list stores SD_SIZE-byte records.
+//   Inputs  : x0 = string-list descriptor (RTA_*), d0 = subscript i
+//   Outputs : x0 = address of the element's SD record
+//   Errors  : SUBSCRIPT ERROR if the rounded subscript is outside 0..B1
+//   Clobbers: x9, x10, d0, d16, d17
+//   Callee-saved used: none
+//   Frame   : none (leaf)
+// ---------------------------------------------------------------------
+    .globl _bsk_saref1
+    .p2align 2
+_bsk_saref1:
+    RT_SUBSCRIPT d0, RTA_B1, x10
+    ldr x9, [x0, #RTA_DATA]
+    add x0, x9, x10, lsl #4         // data + SD_SIZE * index
+    ret
+.if SD_SIZE != 16
+    .error "rt_array: _bsk_saref1 assumes SD_SIZE == 16"
+.endif
+
+// Shared error exit for all three functions.
 Lrt_array_bad:
     mov w0, #ERR_SUBSCRIPT
     b _bsk_err

@@ -16,6 +16,9 @@
 // files (rt_kneon_*.s) and libc (_sysctlbyname, _getenv, _strcmp), so the
 // benchmark harness can link libbaysickrt.a with its own main.
 //
+// Also defines the runtime-private DET cell _bsk_rt_kinv_det (double,
+// initially 0), written by the inv kernel and read by _bsk_det.
+//
 // The current-variant pointer is statically initialised to the baseline
 // record, so the trampolines are usable even before _bsk_kern_init.
 // =====================================================================
@@ -380,3 +383,12 @@ Lrt_kinit_cur:
 .zerofill __DATA,__bss,Lrt_kinit_features,8,3
 .zerofill __DATA,__bss,Lrt_kinit_done,4,2
 .zerofill __DATA,__bss,Lrt_kinit_names,(RT_KV_COUNT + 1) * 8,3
+
+// ---------------------------------------------------------------------
+// The DET cell (DESIGN.md 6.6.1, LANGUAGE.md 7.14.6): a double, initially
+// 0, written by every inv kernel (rt_kneon_inv.s) with the pinned product
+// of the pivots and read by _bsk_det (rt_ed4.s). Defined here so the
+// kernel files keep link isolation (they reference only each other).
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_kinv_det
+.zerofill __DATA,__bss,_bsk_rt_kinv_det,8,3

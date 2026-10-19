@@ -9,8 +9,8 @@
 .include "baysick.inc"
 
 // Size of the stack buffer used to build "<MESSAGE> IN <line>\n".
-// The longest message is 24 bytes, " IN " is 4, a u32 has at most 10
-// digits, plus LF: 39 bytes. 64 leaves room.
+// The longest message is 25 bytes, " IN " is 4, a u32 has at most 10
+// digits, plus LF: 40 bytes. 64 leaves room.
 .equ RT_ERR_MSGBUF, 64
 
     .section __TEXT,__text,regular,pure_instructions
@@ -19,9 +19,9 @@
 // _bsk_err -- report a run-time error and terminate.
 //   Purpose : pending-line newline + flush of stdout, then write
 //             "<MESSAGE> IN <_bsk_curline>" + LF to fd 2 and exit.
-//             Exit status EXIT_RUN_OK (0) for ERR_OUT_OF_DATA, else
-//             EXIT_RUN_ERROR (1); also 1 for OUT OF DATA if writing
-//             stdout failed (LANGUAGE.md section 10).
+//             Exit status EXIT_RUN_OK (0) for ERR_OUT_OF_DATA and
+//             ERR_END_OF_INPUT, else EXIT_RUN_ERROR (1); those two
+//             also exit 1 if writing stdout failed (LANGUAGE.md 10).
 //   Inputs  : w0 = ERR_* code; must be a run-time code
 //             (ERR_FIRST_RUNTIME..ERR_TABLE_SIZE-1). Any other code (a
 //             caller bug) prints nothing and exits with status 1
@@ -92,11 +92,14 @@ Lrt_err_in:
     bl _bsk_rt_write_all
 
 Lrt_err_exit:
-    // OUT OF DATA is the normal end of a 1964 program: exit 0, unless
-    // stdout broke (output was lost): then exit 1 like any error.
+    // OUT OF DATA is the normal end of a 1964 program and END OF INPUT
+    // the normal end of a filter: exit 0, unless stdout broke (output
+    // was lost): then exit 1 like any error.
     mov w0, #EXIT_RUN_ERROR
-    cmp w19, #ERR_OUT_OF_DATA
     mov w9, #EXIT_RUN_OK
+    cmp w19, #ERR_OUT_OF_DATA
+    csel w0, w9, w0, eq
+    cmp w19, #ERR_END_OF_INPUT
     csel w0, w9, w0, eq
     cmp w22, #0
     mov w9, #EXIT_RUN_ERROR

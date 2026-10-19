@@ -14,12 +14,14 @@
 // Token record conventions beyond tokens.inc: TOK_PTR is always the
 // token start (for TK_STRING the first content byte), TOK_LEN is the
 // number of bytes consumed (for TK_STRING the content length). A
-// TK_BUILTIN with TOK_LEN = 4 consumed its '('; bare RND has TOK_LEN = 3.
-// TK_VAR also sets TOK_INDEX = its letter. A TK_BAD token consumes
-// nothing. Operand-mode TK_BAD codes: ILLEGAL CONSTANT (bad number),
-// ILLEGAL VARIABLE (letter+digit+'('), ILLEGAL FORMULA (FN without '(' or
-// an unexpected byte), INCORRECT FORMAT (unterminated string). Operator
-// mode TK_BAD is always INCORRECT FORMAT.
+// TK_BUILTIN with TOK_LEN = 4 consumed its '('; bare RND, NUM and DET have
+// TOK_LEN = 3. TK_VAR and TK_SVAR also set TOK_INDEX = their letter and
+// TOK_SLOT = the (string) slot; TK_FN0 sets TOK_INDEX = the FN letter. A
+// TK_BAD token consumes nothing. Operand-mode TK_BAD codes: ILLEGAL
+// CONSTANT (bad number), ILLEGAL VARIABLE (letter+digit+'(', or
+// letter+digit+'$('), ILLEGAL FORMULA (NUM( / DET(, or an unexpected
+// byte), INCORRECT FORMAT (unterminated string). Operator mode TK_BAD is
+// always INCORRECT FORMAT.
 // =====================================================================
 .include "baysick.inc"
 
@@ -92,7 +94,7 @@ _fe_scan:
     b.ls Lfe_scan_name
     b Lfe_scan_punct
 Lfe_scan_opmode:
-    // ---- operator mode: only THEN / TO / STEP start with a letter ------
+    // ---- operator mode: only THEN / TO / STEP / GOTO start with a letter
     cmp w11, #25
     b.ls Lfe_scan_keyword
 
@@ -335,9 +337,12 @@ Lfe_scan_bi_loop:
     ldrb w9, [x16, #2]
     cmp w9, w12
     b.ne 1f
-    // name matches: builtin call if '(' follows
+    // name matches
     str w15, [x19, #TOK_INDEX]
     mov w0, #TK_BUILTIN
+    cmp w15, #BI_NUM
+    b.hs Lfe_scan_bi_noarg              // NUM, DET: never an argument
+    // builtin call if '(' follows
     add x23, x20, #4
     cmp w13, #'('
     b.eq Lfe_scan_finish
@@ -347,6 +352,13 @@ Lfe_scan_bi_loop:
     b.eq Lfe_scan_finish
     str wzr, [x19, #TOK_INDEX]
     b Lfe_scan_fn                       // names are unique: stop looking
+Lfe_scan_bi_noarg:
+    // NUM / DET (LANGUAGE.md 5.2 step 3.3): a '(' after them is a formula error
+    add x23, x20, #3
+    cmp w13, #'('
+    b.ne Lfe_scan_finish
+    mov w1, #ERR_ILLEGAL_FORMULA
+    b Lfe_scan_bad
 1:
     add w15, w15, #1
     b Lfe_scan_bi_loop
@@ -359,17 +371,20 @@ Lfe_scan_fn:
     sub w14, w12, #'A'
     cmp w14, #25
     b.hi Lfe_scan_var
+    str w14, [x19, #TOK_INDEX]
     cmp w13, #'('
     b.ne 1f
-    str w14, [x19, #TOK_INDEX]
     add x23, x20, #4
     mov w0, #TK_FN
     b Lfe_scan_finish
 1:
-    mov w1, #ERR_ILLEGAL_FORMULA
-    b Lfe_scan_bad
+    // FNx without '(': a call without arguments, or the value variable
+    // inside FNx's own multi-line body (the parser decides)
+    add x23, x20, #3
+    mov w0, #TK_FN0
+    b Lfe_scan_finish
 Lfe_scan_var:
-    // letter [digit]; a bare letter followed by '(' is an array
+    // letter [digit], then '$' (string) or '(' (array) may follow
     sub w14, w10, #'A'
     str w14, [x19, #TOK_INDEX]
     mov w15, #SLOT_PER_LETTER
@@ -377,31 +392,52 @@ Lfe_scan_var:
     sub w16, w11, #'0'
     cmp w16, #9
     b.hi Lfe_scan_var_nodigit
-    // letter + digit: '(' after it is an illegal variable
-    cmp w12, #'('
-    b.ne 1f
-    mov w1, #ERR_ILLEGAL_VARIABLE
-    b Lfe_scan_bad
-1:
+    // letter + digit: slot letter*11 + digit + 1
     add w15, w15, w16
-    add w15, w15, #1                    // letter*11 + digit + 1
+    add w15, w15, #1
     str w15, [x19, #TOK_SLOT]
+    cmp w12, #'$'
+    b.eq Lfe_scan_var_dsvar
+    // letter + digit + '(' is an illegal variable
+    cmp w12, #'('
+    b.eq Lfe_scan_var_illegal
     add x23, x20, #2
     mov w0, #TK_VAR
     b Lfe_scan_finish
+Lfe_scan_var_dsvar:
+    // C7$ is a string variable; C7$( an illegal string list name
+    cmp w13, #'('
+    b.eq Lfe_scan_var_illegal
+    add x23, x20, #3
+    mov w0, #TK_SVAR
+    b Lfe_scan_finish
+Lfe_scan_var_illegal:
+    mov w1, #ERR_ILLEGAL_VARIABLE
+    b Lfe_scan_bad
 Lfe_scan_var_nodigit:
+    str w15, [x19, #TOK_SLOT]
+    cmp w11, #'$'
+    b.ne 2f
+    // A$ string variable, or A$( string list ('(' consumed)
+    add x23, x20, #2
+    mov w0, #TK_SVAR
+    cmp w12, #'('
+    b.ne Lfe_scan_finish
+    add x23, x20, #3
+    mov w0, #TK_SARRAY
+    b Lfe_scan_finish
+2:
     cmp w11, #'('
     b.ne 1f
     add x23, x20, #2                    // array: '(' consumed
     mov w0, #TK_ARRAY
     b Lfe_scan_finish
 1:
-    str w15, [x19, #TOK_SLOT]
     add x23, x20, #1
     mov w0, #TK_VAR
     b Lfe_scan_finish
 
-// ---- operator-position keywords THEN TO STEP (LANGUAGE.md 3.3) ------------
+// ---- operator-position keywords THEN TO STEP GOTO (LANGUAGE.md 3.3) ------------
 Lfe_scan_keyword:
     FE_PEEK w11, 1
     FE_PEEK w12, 2
@@ -427,7 +463,7 @@ Lfe_scan_keyword:
     b Lfe_scan_finish
 Lfe_scan_kw_step:
     cmp w10, #'S'
-    b.ne Lfe_scan_kw_bad
+    b.ne Lfe_scan_kw_goto
     cmp w11, #'T'
     b.ne Lfe_scan_kw_bad
     cmp w12, #'E'
@@ -436,6 +472,19 @@ Lfe_scan_kw_step:
     b.ne Lfe_scan_kw_bad
     add x23, x20, #4
     mov w0, #TK_STEP
+    b Lfe_scan_finish
+Lfe_scan_kw_goto:
+    // GOTO (IF ... GOTO, ON ... GOTO; "GO TO" is compacted to GOTO)
+    cmp w10, #'G'
+    b.ne Lfe_scan_kw_bad
+    cmp w11, #'O'
+    b.ne Lfe_scan_kw_bad
+    cmp w12, #'T'
+    b.ne Lfe_scan_kw_bad
+    cmp w13, #'O'
+    b.ne Lfe_scan_kw_bad
+    add x23, x20, #4
+    mov w0, #TK_GOTO
     b Lfe_scan_finish
 Lfe_scan_kw_bad:
     mov w1, #ERR_INCORRECT_FORMAT
@@ -646,3 +695,7 @@ Lfe_scan_builtins:
     .ascii "SQR", "\0"
     .ascii "INT", "\0"
     .ascii "RND", "\0"
+    .ascii "SGN", "\0"
+    .ascii "COT", "\0"
+    .ascii "NUM", "\0"
+    .ascii "DET", "\0"

@@ -37,7 +37,7 @@ for every other — and every operand field requires one kind (§3, §3.2, verif
 
 ## 2. Module structure
 
-A **Module** (`IRM_*`, 2192 bytes; 3488 with the Fourth Edition contract, DESIGN.md §2.2)
+A **Module** (`IRM_*`, 3488 bytes, DESIGN.md §2.2)
 holds:
 
 | Part | Meaning |
@@ -51,7 +51,7 @@ holds:
 | funcs | 27 entries `IRF_*`: index 0 = `main`, index 1+L = `FN` letter L; `PRESENT` = 0 if absent |
 | sarrays | 26 entries `IRA_*` (letter A…Z) for the string lists `A$( )` … `Z$( )`: `DIMS` 0 (unused) or 1, `B1` (the bound, default 10; storage `B1+1` strings), `B2` 0 |
 
-A **Function** (`IRF_*`, 64 bytes; 96 with the Fourth Edition contract) holds a linear array of
+A **Function** (`IRF_*`, 96 bytes) holds a linear array of
 instructions, its temp count, a label table (`LABELS[id]` = BASIC line number for a line label,
 0 for an internal label), its kind (`FUNC_KIND_MAIN`, `FUNC_KIND_FN` for a single-line DEF,
 `FUNC_KIND_FNML` for a multi-line DEF), its parameters (`NPARAMS` 0…8 and `PARAMS[k]`, the
@@ -68,7 +68,7 @@ its body plus internal labels; single-line functions have no labels.
 | temp | u32 index `0..NTEMPS-1` | `t<n>` |
 | slot | u32 in `IRI_X`: `0..285` user scalars, `286+2k` LIMIT of FOR k, `287+2k` STEP of FOR k | `A`, `X7`, `%lim3`, `%step3` |
 | string slot | u32 in `IRI_X` (`svar`): `0..285`, numbered like scalar slots, a separate space | `A$`, `X7$` |
-| string list | u32 letter 0..25 in `IRI_X` (`sald1`, `smat*`) | `A$` … `Z$` |
+| string list | u32 letter 0..25 in `IRI_X` (`sald1`, `smat*`, element form of `sread`/`insv`); in `IRI_IMM` (element form of `chgn2s`, §3.2) | `A$` … `Z$` |
 | label | u32 id in `IRI_X` (or `IRI_IMM` for gosub's return label) | `@<line>` for a line label, `L<id>` for an internal label |
 | array | u32 letter 0..25 in `IRI_X`; MAT opcodes also in `IRI_A` / `IRI_B` (§3.1) | `A` … `Z` |
 | function | u32 letter 0..25 in `IRI_X` | `FNA` … `FNZ` |
@@ -138,9 +138,11 @@ Placement rules (checked by the verifier, §6). Opcode groups:
 * **E** (expression): `const ldv add sub mul div pow neg sin cos tan atn exp abs log sqr int rnd
   ald1 ald2 callfn fnarg sgn cot num det`;
 * **S** (string reference): `slit svar sald1`;
-* **T** (statement): `line label stv jmp jcmp jfor read prnum prstr prcomma prsemi prnl stop`,
-  the MAT opcodes 42–54, and `sset sjcmp prsv prtab sread inbeg innum insv inend matinput
-  smatinput smatredim smatread smatprint chgs2n chgn2s onsel restore randomize`.
+* **T** (statement): `line label stv ast1 ast2 jmp jcmp jfor read prnum prstr prcomma prsemi
+  prnl stop`, the MAT opcodes 42–54, and `sset sjcmp prsv prtab sread inbeg innum insv inend
+  matinput smatinput smatredim smatread smatprint chgs2n chgn2s onsel restore randomize`.
+
+`nop` belongs to no group: it is allowed in every function kind.
 
 | Function kind | Allowed | It ends with |
 |---------------|---------|--------------|
@@ -184,10 +186,10 @@ address. Unused fields as in §2.1.
 | `sjcmp` 59 | REL, A=sref, B=sref, X | `sjcmp lt, t0, t1, @80` | if the strings compare `REL` (LANGUAGE.md §7.7: trailing spaces removed, unsigned bytes) jump to X |
 | `prsv` 60 | A=sref | `prsv t2` | PRINT string item: the bytes of the string A references |
 | `prtab` 61 | A | `prtab t3` | PRINT `TAB(A)` (LANGUAGE.md §8) |
-| `sread` 62 | A=sref | `sread t4` | the string A references := next string DATA value; none: OUT OF DATA termination |
+| `sread` 62 | A=sref; element form: X=slist, B | `sread t4`; `sread L$, t4` | the string A references (element form: element B of string list X) := next string DATA value; none: OUT OF DATA termination |
 | `inbeg` 63 | — | `inbeg` | INPUT: read the first line (prompt on a terminal; END OF INPUT) |
 | `innum` 64 | DST | `t5 = innum` | INPUT: DST := next field as a number (NOT ENOUGH / RETYPE handling, LANGUAGE.md §7.15) |
-| `insv` 65 | A=sref | `insv t6` | INPUT: the string A references := next field as a string |
+| `insv` 65 | A=sref; element form: X=slist, B | `insv t6`; `insv L$, t6` | INPUT: the string A references (element form: element B of string list X) := next field as a string |
 | `inend` 66 | — | `inend` | INPUT: TOO MUCH INPUT check |
 | `matinput` 67 | X=list | `matinput V` | MAT INPUT of numeric list X; sets NUM (LANGUAGE.md §7.14.8) |
 | `smatinput` 68 | X=slist | `smatinput V$` | MAT INPUT of string list X; sets NUM |
@@ -195,7 +197,7 @@ address. Unused fields as in §2.1.
 | `smatread` 70 | X=slist | `smatread L$` | MAT READ of string list X, current bound, from the string DATA block |
 | `smatprint` 71 | X=slist, IMM=mode | `smatprint L$, zoned` / `smatprint L$, packed` | MAT PRINT of string list X (LANGUAGE.md §7.14.5) |
 | `chgs2n` 72 | X=list, A=sref | `chgs2n A, t2` | CHANGE (string A) TO list X |
-| `chgn2s` 73 | X=list, A=sref | `chgn2s A, t2` | CHANGE list X TO (the string A references) |
+| `chgn2s` 73 | X=list, A=sref; element form: X=list, IMM=slist, B | `chgn2s A, t2`; `chgn2s A, L$, t2` | CHANGE list X TO (the string A references; element form: element B of string list IMM) |
 | `onsel` 74 | DST, A, IMM=N | `t1 = onsel t0, 3` | DST := trunc(A) if it is in 1…N, else ON EVALUATED OUT OF RANGE |
 | `restore` 75 | IMM=variant | `restore all` / `restore num` / `restore str` | RESTORE / RESTORE* / RESTORE$ |
 | `randomize` 76 | — | `randomize` | RANDOMIZE |
@@ -205,6 +207,20 @@ address. Unused fields as in §2.1.
 | `stparam` 82 | IMM=k, A | `stparam 0, t3` | parameter k of the current multi-line function := A |
 | `ldfv` 83 | DST | `t2 = ldfv` | DST := the current multi-line function's value variable |
 | `stfv` 84 | A | `stfv t2` | the current multi-line function's value variable := A |
+
+**Element form of `sread`, `insv`, `chgn2s`.** These three store into a string target. The
+plain form names it with an sref temp in `A` (in practice a `svar`: a string variable). A
+string list element `L$(i)` is named instead by the **element form**, selected by `A` =
+`IR_NONE`: `B` = the subscript temp (a number), and the string list letter in `X` (`sread`,
+`insv`; `IMM` = 0) or in `IMM` (`chgn2s`, whose `X` is its numeric list); `DST` and `C` are
+`IR_NONE`. The runtime call (DESIGN.md §6.7: `_bsk_sread_el`, `_bsk_input_str_el`,
+`_bsk_change_n2s_el`) first takes the value — the next string DATA value; the next valid input
+field, after any `NOT ENOUGH INPUT` / `RETYPE` diagnostics; the converted list, after its own
+SUBSCRIPT ERROR / STRING TOO LONG / ILLEGAL CHARACTER checks — and only then applies the
+subscript rule of `sald1` (SUBSCRIPT ERROR) and stores. So the subscript is checked at the
+store (LANGUAGE.md §7.1, §7.4, §7.15, §7.19), which a `sald1` before the call could not do.
+Text: `sread L$, tB`, `insv L$, tB`, `chgn2s X, L$, tB` (the `$` letter distinguishes them from
+the plain forms `sread tA`, `insv tA`, `chgn2s X, tA`).
 
 **`fnarg` rule.** A call with k arguments (k ≥ 2) is the k − 1 instructions `fnarg 1, …`,
 `fnarg 2, …`, …, `fnarg k−1, …`, in this order, **immediately** followed by its `callfn` (A =
@@ -280,7 +296,7 @@ it — then, into the same function:
 | `LET L(i) = e` | i; e; `ast1 L, ti, te` |
 | `LET L(i,j) = e` | i; j; e; `ast2 L, ti, tj, te` |
 | `LET x1 = x2 = … = e` (numeric, ≥ 2 targets) | for each target left to right: its subscripts (i; or i; j); then e; then for each target left to right its store with value te (`stv`, `ast1`, `ast2`, `stparam`, `stfv` as above). With one target this is the three rows above. |
-| `LET s1 = … = sk = r` (string targets) | for each target left to right: its string reference; then r's string reference; then `sset ts1, tr`, …, `sset tsk, tr` |
+| `LET s1 = … = sk = r` (string targets) | for each target left to right: a string variable V$: `tsj = svar V$`; a list element `L$(i)`: only i; then r's string reference; then for each target left to right: (a list element: `tsj = sald1 L$, ti`;) `sset tsj, tr` — the `sald1` immediately before its `sset`, so the subscript is checked at the store (LANGUAGE.md §7.1) |
 | `PRINT …` | for each element left to right: string constant → `prstr sK`; string variable or element → its string reference, then `prsv tr`; `TAB(e)` → e, then `prtab te`; expression → its lowering then `prnum te`; `,` → `prcomma`; `;` → `prsemi` **only if the previous element was an expression**, otherwise nothing. After the list: `prnl` unless the last element was `,` or `;` (an empty PRINT emits just `prnl`). |
 | `GOTO n` | `jmp @n` |
 | `IF a REL b THEN n`, `IF a REL b GOTO n` | a; b; `jcmp REL, ta, tb, @n` |
@@ -288,12 +304,12 @@ it — then, into the same function:
 | `ON e GOTO n1, …, nN` (also `THEN`) | e; `tk = onsel te, N`; for i = 1 … N−1: `tc = const <i>`, `jcmp eq, tk, tc, @ni`; then `jmp @nN` |
 | `GOSUB n` | allocate internal label R; `gosub @n, LR`; `label LR` |
 | `RETURN` | `return` |
-| `READ x1, x2, …` | for each target in order: numeric: [subscripts i (, j)]; `tN = read`; then `stv v, tN` or `ast1 L, ti, tN` or `ast2 L, ti, tj, tN` (or `stparam k, tN` for a parameter); string: its string reference, then `sread tr` |
-| `INPUT x1, x2, …` | `inbeg`; for each target in order: numeric: [subscripts]; `tN = innum`; then its store as in READ; string: its string reference, then `insv tr`; after the last target `inend` |
+| `READ x1, x2, …` | for each target in order: numeric: [subscripts i (, j)]; `tN = read`; then `stv v, tN` or `ast1 L, ti, tN` or `ast2 L, ti, tj, tN` (or `stparam k, tN` for a parameter); string: a string variable V$: `tr = svar V$`, `sread tr`; a list element `L$(i)`: i, then the element form `sread L$, ti` (§3.2: the value is taken, then the subscript checked at the store) |
+| `INPUT x1, x2, …` | `inbeg`; for each target in order: numeric: [subscripts]; `tN = innum`; then its store as in READ; string: a string variable V$: `tr = svar V$`, `insv tr`; a list element `L$(i)`: i, then the element form `insv L$, ti` (the field is taken, with its diagnostics, before the subscript is checked); after the last target `inend` |
 | `RESTORE` / `RESTORE*` / `RESTORE$` | `restore all` / `restore num` / `restore str` |
 | `RANDOMIZE` | `randomize` |
 | `CHANGE r TO L` | r's string reference; `chgs2n L, tr` |
-| `CHANGE L TO s` | s's string reference; `chgn2s L, ts` |
+| `CHANGE L TO s` | a string variable V$: `ts = svar V$`, `chgn2s L, ts`; a list element `M$(i)`: i, then the element form `chgn2s L, M$, ti` (the conversion's checks come before the subscript check) |
 | `END` | `end` |
 | `STOP` | `stop` |
 | `MAT READ X1, X2, …` | for each target in order: if it has dimensions `(r)` or `(r, c)`: r; [c;] `matredim X, tr` or `matredim X, tr, tc`; then `matread X`. A string list `X$`: [r; `smatredim X$, tr`;] `smatread X$` |
@@ -394,7 +410,8 @@ G17 := the value formatted exactly as C printf("%.17g")
 * `const` lines end with `" ; " G17` like data lines.
 * MAT opcodes print as in §3 (`matprint A, zoned`, `matscale C, t3, A`, …); see
   `tests/ir/mat_ops.ir` for every form. The §3.2 opcodes print as in their table; see
-  `tests/ir/ed4_strings.ir`, `tests/ir/ed4_input_on.ir` and `tests/ir/ed4_functions.ir`.
+  `tests/ir/ed4_strings.ir`, `tests/ir/ed4_input_on.ir`, `tests/ir/ed4_functions.ir` and, for the
+  element forms of `sread`, `insv` and `chgn2s`, `tests/ir/ed4_slist_targets.ir`.
 * `module-line` is unchanged: string lists and string DATA are counted by their lines only.
   A dump of a program without Third/Fourth Edition features is byte-identical to the earlier
   format.
@@ -459,17 +476,23 @@ internal error (exit 4). Checks:
 1. Every opcode is `< OP_COUNT`; field usage matches §3, §3.1 and §3.2 (unused fields are
    `IR_NONE`/0; `matprint` and `smatprint` IMM is 0 or 1; `matredim` B may be `IR_NONE`, A may
    not; `restore` IMM is 0…2; `onsel` IMM is ≥ 1; `fnarg` IMM is 1…7; `param`/`stparam` IMM is
-   `< NPARAMS` of the function; `callfn` A may be `IR_NONE`).
+   `< NPARAMS` of the function; `callfn` A may be `IR_NONE`, a call that loads no argument;
+   `sread`, `insv`, `chgn2s` with A = `IR_NONE` are the element form of §3.2: B is a number
+   temp, X a declared string list (`sread`, `insv`; IMM 0) or, for `chgn2s`, X a numeric list
+   and IMM a declared string list letter).
 2. Every temp operand (a field whose kind is temp for that opcode, §3.1, §3.2) is `< NTEMPS`, is
    defined by an earlier instruction in the same function, and has the kind the field requires
-   (sref for the sref fields of §3.2, number everywhere else).
+   (sref for the sref fields of §3.2, number everywhere else, including the subscript `B` of an
+   element form). A string reference that is written (`sset` A, `sread` A, `insv` A, the
+   `chgn2s` target A) is never defined by a `slit`.
 3. Every label referenced by `jmp/jcmp/sjcmp/jfor/gosub` (both labels) is `< NLABELS` of the
    same function and is defined by exactly one `line`/`label` of that function; every label id
    is defined exactly once.
-4. Slots are `< NSLOTS`; array letters refer to arrays with `DIMS` ≠ 0 and the right
-   dimensionality (`ald1/ast1` ↔ 1, `ald2/ast2` ↔ 2; MAT opcodes accept either, in every
-   array-kind field; `matinput`, `chgs2n`, `chgn2s` ↔ 1); string-list letters refer to sarrays
-   with `DIMS` = 1; string slots are `< 286`; string ids `< NSTRINGS`; `callfn` targets are
+4. Slots are `< NSLOTS` (no rule limits the FOR slots to `main`: a multi-line FN body writes
+   those of its own FOR loops with `stv`); array letters refer to arrays with `DIMS` ≠ 0 and the
+   right dimensionality (`ald1/ast1` ↔ 1, `ald2/ast2` ↔ 2; MAT opcodes accept either, in every
+   array-kind field; `matinput`, `chgs2n`, `chgn2s` ↔ 1); string-list letters (in `X`, or in the
+   `IMM` of `chgn2s`'s element form) refer to sarrays with `DIMS` = 1; string slots are `< 286`; string ids `< NSTRINGS`; `callfn` targets are
    present FN functions, and the number of arguments (`fnarg` rule, §3.2) equals the callee's
    `NPARAMS`.
 5. Placement rules of §3; `main` ends with `end`; each FN function ends with `ret`; `fnarg`

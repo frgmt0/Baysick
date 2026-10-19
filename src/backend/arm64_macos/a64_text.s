@@ -1,13 +1,13 @@
 // =====================================================================
 // src/backend/arm64_macos/a64_text.s -- stateless text helpers for the
 // arm64-macos backend: a tiny formatter and the two instruction shapes
-// that need immediate splitting (mov of a wide constant, d-register
+// that need immediate splitting (mov of a wide constant, d- or x-register
 // load/store with a possibly out-of-range offset).
 //
 // Exports (AAPCS64, used by a64_emit.s and a64_insn.s):
 //   _bk_arm64_fmt     formatted append to an OutBuf
 //   _bk_arm64_movimm  movz/movk sequence building a constant
-//   _bk_arm64_memop   ldr/str of a d register at [base, #off]
+//   _bk_arm64_memop   ldr/str of a d or x register at [base, #off]
 // =====================================================================
 .include "baysick.inc"
 
@@ -204,15 +204,16 @@ Lbk_mi_done:
     ret
 
 // ---------------------------------------------------------------------
-// _bk_arm64_memop -- emit a d-register load or store:
-//   "MNEM dN, [BASE, #off]"            if off <= 32760 and off % 8 == 0
-//   movz/movk x16 = off; "MNEM dN, [BASE, x16]"   otherwise
-// In:  x0 = OutBuf*, x1 = mnemonic ("ldr"/"str"), x2 = d register number,
-//      x3 = base register name ("sp"/"x19"), x4 = byte offset
+// _bk_arm64_memop -- emit a d- or x-register load or store:
+//   "MNEM <P>N, [BASE, #off]"            if off <= 32760 and off % 8 == 0
+//   movz/movk x16 = off; "MNEM <P>N, [BASE, x16]"   otherwise
+// In:  x0 = OutBuf*, x1 = mnemonic ("ldr"/"str"), x2 = register number,
+//      x3 = base register name ("sp"/"x19"), x4 = byte offset,
+//      x5 = register class prefix ("d" or "x")
 // Out: none
 // Clobbers: x0-x17, d0-d7, d16-d31
 // Callee-saved used: x19 = OutBuf*, x20 = mnemonic, x21 = register
-//                    number, x22 = base name, x23 = offset
+//                    number, x22 = base name, x23 = offset, x24 = prefix
 // Frame: 64 bytes
 // ---------------------------------------------------------------------
     .globl _bk_arm64_memop
@@ -222,12 +223,13 @@ _bk_arm64_memop:
     mov x29, sp
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
-    str x23, [sp, #48]
+    stp x23, x24, [sp, #48]
     mov x19, x0
     mov x20, x1
     mov x21, x2
     mov x22, x3
     mov x23, x4
+    mov x24, x5
     // the scaled unsigned 12-bit immediate reaches 8*4095 = 32760
     tst x23, #7
     b.ne Lbk_mo_reg
@@ -238,9 +240,10 @@ _bk_arm64_memop:
     adrp x1, Lbk_mo_imm_fmt@PAGE
     add x1, x1, Lbk_mo_imm_fmt@PAGEOFF
     mov x2, x20
-    mov x3, x21
-    mov x4, x22
-    mov x5, x23
+    mov x3, x24
+    mov x4, x21
+    mov x5, x22
+    mov x6, x23
     bl _bk_arm64_fmt
     b Lbk_mo_done
 Lbk_mo_reg:
@@ -254,11 +257,12 @@ Lbk_mo_reg:
     adrp x1, Lbk_mo_reg_fmt@PAGE
     add x1, x1, Lbk_mo_reg_fmt@PAGEOFF
     mov x2, x20
-    mov x3, x21
-    mov x4, x22
+    mov x3, x24
+    mov x4, x21
+    mov x5, x22
     bl _bk_arm64_fmt
 Lbk_mo_done:
-    ldr x23, [sp, #48]
+    ldp x23, x24, [sp, #48]
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
     ldp x29, x30, [sp], #64
@@ -272,8 +276,8 @@ Lbk_mi_movz:
 Lbk_mi_movk:
     .asciz "movk"
 Lbk_mo_imm_fmt:
-    .asciz "    %s d%u, [%s, #%u]\n"
+    .asciz "    %s %s%u, [%s, #%u]\n"
 Lbk_mo_reg_fmt:
-    .asciz "    %s d%u, [%s, x16]\n"
+    .asciz "    %s %s%u, [%s, x16]\n"
 Lbk_mo_x16:
     .asciz "x16"

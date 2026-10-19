@@ -2,7 +2,10 @@
 # src/runtime_x86_64_linux/rt_array.s -- array element addressing with
 # bounds checks.
 #
-# Defines: bsk_aref1 bsk_aref2   (DESIGN.md sections 6.2, 6.4)
+# Defines: bsk_aref1 bsk_aref2 bsk_saref1   (DESIGN.md sections 6.2, 6.4,
+#          6.7)
+# Defines (private to the runtime, .globl + .hidden):
+#   bsk_rt_round_half   floor(x + 1/2), exactly (CHANGE, rt_ed4.s)
 # A subscript s is converted to r = floor(s + 0.5) (LANGUAGE.md 7.11),
 # evaluated exactly: r = floor(s), plus 1 if s - floor(s) >= 0.5. The
 # IEEE sum s + 0.5 is NOT used: it can round up (s = 0.5 - 2^-54 gives
@@ -32,6 +35,21 @@
 # huge and negative subscripts are rejected before any conversion.
 # Clobbers xs, %rax, %rcx, %xmm2 (r), %xmm3.
 .macro RT_SUBSCRIPT xs, boundoff, out
+    RT_ROUND_HALF \xs
+    pxor %xmm3, %xmm3
+    ucomisd %xmm3, %xmm2
+    jb .Lrt_array_bad               # r < 0, or NaN (unordered)
+    movl \boundoff(%rdi), %eax      # u32 bound, zero-extended
+    cvtsi2sdq %rax, %xmm3           # bound as a double (exact)
+    ucomisd %xmm3, %xmm2
+    ja .Lrt_array_bad               # r > bound
+    cvttsd2si %xmm2, \out           # 0 <= r <= bound: exact
+.endm
+
+# RT_ROUND_HALF xs: %xmm2 = floor(xs + 1/2), exactly (see above);
+# +-inf and NaN come out as +-inf and NaN, huge values unchanged.
+# Clobbers xs, %rax, %rcx, %xmm2.
+.macro RT_ROUND_HALF xs
     movq \xs, %rax
     btrq $63, %rax                  # bits of |s|
     movabsq $RT_D2P52_BITS, %rcx
@@ -50,14 +68,6 @@
     jb .Lrt_array_rounded_\@        # f < 0.5 (or NaN): r = floor(s)
     addsd .Lrt_array_one(%rip), %xmm2   # f >= 0.5: r = floor(s) + 1
 .Lrt_array_rounded_\@:
-    pxor %xmm3, %xmm3
-    ucomisd %xmm3, %xmm2
-    jb .Lrt_array_bad               # r < 0, or NaN (unordered)
-    movl \boundoff(%rdi), %eax      # u32 bound, zero-extended
-    cvtsi2sdq %rax, %xmm3           # bound as a double (exact)
-    ucomisd %xmm3, %xmm2
-    ja .Lrt_array_bad               # r > bound
-    cvttsd2si %xmm2, \out           # 0 <= r <= bound: exact
 .endm
 
     .text
@@ -107,7 +117,52 @@ bsk_aref2:
     ret
     .size bsk_aref2, . - bsk_aref2
 
-# Shared error exit for both functions (reached by a jump from a leaf,
+# ---------------------------------------------------------------------
+# bsk_saref1 -- address of string list element L$(i) (DESIGN.md 6.7).
+#   Purpose : the subscript rule of bsk_aref1 (LANGUAGE.md 7.11) against
+#             the current RTA_B1; element i is the SD record at
+#             RTA_DATA + SD_SIZE * i.
+#   Inputs  : %rdi = string-list descriptor (RTA_*), %xmm0 = subscript
+#   Outputs : %rax = address of the SD record
+#   Errors  : SUBSCRIPT ERROR if the rounded subscript is outside 0..B1
+#   Clobbers: %rax, %rcx, %rdx, %xmm0, %xmm2, %xmm3
+#   Callee-saved used: none
+#   Frame   : none (leaf)
+# ---------------------------------------------------------------------
+    .globl bsk_saref1
+    .type bsk_saref1, @function
+    .p2align 4
+bsk_saref1:
+    RT_SUBSCRIPT %xmm0, RTA_B1, %rdx
+    imulq $SD_SIZE, %rdx, %rdx      # SD_SIZE bytes per element
+    movq RTA_DATA(%rdi), %rax
+    addq %rdx, %rax
+    ret
+    .size bsk_saref1, . - bsk_saref1
+
+# ---------------------------------------------------------------------
+# bsk_rt_round_half -- r = floor(x + 1/2), computed exactly (the
+#   subscript rounding of LANGUAGE.md 7.11, also used by CHANGE for
+#   the length L(0) and the character codes, LANGUAGE.md 7.19).
+#   Inputs  : %xmm0 = x
+#   Outputs : %xmm0 = r as a double (an integer; +-inf / NaN / huge
+#             values come back unchanged, so the caller's range test
+#             on the double rejects them before any conversion)
+#   Clobbers: %rax, %rcx, %xmm2
+#   Callee-saved used: none
+#   Frame   : none (leaf)
+# ---------------------------------------------------------------------
+    .globl bsk_rt_round_half
+    .hidden bsk_rt_round_half
+    .type bsk_rt_round_half, @function
+    .p2align 4
+bsk_rt_round_half:
+    RT_ROUND_HALF %xmm0             # %xmm2 = floor(x + 1/2)
+    movapd %xmm2, %xmm0
+    ret
+    .size bsk_rt_round_half, . - bsk_rt_round_half
+
+# Shared error exit for the three functions (reached by a jump from a leaf,
 # so %rsp is as at a call entry; bsk_err realigns anyway).
 .Lrt_array_bad:
     movl $ERR_SUBSCRIPT, %edi

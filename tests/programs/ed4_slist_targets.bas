@@ -1,0 +1,8 @@
+10 DIM L(5)
+20 READ A$(1), A$(2.4)
+30 INPUT B$(3), B$(0)
+40 CHANGE "XYZ" TO L
+50 CHANGE L TO C$(10)
+60 PRINT A$(1); A$(2); B$(3); B$(0); C$(10)
+70 DATA "AB", CD
+80 END

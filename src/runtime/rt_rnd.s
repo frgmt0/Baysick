@@ -1,7 +1,7 @@
 // =====================================================================
 // src/runtime/rt_rnd.s -- RND generator (LANGUAGE.md section 6).
 //
-// Defines: _bsk_rnd
+// Defines: _bsk_rnd; the runtime-private state _bsk_rt_rnd_state
 // Park-Miller "minimal standard" Lehmer generator:
 //   s := (RNG_MULT * s) mod RNG_MOD      (exact 64-bit integers)
 //   RND := s / RNG_MOD                    (one IEEE division)
@@ -38,9 +38,11 @@ _bsk_rnd:
     ret
 
 // ---------------------------------------------------------------------
-// State: the generator value s (u64), initially RNG_SEED.
+// State: the generator value s (u64), initially RNG_SEED. Runtime-private
+// (.private_extern) because RANDOMIZE (rt_ed4.s) replaces it.
 // ---------------------------------------------------------------------
     .section __DATA,__data
     .p2align 3
+    .private_extern _bsk_rt_rnd_state
 _bsk_rt_rnd_state:
     .quad RNG_SEED

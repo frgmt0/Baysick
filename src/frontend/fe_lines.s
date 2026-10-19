@@ -91,11 +91,13 @@ Lfe_lines_read_line:
 
 Lfe_lines_read_compact:
     // compaction (LANGUAGE.md 2.1): x11 = source cursor, x12 = its end,
-    // x13 = output cursor, w14 = in-string flag
+    // x13 = output cursor, w14 = in-string flag, w8 = 1 once a remark
+    // (an apostrophe outside a string) cut the line short
     mov x11, x19
     add x12, x19, x10
     add x13, sp, #96
     mov w14, #0
+    mov w8, #0
 Lfe_lines_read_cloop:
     cmp x11, x12
     b.hs Lfe_lines_read_cdone
@@ -108,6 +110,10 @@ Lfe_lines_read_cloop:
 1:
     // inside a string every byte is kept unchanged
     cbnz w14, Lfe_lines_read_cstore
+    // an apostrophe outside a string starts a remark: it and the rest of
+    // the line are dropped ([M68] p. 52)
+    cmp w9, #0x27
+    b.eq Lfe_lines_read_remark
     // spaces and tabs vanish outside strings
     cmp w9, #' '
     b.eq Lfe_lines_read_cloop
@@ -137,6 +143,8 @@ Lfe_lines_read_cloop:
 Lfe_lines_read_cstore:
     strb w9, [x13], #1
     b Lfe_lines_read_cloop
+Lfe_lines_read_remark:
+    mov w8, #1
 Lfe_lines_read_cdone:
     add x9, sp, #96
     sub x25, x13, x9                    // compacted length
@@ -170,6 +178,9 @@ Lfe_lines_read_digits_done:
     sub x28, x25, x27                   // statement text length
     add x9, x21, x26, lsl #3            // &table[line]
     cbnz x28, Lfe_lines_read_store
+    // digits followed only by a remark: stored with an empty statement
+    // text (ILLEGAL INSTRUCTION later), not a deletion (LANGUAGE.md 1.5)
+    cbnz w8, Lfe_lines_read_store
     // ---- number alone: delete the line if it exists -------------------
     ldr x10, [x9]
     cbz x10, Lfe_lines_read_next

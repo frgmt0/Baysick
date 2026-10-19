@@ -17,6 +17,13 @@
 //          for i != p: f := W(i,p); W(i,j) -= f*W(p,j) (j > p);
 //                                   X(i,j) -= f*X(p,j) (all j)
 //   then the finite test of X (_bsk_kneon_chkview).
+// DET (LANGUAGE.md 7.14.6, DESIGN.md 6.6.1): det := 1; at step p, after
+// the row exchange, det := -det if r != p, then det := det * d (one
+// IEEE multiplication with the same d the divisions use). The running
+// value lives in the frame (RT_KI_DET) and is stored into the
+// runtime-private cell _bsk_rt_kinv_det (rt_kinit.s) on the KS_OK /
+// KS_NONFINITE exits (a KS_SINGULAR exit leaves the cell unchanged).
+// It reads W(p,p) only, so no element of W or X changes.
 // Every operation is a single IEEE double operation: true division
 // (fdiv), and fmul then fsub (never fmla/fmls); the vector and
 // by-element forms (.2d, .d[k]) compute each lane exactly as the scalar
@@ -77,7 +84,8 @@
 // (`as -Wa,-defsym,RT_KI_NB=<k>`, any k >= 1): the result does not depend
 // on it.
 //
-// Link isolation (DESIGN.md 6.6.1): references only rt_kneon_elem.s.
+// Link isolation (DESIGN.md 6.6.1): references only rt_kneon_elem.s and
+// the DET cell of rt_kinit.s.
 // =====================================================================
 .include "baysick.inc"
 
@@ -90,6 +98,7 @@
 .endif
 .equ RT_KI_JB,      128             // column chunk of Lrt_ki_upd (multiple of 8)
 .equ RT_KI_TOL,     160             // frame offset of tol in _bsk_kneon_inv
+.equ RT_KI_DET,     168             // frame offset of the running determinant
 .equ RT_KI_FRAME,   176             // frame size of _bsk_kneon_inv
 
     .section __TEXT,__text,regular,pure_instructions
@@ -648,7 +657,7 @@ Lrt_ki_tail:
 //             _bsk_rt_kinv_idx; d8-d15 saved because Lrt_ki_upd uses
 //             all vector registers
 //   Frame   : RT_KI_FRAME = 176 bytes: frame record, x19-x28, d8-d15,
-//             tol at RT_KI_TOL; ends with a tail call to
+//             tol at RT_KI_TOL, the running determinant at RT_KI_DET; ends with a tail call to
 //             _bsk_kneon_chkview after the epilogue
 // Step registers: x8 = &W(p,p), x9 = &X(p,0), x10 = i, x11 = r,
 //   x16 = &W(i,p); d16 = tol, d18 = best, d19/v19 = d, d21/v21 = f,
@@ -707,6 +716,8 @@ Lrt_ki_copy_col:
     fmul d16, d16, d0               // n * 2^-52 (exact)
     fmul d16, d16, d17              // one rounding
     str d16, [sp, #RT_KI_TOL]
+    fmov d0, #1.0
+    str d0, [sp, #RT_KI_DET]        // det := 1
 
     // ---- X := identity; column bookkeeping := identity ----
     mov x10, #0
@@ -767,6 +778,9 @@ Lrt_ki_piv_done:
     madd x9, x27, x24, x23          // &X(p,0)
     cmp x11, x27
     b.eq Lrt_ki_noswap
+    ldr d0, [sp, #RT_KI_DET]
+    fneg d0, d0                     // a row exchange: det := -det
+    str d0, [sp, #RT_KI_DET]
     // Exchange rows p and r: W columns p0..n-1 (multipliers, panel,
     // trailing part with its pending updates), all of X, and the two
     // rows' unit-column records.
@@ -840,8 +854,12 @@ Lrt_ki_caught:
     madd x8, x27, x22, x21
     add x8, x8, x27, lsl #3         // &W(p,p)
     madd x9, x27, x24, x23          // &X(p,0)
-    // Pivot d must be finite.
+    // det := det * d (pinned: after the exchange, before the divisions).
     ldr d19, [x8]
+    ldr d0, [sp, #RT_KI_DET]
+    fmul d0, d0, d19
+    str d0, [sp, #RT_KI_DET]
+    // Pivot d must be finite.
     mov x12, #RT_KI_INF
     fmov d22, x12
     fabs d0, d19
@@ -987,7 +1005,11 @@ Lrt_ki_perm_row:
     cmp x10, x20
     b.lo Lrt_ki_perm_row
 
-    // ---- result: finite test of X, tail call after the epilogue ----
+    // ---- result: publish DET, finite test of X, tail call after the
+    // epilogue ----
+    ldr d0, [sp, #RT_KI_DET]
+    adrp x9, _bsk_rt_kinv_det@PAGE
+    str d0, [x9, _bsk_rt_kinv_det@PAGEOFF]
     mov x0, x19
     RT_KI_EPILOGUE
     b _bsk_kneon_chkview
@@ -996,6 +1018,9 @@ Lrt_ki_singular:
     mov x0, #KS_SINGULAR
     b Lrt_ki_ret
 Lrt_ki_nonfinite:
+    ldr d0, [sp, #RT_KI_DET]        // the product up to this pivot
+    adrp x9, _bsk_rt_kinv_det@PAGE
+    str d0, [x9, _bsk_rt_kinv_det@PAGEOFF]
     mov x0, #KS_NONFINITE
 Lrt_ki_ret:
     RT_KI_EPILOGUE

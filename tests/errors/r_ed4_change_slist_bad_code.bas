@@ -1,0 +1,5 @@
+10 DIM L(3)
+20 LET L(0) = 1
+30 LET L(1) = 300
+40 CHANGE L TO A$(99)
+50 END

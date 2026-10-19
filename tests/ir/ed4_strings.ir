@@ -9,7 +9,7 @@ string s3 "!"
 data d0 0x401C000000000000 ; 7
 sdata d0 "ABC"
 sdata d1 "D,E"
-func main temps=20 labels=14
+func main temps=19 labels=14
   line 10
   line 20
   t0 = svar A$
@@ -19,9 +19,9 @@ func main temps=20 labels=14
   sset t1, t2
   line 30
   t3 = const 0x4000000000000000 ; 2
-  t4 = sald1 L$, t3
-  t5 = svar A$
-  sset t4, t5
+  t4 = svar A$
+  t5 = sald1 L$, t3
+  sset t5, t4
   line 40
   t6 = svar C$
   sread t6
@@ -61,8 +61,7 @@ func main temps=20 labels=14
   chgs2n V, t17
   line 120
   t18 = const 0x3FF0000000000000 ; 1
-  t19 = sald1 L$, t18
-  chgn2s V, t19
+  chgn2s V, L$, t18
   line 130
   line 140
   end

@@ -47,7 +47,6 @@ ASSERT (NUM_STRING_SLOTS == NUM_SCALAR_SLOTS),             "string slots number 
 ASSERT (LIM_STRING_LEN == LIM_INPUT_LINE),                 "an input line always fits a string"
 ASSERT (TAB_MODULUS == PRINT_LINE_WIDTH),                  "TAB modulus is the line width"
 ASSERT (FUNC_KIND_FNML == (FUNC_KIND_FN + 1)),             "FUNC_KIND values"
-.if BSK_ED4_CONTRACT
 ASSERT (OP_COUNT == (OP_STFV + 1)),                        "OP_COUNT"
 ASSERT (KW_COUNT == (KW_FNEND + 1)),                       "KW_COUNT"
 ASSERT (TK_COUNT == (TK_FN0 + 1)),                         "TK_COUNT"
@@ -60,13 +59,5 @@ ASSERT ((IRM_FUNCS + NUM_FUNCS*IRF_SIZE) == IRM_SARRAYS),  "IRM: string lists fo
 ASSERT ((IRM_SARRAYS + NUM_LETTERS*IRA_SIZE) == IRM_NSDATA), "IRM: string data count follows string lists"
 ASSERT ((IRM_SDATA + 8) == IRM_SIZE),                      "IRM layout"
 ASSERT ((IRM_SDATA % 8) == 0),                             "IRM_SDATA alignment"
-.else
-ASSERT (OP_COUNT == (OP_MATINV + 1)),                      "OP_COUNT (Second Edition staging)"
-ASSERT (KW_COUNT == (KW_MAT + 1)),                         "KW_COUNT (Second Edition staging)"
-ASSERT (TK_COUNT == (TK_BAD + 1)),                         "TK_COUNT (Second Edition staging)"
-ASSERT (BI_COUNT == (BI_RND + 1)),                         "BI_COUNT (Second Edition staging)"
-ASSERT ((IRF_RESERVED + 8) == IRF_SIZE),                   "IRF layout (Second Edition staging)"
-ASSERT ((IRM_FUNCS + NUM_FUNCS*IRF_SIZE) == IRM_SIZE),     "IRM: funcs must end at IRM_SIZE (Second Edition staging)"
-.endif
 ASSERT ((IRM_FUNCS % 8) == 0),                             "IRM_FUNCS alignment"
 ASSERT (PH_SDK < PH_LIMIT),                                "placeholders below PH_LIMIT"

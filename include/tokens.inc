@@ -54,14 +54,7 @@
 .equ TK_SARRAY,         27  /* letter '$' '('; TOK_INDEX = letter 0..25 ('(' consumed) */
 .equ TK_GOTO,           28  /* keyword GOTO (operator mode only: IF ... GOTO, ON ... GOTO) */
 .equ TK_FN0,            29  /* FNx NOT followed by '('; TOK_INDEX = 0..25 */
-.ifndef BSK_ED4_CONTRACT
-.equ BSK_ED4_CONTRACT, 0
-.endif
-.if BSK_ED4_CONTRACT
 .equ TK_COUNT,          30
-.else
-.equ TK_COUNT,          26
-.endif
 
 // ---- Token record (filled by the scanner), 40 bytes --------------------
 .equ TOK_KIND,          0   /* u32 TK_* */
@@ -88,11 +81,7 @@
 .equ BI_COT,            11  /* Fourth Edition */
 .equ BI_NUM,            12  /* Fourth Edition, never with an argument */
 .equ BI_DET,            13  /* Fourth Edition, never with an argument */
-.if BSK_ED4_CONTRACT
 .equ BI_COUNT,          14
-.else
-.equ BI_COUNT,          10
-.endif
 
 // ---- Statement keyword ids (matched as prefixes of the compacted text
 //      after the line number, in exactly this order) --------------------
@@ -119,11 +108,7 @@
 .equ KW_CHANGE,         20  /* Fourth Edition (7.19) */
 .equ KW_FNEND,          21  /* Fourth Edition (7.10) */
 
-.if BSK_ED4_CONTRACT
 .equ KW_COUNT,          22
-.else
-.equ KW_COUNT,          16
-.endif
 
 // ---- MAT sub-keywords (after "MAT", in this order) and MAT function ids --
 // "MAT" is followed by READ, PRINT, INPUT (Fourth Edition), or an

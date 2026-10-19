@@ -1,0 +1,4 @@
+10 READ X$, Y
+20 READ A$(11)
+30 DATA Q, 1
+40 END

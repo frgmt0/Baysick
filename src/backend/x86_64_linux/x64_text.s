@@ -22,6 +22,9 @@
 //   Directives (each consumes the next argument from x2, x3, ... x7):
 //     %u  u64 in unsigned decimal         %s  NUL-terminated string
 //     %L  letter: 'A' + argument (0..25)  %x  "0x" + 16 uppercase hex digits
+//     %B  label base of a function (argument = function index): index 0
+//         (main) gives ".Lbsk_L", index 1+L gives ".Lfn_<L>_L"; the label
+//         id follows as a separate %u
 //     %%  a literal '%' (AT&T register names are written "%%rax")
 //   Any other character after '%' is emitted literally (with the '%').
 // In:  x0 = OutBuf*, x1 = NUL-terminated format, x2..x7 = arguments
@@ -76,6 +79,8 @@ Lbk_x64_fmt_directive:
     b.eq Lbk_x64_fmt_letter
     cmp w9, #'x'
     b.eq Lbk_x64_fmt_hex
+    cmp w9, #'B'
+    b.eq Lbk_x64_fmt_base
     cmp w9, #'%'
     b.eq Lbk_x64_fmt_pct
     // unknown directive: emit both characters as text
@@ -114,6 +119,29 @@ Lbk_x64_fmt_hex:
     ldr x1, [x21], #8
     mov x0, x19
     bl _ob_puthex16
+    b Lbk_x64_fmt_run
+Lbk_x64_fmt_base:
+    // label base: main -> ".Lbsk_L"; FN letter L -> ".Lfn_<L>_L"
+    // (x22, the literal-run start, is dead until Lbk_x64_fmt_run resets it)
+    ldr x22, [x21], #8
+    mov x0, x19
+    cbz x22, Lbk_x64_fmt_base_main
+    adrp x1, Lbk_x64_fmt_s_fn@PAGE
+    add x1, x1, Lbk_x64_fmt_s_fn@PAGEOFF
+    bl _ob_puts
+    sub w1, w22, #1
+    add w1, w1, #'A'
+    mov x0, x19
+    bl _ob_putc
+    mov x0, x19
+    adrp x1, Lbk_x64_fmt_s_sfx@PAGE
+    add x1, x1, Lbk_x64_fmt_s_sfx@PAGEOFF
+    bl _ob_puts
+    b Lbk_x64_fmt_run
+Lbk_x64_fmt_base_main:
+    adrp x1, Lbk_x64_fmt_s_main@PAGE
+    add x1, x1, Lbk_x64_fmt_s_main@PAGEOFF
+    bl _ob_puts
     b Lbk_x64_fmt_run
 Lbk_x64_fmt_pct:
     // "%%" -> '%'
@@ -198,6 +226,13 @@ Lbk_x64_bytes_done:
     ret
 
     .section __TEXT,__cstring,cstring_literals
+Lbk_x64_fmt_s_main:
+    .asciz ".Lbsk_L"
+Lbk_x64_fmt_s_fn:
+    .asciz ".Lfn_"
+Lbk_x64_fmt_s_sfx:
+    .asciz "_L"
+
 Lbk_x64_bytes_kw:
     .asciz "    .byte "
 Lbk_x64_bytes_sep:

@@ -1,0 +1,33 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=1 strings=0 data=0
+array L dims=1 b1=3
+sarray A dims=1 b1=10
+sarray C dims=1 b1=10
+sdata d0 "P"
+sdata d1 "Q"
+sdata d2 "R"
+func main temps=7 labels=6
+  line 10
+  line 20
+  t0 = const 0x4000000000000000 ; 2
+  sread A$, t0
+  t1 = svar B$
+  sread t1
+  t2 = ldv I
+  sread C$, t2
+  line 30
+  inbeg
+  t3 = const 0x3FF0000000000000 ; 1
+  insv A$, t3
+  t4 = innum
+  stv X, t4
+  t5 = svar D$
+  insv t5
+  inend
+  line 40
+  t6 = const 0x4008000000000000 ; 3
+  chgn2s L, C$, t6
+  line 50
+  line 60
+  end
+endfunc

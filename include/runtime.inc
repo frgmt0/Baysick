@@ -54,10 +54,14 @@
 //  _bsk_print_sv(x0=SD*)                PRINT a string variable/element item
 //  _bsk_print_tab(d0=x)                 PRINT TAB(x)
 //  _bsk_sread(x0=dst SD*)               next string DATA value (OUT OF DATA)
+//  _bsk_sread_el(x0=slist, d0=i)        the same into element i: value first,
+//                                       then the subscript check at the store
 //  _bsk_restore(w0=RESTORE_*)           RESTORE / RESTORE* / RESTORE$
 //  _bsk_input_begin()                   INPUT: read the first line
 //  _bsk_input_num() -> d0               INPUT: next numeric field
 //  _bsk_input_str(x0=dst SD*)           INPUT: next string field
+//  _bsk_input_str_el(x0=slist, d0=i)    the same into element i: field (and its
+//                                       diagnostics) first, then the subscript check
 //  _bsk_input_end()                     INPUT: TOO MUCH INPUT check
 //  _bsk_mat_input(x0=list)              MAT INPUT of a numeric list (sets NUM)
 //  _bsk_smat_input(x0=slist)            MAT INPUT of a string list (sets NUM)
@@ -65,6 +69,8 @@
 //  _bsk_smat_print(x0=slist, w1=MATPR_ZONED|MATPR_PACKED)
 //  _bsk_change_s2n(x0=list, x1=src SD*) CHANGE string TO list
 //  _bsk_change_n2s(x0=dst SD*, x1=list) CHANGE list TO string
+//  _bsk_change_n2s_el(x0=slist, d0=i, x1=list)  the same into element i: the
+//                                       conversion's checks, then the subscript
 //  _bsk_on(d0=x, w0=n) -> d0            ON selector: trunc(x) in 1..n, else error 42
 //  _bsk_randomize()                     RANDOMIZE
 //  _bsk_sgn _bsk_cot (d0=x) -> d0       SGN, COT

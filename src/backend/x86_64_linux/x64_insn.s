@@ -13,12 +13,13 @@
 // slots are reused per line: slot(t) = t - base, base = the first temp
 // defined after the most recent `line` (start of function counts as a
 // `line`). W = the largest number of temps one such segment needs.
-// Temp slot s is "8*s(%rsp)", the FN argument slot "8*W(%rsp)", global
-// cell x "8*x(%rbx)".
+// Temp slot s is "8*s(%rsp)", local cell k "8*(W+k)(%rsp)" (parameters, then
+// for a multi-line function the value variable and the saved run-time line),
+// global cell x "8*x(%rbx)".
 // =====================================================================
 .include "baysick.inc"
 
-// W above this would make 8*W + 16 overflow a signed 32-bit x86
+// W above this would make 8*(W+L) + 8 (L <= 10 local cells) overflow a signed 32-bit x86
 // displacement / immediate (the assembler would reject the output).
 .equ BK_X64_MAX_W,  0x0FFFFFF0
 
@@ -138,17 +139,20 @@ Lbk_x64_in_w_done:
     sub x2, x25, #FUNC_FN_BASE
     FMT Lbk_x64_in_fn_label
 2:
-    // ---- prologue: frame, %rbx, temp area, globals base ----------------
-    // F = align16(8*W + 16) - 8: %rsp stays 16-byte aligned at calls
-    lsl x9, x23, #3
-    add x9, x9, #16 + 15
+    // ---- prologue: frame, %rbx, temp area, local cells, globals base ----
+    // F = align16(8*(W+L) + 8) - 8: %rsp stays 16-byte aligned at calls and
+    // the temps plus the L local cells fit (DESIGN.md 5.4.4)
+    bl Lbk_x64_in_ncells            // x0 = L
+    add x9, x23, x0
+    lsl x9, x9, #3
+    add x9, x9, #8 + 15
     and x9, x9, #~15
     sub x2, x9, #8
     FMT Lbk_x64_in_prologue
-    // FN functions spill their argument (%xmm0) to 8*W(%rsp)
+    // FN functions spill their arguments, multi-line ones also set up the
+    // value variable and save the caller's run-time line
     cbz x25, 1f
-    lsl x2, x23, #3
-    FMT Lbk_x64_in_arg_save
+    bl Lbk_x64_in_cells_init
 1:
 
     // ---- pass 2: translate every instruction ----------------------------
@@ -203,9 +207,10 @@ Lbk_x64_in_op_nop:
 
 Lbk_x64_in_op_line:
     // ".Lbsk_L<id>:" then store the BASIC line number into bsk_curline
-    ldr w2, [x21, #IRI_X]
-    ldr x3, [x21, #IRI_IMM]
-    lsr x9, x3, #32
+    mov x2, x25
+    ldr w3, [x21, #IRI_X]
+    ldr x4, [x21, #IRI_IMM]
+    lsr x9, x4, #32
     cbnz x9, Lbk_x64_in_line_range
     FMT Lbk_x64_in_line_fmt
     // a new temp segment starts here
@@ -216,7 +221,8 @@ Lbk_x64_in_line_range:
     FAIL Lbk_x64_in_err_line
 
 Lbk_x64_in_op_label:
-    ldr w2, [x21, #IRI_X]
+    mov x2, x25
+    ldr w3, [x21, #IRI_X]
     FMT Lbk_x64_in_label_def
     b Lbk_x64_in_next
 
@@ -345,10 +351,13 @@ Lbk_x64_in_op_ast2:
     b Lbk_x64_in_next
 
 Lbk_x64_in_op_callfn:
-    // %xmm0 = A; call .Lfn_<L>; store
+    // %xmm0 = A (nothing for a call without arguments); call .Lfn_<L>; store
     ldr w0, [x21, #IRI_A]
+    cmn w0, #1                      // IR_NONE: no first argument
+    b.eq 1f
     mov x1, #0
     bl Lbk_x64_in_load
+1:
     ldr w2, [x21, #IRI_X]
     cmp w2, #NUM_LETTERS
     b.hs Lbk_x64_in_bad_letter
@@ -356,9 +365,15 @@ Lbk_x64_in_op_callfn:
     b Lbk_x64_in_store_dst
 
 Lbk_x64_in_op_param:
-    // %xmm0 = the argument slot 8*W(%rsp)
+    // %xmm0 = parameter k (local cell k)
     cbz x25, Lbk_x64_in_bad_place
-    lsl x2, x23, #3
+    // parameter k lives in local cell k; k must name a parameter
+    bl Lbk_x64_in_nparams
+    ldr x1, [x21, #IRI_IMM]
+    cmp x1, x0
+    b.hs Lbk_x64_in_bad_param
+    add x2, x23, x1
+    lsl x2, x2, #3
     FMT Lbk_x64_in_ld_rsp
     b Lbk_x64_in_store_dst
 
@@ -368,11 +383,21 @@ Lbk_x64_in_op_ret:
     ldr w0, [x21, #IRI_A]
     mov x1, #0
     bl Lbk_x64_in_load
+    // a multi-line function restores the caller's run-time line first
+    ldr w9, [x27, #IRF_KIND]
+    cmp w9, #FUNC_KIND_FNML
+    b.ne 1f
+    mov x0, #1
+    bl Lbk_x64_in_cell_np
+    lsl x2, x0, #3
+    FMT Lbk_x64_in_ret_line
+1:
     FMT Lbk_x64_in_epilogue
     b Lbk_x64_in_next
 
 Lbk_x64_in_op_jmp:
-    ldr w2, [x21, #IRI_X]
+    mov x2, x25
+    ldr w3, [x21, #IRI_X]
     FMT Lbk_x64_in_jmp_label
     b Lbk_x64_in_next
 
@@ -391,12 +416,17 @@ Lbk_x64_in_op_jcmp:
     adrp x2, Lbk_x64_in_ucomisd@PAGE
     add x2, x2, Lbk_x64_in_ucomisd@PAGEOFF
     FMT Lbk_x64_in_memop_fmt
-    ldrh w9, [x21, #IRI_REL]
-    sub w9, w9, #REL_EQ
     adrp x10, Lbk_x64_in_jcc_names@PAGE
     add x10, x10, Lbk_x64_in_jcc_names@PAGEOFF
+
+// common tail of jcmp / sjcmp: x10 = table of condition mnemonics indexed
+// by relation - REL_EQ; emits "    j<cc> <label base><X>"
+Lbk_x64_in_jcc_emit:
+    ldrh w9, [x21, #IRI_REL]
+    sub w9, w9, #REL_EQ
     ldr x2, [x10, x9, lsl #3]
-    ldr w3, [x21, #IRI_X]
+    mov x3, x25
+    ldr w4, [x21, #IRI_X]
     FMT Lbk_x64_in_jcc_fmt
     b Lbk_x64_in_next
 
@@ -412,9 +442,13 @@ Lbk_x64_in_op_jfor:
     bl Lbk_x64_in_use_off
     mov x4, x0
     ldp x2, x3, [sp], #16
-    ldr w5, [x21, #IRI_X]
-    mov x6, x5
-    FMT Lbk_x64_in_jfor_fmt
+    FMT Lbk_x64_in_jfor_fmt1
+    // second half: both exits branch to the loop-exit label X
+    mov x2, x25
+    ldr w3, [x21, #IRI_X]
+    mov x4, x25
+    mov x5, x3
+    FMT Lbk_x64_in_jfor_fmt2
     b Lbk_x64_in_next
 
 Lbk_x64_in_op_gosub:
@@ -541,12 +575,314 @@ Lbk_x64_in_op_matscale:
     bl Lbk_x64_in_mat_call
     b Lbk_x64_in_next
 
+// ---- Third and Fourth Edition opcodes (DESIGN.md 5.4.5) ----------------------
+Lbk_x64_in_op_slit:
+    // %rax = &.Lsd_<id>; store
+    ldr w2, [x21, #IRI_X]
+    ldr w9, [x20, #IRM_NSTRINGS]
+    cmp w2, w9
+    b.hs Lbk_x64_in_bad_string
+    FMT Lbk_x64_in_slit_fmt
+    b Lbk_x64_in_store_dst_rax
+
+Lbk_x64_in_op_svar:
+    // %rax = &.Lbsk_svars + 16*slot; store
+    ldr w9, [x21, #IRI_X]
+    cmp w9, #(NUM_LETTERS * SLOT_PER_LETTER)
+    b.hs Lbk_x64_in_bad_slot
+    mov x10, #SD_SIZE
+    mul x2, x9, x10
+    FMT Lbk_x64_in_svar_fmt
+    b Lbk_x64_in_store_dst_rax
+
+Lbk_x64_in_op_sald1:
+    // %rdi = &.Lsdesc_<L>; %xmm0 = A; %rax = bsk_saref1; store
+    bl Lbk_x64_in_sdesc_addr
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    CALLRT Lbk_x64_in_rt_saref1
+    b Lbk_x64_in_store_dst_rax
+
+Lbk_x64_in_op_sset:
+    // %rdi = A, %rsi = B; call bsk_str_set
+    bl Lbk_x64_in_load_sab
+    CALLRT Lbk_x64_in_rt_str_set
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_sjcmp:
+    // %rdi = A, %rsi = B; bsk_str_cmp; cmpl $0, %eax; signed j<cc> X
+    ldrh w9, [x21, #IRI_REL]
+    sub w9, w9, #REL_EQ
+    cmp w9, #REL_GE - REL_EQ
+    b.hi Lbk_x64_in_bad_rel
+    bl Lbk_x64_in_load_sab
+    CALLRT Lbk_x64_in_rt_str_cmp
+    FMT Lbk_x64_in_cmp0_fmt
+    adrp x10, Lbk_x64_in_sjcc_names@PAGE
+    add x10, x10, Lbk_x64_in_sjcc_names@PAGEOFF
+    b Lbk_x64_in_jcc_emit
+
+Lbk_x64_in_op_prsv:
+    adrp x2, Lbk_x64_in_rt_print_sv@PAGE
+    add x2, x2, Lbk_x64_in_rt_print_sv@PAGEOFF
+    b Lbk_x64_in_sunary
+
+Lbk_x64_in_op_sread:
+    // plain form: %rdi = A; call bsk_sread. Element form (A = IR_NONE):
+    // call bsk_sread_el (Lbk_x64_in_selem)
+    ldr w9, [x21, #IRI_A]
+    cmn w9, #1
+    b.ne 1f
+    adrp x2, Lbk_x64_in_rt_sread_el@PAGE
+    add x2, x2, Lbk_x64_in_rt_sread_el@PAGEOFF
+    b Lbk_x64_in_selem
+1:
+    adrp x2, Lbk_x64_in_rt_sread@PAGE
+    add x2, x2, Lbk_x64_in_rt_sread@PAGEOFF
+    b Lbk_x64_in_sunary
+
+Lbk_x64_in_op_insv:
+    // plain form: %rdi = A; call bsk_input_str. Element form
+    // (A = IR_NONE): call bsk_input_str_el (Lbk_x64_in_selem)
+    ldr w9, [x21, #IRI_A]
+    cmn w9, #1
+    b.ne 1f
+    adrp x2, Lbk_x64_in_rt_input_str_el@PAGE
+    add x2, x2, Lbk_x64_in_rt_input_str_el@PAGEOFF
+    b Lbk_x64_in_selem
+1:
+    adrp x2, Lbk_x64_in_rt_input_str@PAGE
+    add x2, x2, Lbk_x64_in_rt_input_str@PAGEOFF
+    b Lbk_x64_in_sunary
+
+// common tail of the element form of sread / insv: x2 = runtime symbol;
+// %rdi = &.Lsdesc_<X>, %xmm0 = B (the subscript); call
+Lbk_x64_in_selem:
+    str x2, [sp, #-16]!
+    bl Lbk_x64_in_sdesc_addr
+    ldr w0, [x21, #IRI_B]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    ldr x2, [sp], #16
+    FMT Lbk_x64_in_call_fmt
+    b Lbk_x64_in_next
+
+// common tail of prsv / sread / insv: x2 = runtime symbol; %rdi = A; call
+Lbk_x64_in_sunary:
+    str x2, [sp, #-16]!
+    ldr w0, [x21, #IRI_A]
+    adrp x1, Lbk_x64_in_reg_rdi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rdi@PAGEOFF
+    bl Lbk_x64_in_loadq
+    ldr x2, [sp], #16
+    FMT Lbk_x64_in_call_fmt
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_prtab:
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    CALLRT Lbk_x64_in_rt_print_tab
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_inbeg:
+    CALLRT Lbk_x64_in_rt_input_begin
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_inend:
+    CALLRT Lbk_x64_in_rt_input_end
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_randomize:
+    CALLRT Lbk_x64_in_rt_randomize
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_innum:
+    CALLRT Lbk_x64_in_rt_input_num
+    b Lbk_x64_in_store_dst
+
+Lbk_x64_in_op_num:
+    CALLRT Lbk_x64_in_rt_num
+    b Lbk_x64_in_store_dst
+
+Lbk_x64_in_op_det:
+    CALLRT Lbk_x64_in_rt_det
+    b Lbk_x64_in_store_dst
+
+Lbk_x64_in_op_sgncot:
+    // sgn / cot: %xmm0 = A; call bsk_sgn | bsk_cot; store
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    ldrh w9, [x21, #IRI_OP]
+    sub w9, w9, #OP_SGN
+    adrp x10, Lbk_x64_in_sgn_names@PAGE
+    add x10, x10, Lbk_x64_in_sgn_names@PAGEOFF
+    ldr x2, [x10, x9, lsl #3]
+    FMT Lbk_x64_in_call_fmt
+    b Lbk_x64_in_store_dst
+
+Lbk_x64_in_op_matinput:
+    bl Lbk_x64_in_desc_addr
+    CALLRT Lbk_x64_in_rt_mat_input
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_smatinput:
+    bl Lbk_x64_in_sdesc_addr
+    CALLRT Lbk_x64_in_rt_smat_input
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_smatread:
+    bl Lbk_x64_in_sdesc_addr
+    CALLRT Lbk_x64_in_rt_smat_read
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_smatredim:
+    // %rdi = &.Lsdesc_<X>; %xmm0 = A; call bsk_mat_redim1
+    bl Lbk_x64_in_sdesc_addr
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    CALLRT Lbk_x64_in_rt_mat_redim1
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_smatprint:
+    // %rdi = &.Lsdesc_<X>; %esi = IMM (MATPR_*); call bsk_smat_print
+    bl Lbk_x64_in_sdesc_addr
+    ldr x2, [x21, #IRI_IMM]
+    cmp x2, #MATPR_PACKED
+    b.hi Lbk_x64_in_bad_mode
+    FMT Lbk_x64_in_smatprint_fmt
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_chgs2n:
+    // %rdi = &.Ldesc_<X>; %rsi = A; call bsk_change_s2n
+    bl Lbk_x64_in_desc_addr
+    ldr w0, [x21, #IRI_A]
+    adrp x1, Lbk_x64_in_reg_rsi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rsi@PAGEOFF
+    bl Lbk_x64_in_loadq
+    CALLRT Lbk_x64_in_rt_change_s2n
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_chgn2s:
+    // %rdi = A; %rsi = &.Ldesc_<X>; call bsk_change_n2s. Element form
+    // (A = IR_NONE): %rdi = &.Lsdesc_<IMM>; %xmm0 = B; %rsi =
+    // &.Ldesc_<X>; call bsk_change_n2s_el
+    ldr w9, [x21, #IRI_A]
+    cmn w9, #1
+    b.ne 1f
+    ldr x2, [x21, #IRI_IMM]
+    lsr x9, x2, #32
+    cbnz x9, Lbk_x64_in_bad_imm     // the letter is the low word only
+    bl Lbk_x64_in_sdesc_letter
+    ldr w0, [x21, #IRI_B]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    ldr w0, [x21, #IRI_X]
+    adrp x1, Lbk_x64_in_reg_rsi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rsi@PAGEOFF
+    bl Lbk_x64_in_desc_reg
+    CALLRT Lbk_x64_in_rt_change_n2s_el
+    b Lbk_x64_in_next
+1:
+    ldr w0, [x21, #IRI_A]
+    adrp x1, Lbk_x64_in_reg_rdi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rdi@PAGEOFF
+    bl Lbk_x64_in_loadq
+    ldr w0, [x21, #IRI_X]
+    adrp x1, Lbk_x64_in_reg_rsi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rsi@PAGEOFF
+    bl Lbk_x64_in_desc_reg
+    CALLRT Lbk_x64_in_rt_change_n2s
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_onsel:
+    // %xmm0 = A; %edi = N; call bsk_on; store
+    ldr x2, [x21, #IRI_IMM]
+    lsr x9, x2, #32
+    cbnz x9, Lbk_x64_in_bad_imm
+    cbz x2, Lbk_x64_in_bad_imm
+    str x2, [sp, #-16]!
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    ldr x2, [sp], #16
+    FMT Lbk_x64_in_onsel_fmt
+    b Lbk_x64_in_store_dst
+
+Lbk_x64_in_op_restore:
+    // %edi = RESTORE_*; call bsk_restore
+    ldr x2, [x21, #IRI_IMM]
+    cmp x2, #RESTORE_STR
+    b.hi Lbk_x64_in_bad_imm
+    FMT Lbk_x64_in_restore_fmt
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_fnarg:
+    // argument k (1..7) of the callfn that follows goes to %xmm<k>
+    ldr x1, [x21, #IRI_IMM]
+    sub x9, x1, #1
+    cmp x9, #6
+    b.hi Lbk_x64_in_bad_imm
+    ldr w0, [x21, #IRI_A]
+    bl Lbk_x64_in_load
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_stparam:
+    // parameter k := A (multi-line function)
+    bl Lbk_x64_in_need_ml
+    bl Lbk_x64_in_nparams
+    ldr x1, [x21, #IRI_IMM]
+    cmp x1, x0
+    b.hs Lbk_x64_in_bad_param
+    ldr w0, [x21, #IRI_A]
+    mov x2, x1
+    str x2, [sp, #-16]!
+    mov x1, #0
+    bl Lbk_x64_in_load
+    ldr x1, [sp], #16
+    add x2, x23, x1
+    lsl x2, x2, #3
+    FMT Lbk_x64_in_st_cell_fmt
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_ldfv:
+    // %xmm0 = the value variable (local cell NP); store
+    bl Lbk_x64_in_need_ml
+    mov x0, #0
+    bl Lbk_x64_in_cell_np
+    lsl x2, x0, #3
+    FMT Lbk_x64_in_ld_cell_fmt
+    b Lbk_x64_in_store_dst
+
+Lbk_x64_in_op_stfv:
+    // the value variable := A
+    bl Lbk_x64_in_need_ml
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    mov x0, #0
+    bl Lbk_x64_in_cell_np
+    lsl x2, x0, #3
+    FMT Lbk_x64_in_st_cell_fmt
+    b Lbk_x64_in_next
+
 // common tail: store %xmm0 into the DST temp's slot
 Lbk_x64_in_store_dst:
     ldr w0, [x21, #IRI_DST]
     bl Lbk_x64_in_def_off
     mov x2, x0
     FMT Lbk_x64_in_st_rsp
+    b Lbk_x64_in_next
+
+// common tail: store %rax (an sref or a pointer) into the DST temp's slot
+Lbk_x64_in_store_dst_rax:
+    ldr w0, [x21, #IRI_DST]
+    bl Lbk_x64_in_def_off
+    mov x2, x0
+    FMT Lbk_x64_in_st_rax
     b Lbk_x64_in_next
 
 Lbk_x64_in_bad_letter:
@@ -559,8 +895,16 @@ Lbk_x64_in_bad_label:
     FAIL Lbk_x64_in_err_label
 Lbk_x64_in_bad_string:
     FAIL Lbk_x64_in_err_string
+Lbk_x64_in_bad_slot:
+    FAIL Lbk_x64_in_err_slot
 Lbk_x64_in_bad_mode:
     FAIL Lbk_x64_in_err_mode
+Lbk_x64_in_bad_param:
+    FAIL Lbk_x64_in_err_param
+Lbk_x64_in_bad_kind:
+    FAIL Lbk_x64_in_err_kind
+Lbk_x64_in_bad_imm:
+    FAIL Lbk_x64_in_err_imm
 
 // ---- dispatch table: entry k = Lbk_x64_in_op_<opcode k> - table --------
     .p2align 2
@@ -620,9 +964,42 @@ Lbk_x64_in_table:
     .long Lbk_x64_in_op_matscale - Lbk_x64_in_table     // OP_MATSCALE 52
     .long Lbk_x64_in_op_mat2 - Lbk_x64_in_table         // OP_MATTRN   53
     .long Lbk_x64_in_op_mat2 - Lbk_x64_in_table         // OP_MATINV   54
+    .long Lbk_x64_in_op_slit - Lbk_x64_in_table         // OP_SLIT      55
+    .long Lbk_x64_in_op_svar - Lbk_x64_in_table         // OP_SVAR      56
+    .long Lbk_x64_in_op_sald1 - Lbk_x64_in_table        // OP_SALD1     57
+    .long Lbk_x64_in_op_sset - Lbk_x64_in_table         // OP_SSET      58
+    .long Lbk_x64_in_op_sjcmp - Lbk_x64_in_table        // OP_SJCMP     59
+    .long Lbk_x64_in_op_prsv - Lbk_x64_in_table         // OP_PRSV      60
+    .long Lbk_x64_in_op_prtab - Lbk_x64_in_table        // OP_PRTAB     61
+    .long Lbk_x64_in_op_sread - Lbk_x64_in_table        // OP_SREAD     62
+    .long Lbk_x64_in_op_inbeg - Lbk_x64_in_table        // OP_INBEG     63
+    .long Lbk_x64_in_op_innum - Lbk_x64_in_table        // OP_INNUM     64
+    .long Lbk_x64_in_op_insv - Lbk_x64_in_table         // OP_INSV      65
+    .long Lbk_x64_in_op_inend - Lbk_x64_in_table        // OP_INEND     66
+    .long Lbk_x64_in_op_matinput - Lbk_x64_in_table     // OP_MATINPUT  67
+    .long Lbk_x64_in_op_smatinput - Lbk_x64_in_table    // OP_SMATINPUT 68
+    .long Lbk_x64_in_op_smatredim - Lbk_x64_in_table    // OP_SMATREDIM 69
+    .long Lbk_x64_in_op_smatread - Lbk_x64_in_table     // OP_SMATREAD  70
+    .long Lbk_x64_in_op_smatprint - Lbk_x64_in_table    // OP_SMATPRINT 71
+    .long Lbk_x64_in_op_chgs2n - Lbk_x64_in_table       // OP_CHGS2N    72
+    .long Lbk_x64_in_op_chgn2s - Lbk_x64_in_table       // OP_CHGN2S    73
+    .long Lbk_x64_in_op_onsel - Lbk_x64_in_table        // OP_ONSEL     74
+    .long Lbk_x64_in_op_restore - Lbk_x64_in_table      // OP_RESTORE   75
+    .long Lbk_x64_in_op_randomize - Lbk_x64_in_table    // OP_RANDOMIZE 76
+    .long Lbk_x64_in_op_sgncot - Lbk_x64_in_table       // OP_SGN       77
+    .long Lbk_x64_in_op_sgncot - Lbk_x64_in_table       // OP_COT       78
+    .long Lbk_x64_in_op_num - Lbk_x64_in_table          // OP_NUM       79
+    .long Lbk_x64_in_op_det - Lbk_x64_in_table          // OP_DET       80
+    .long Lbk_x64_in_op_fnarg - Lbk_x64_in_table        // OP_FNARG     81
+    .long Lbk_x64_in_op_stparam - Lbk_x64_in_table      // OP_STPARAM   82
+    .long Lbk_x64_in_op_ldfv - Lbk_x64_in_table         // OP_LDFV      83
+    .long Lbk_x64_in_op_stfv - Lbk_x64_in_table         // OP_STFV      84
 Lbk_x64_in_table_end:
 .if (Lbk_x64_in_table_end - Lbk_x64_in_table) != 4 * OP_COUNT
     .error "x64_insn.s dispatch table does not cover OP_COUNT opcodes"
+.endif
+.if (OP_SLIT != OP_MATINV + 1) || (OP_STFV != OP_SLIT + 29) || (OP_COT != OP_SGN + 1)
+    .error "x64_insn.s dispatch table assumes the opcode order of ir.inc"
 .endif
 .if (OP_SUB != OP_ADD + 1) || (OP_MUL != OP_ADD + 2) || (OP_INT != OP_SIN + 8)
     .error "x64_insn.s name tables assume consecutive opcodes"
@@ -725,6 +1102,173 @@ Lbk_x64_in_load_ab:
     ret
 
 // ---------------------------------------------------------------------
+// Lbk_x64_in_nparams -- NPARAMS of the current function.
+// Out: x0 = IRF_NPARAMS (0 for main).
+// Leaf, no frame.
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_nparams:
+    ldr w0, [x27, #IRF_NPARAMS]
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_x64_in_ncells -- L, the number of 8-byte local cells of the current
+// function: NP + 2 for a multi-line function (parameters, value variable,
+// saved run-time line), else max(1, NP).
+// Out: x0 = L.  Frame: 16 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_ncells:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    bl Lbk_x64_in_nparams
+    ldr w9, [x27, #IRF_KIND]
+    cmp w9, #FUNC_KIND_FNML
+    b.ne 1f
+    add x0, x0, #2
+    b 2f
+1:
+    cmp x0, #1
+    mov x9, #1
+    csel x0, x9, x0, lo
+2:
+    ldp x29, x30, [sp], #16
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_x64_in_cell_np -- slot index of local cell NP + n.
+// In:  x0 = n.  Out: x0 = W + NP + n (the byte offset is 8 times that).
+// Frame: 32 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_cell_np:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    str x0, [sp, #16]
+    bl Lbk_x64_in_nparams
+    ldr x9, [sp, #16]
+    add x0, x0, x9
+    add x0, x0, x23
+    ldp x29, x30, [sp], #32
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_x64_in_need_ml -- fail unless the current function is a multi-line FN.
+// Leaf, no frame.
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_need_ml:
+    ldr w9, [x27, #IRF_KIND]
+    cmp w9, #FUNC_KIND_FNML
+    b.ne Lbk_x64_in_bad_kind
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_x64_in_cells_init -- prologue part of an FN function: spill the
+// arguments (%xmm<k> -> local cell k, k < NP); a multi-line function then
+// clears its value variable (cell NP) and saves the caller's run-time line
+// (cell NP+1).
+// Frame: 32 bytes (frame record + the loop counter)
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_cells_init:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    str xzr, [sp, #16]              // k
+Lbk_x64_in_ci_loop:
+    bl Lbk_x64_in_nparams
+    ldr x2, [sp, #16]
+    cmp x2, x0
+    b.hs Lbk_x64_in_ci_args_done
+    // "movsd %xmm<k>, 8*(W+k)(%rsp)"
+    add x3, x23, x2
+    lsl x3, x3, #3
+    FMT Lbk_x64_in_arg_save
+    ldr x2, [sp, #16]
+    add x2, x2, #1
+    str x2, [sp, #16]
+    b Lbk_x64_in_ci_loop
+Lbk_x64_in_ci_args_done:
+    ldr w9, [x27, #IRF_KIND]
+    cmp w9, #FUNC_KIND_FNML
+    b.ne Lbk_x64_in_ci_done
+    mov x0, #0
+    bl Lbk_x64_in_cell_np
+    lsl x2, x0, #3
+    FMT Lbk_x64_in_fv_init          // value variable := 0
+    mov x0, #1
+    bl Lbk_x64_in_cell_np
+    lsl x2, x0, #3
+    FMT Lbk_x64_in_line_save        // saved run-time line
+Lbk_x64_in_ci_done:
+    ldp x29, x30, [sp], #32
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_x64_in_loadq -- emit "    movq S(t), %<reg>" (an sref / pointer).
+// In:  w0 = temp (being read), x1 = register name ("rdi", "rsi")
+// Frame: 32 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_loadq:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    str x1, [sp, #16]
+    bl Lbk_x64_in_use_off
+    mov x2, x0
+    ldr x3, [sp, #16]
+    FMT Lbk_x64_in_movq_ld
+    ldp x29, x30, [sp], #32
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_x64_in_load_sab -- load srefs A into %rdi and B into %rsi.
+// In:  x21 = current record
+// Frame: 16 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_load_sab:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    ldr w0, [x21, #IRI_A]
+    adrp x1, Lbk_x64_in_reg_rdi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rdi@PAGEOFF
+    bl Lbk_x64_in_loadq
+    ldr w0, [x21, #IRI_B]
+    adrp x1, Lbk_x64_in_reg_rsi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rsi@PAGEOFF
+    bl Lbk_x64_in_loadq
+    ldp x29, x30, [sp], #16
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_x64_in_sdesc_addr -- emit "    leaq .Lsdesc_<L>(%rip), %rdi" for the
+// string list named by the current record's X field.
+// Lbk_x64_in_sdesc_letter -- the same for the letter in w2 (the IMM of
+// chgn2s's element form).
+// In:  x21 = current record (sdesc_addr) / w2 = letter (sdesc_letter)
+// Checks: the letter names a string list in use.
+// Frame: 16 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_sdesc_addr:
+    ldr w2, [x21, #IRI_X]
+Lbk_x64_in_sdesc_letter:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    cmp w2, #NUM_LETTERS
+    b.hs Lbk_x64_in_sdesc_bad
+    add x9, x20, #IRM_SARRAYS
+    add x9, x9, x2, lsl #4
+    ldr w9, [x9, #IRA_DIMS]
+    cbz w9, Lbk_x64_in_sdesc_bad
+    FMT Lbk_x64_in_sdesc_fmt
+    ldp x29, x30, [sp], #16
+    ret
+Lbk_x64_in_sdesc_bad:
+    FAIL Lbk_x64_in_err_letter
+
+// ---------------------------------------------------------------------
 // Lbk_x64_in_global_off -- byte offset 8*X of the global cell named by
 // the current record's X field (V(x) = 8*x(%rbx)).
 // In:  x21 = current record
@@ -825,15 +1369,23 @@ Lbk_x64_in_prologue:
     .ascii "    subq $%u, %%rsp\n"
     .asciz "    leaq .Lbsk_vars(%%rip), %%rbx\n"
 Lbk_x64_in_arg_save:
-    .asciz "    movsd %%xmm0, %u(%%rsp)\n"
+    .asciz "    movsd %%xmm%u, %u(%%rsp)\n"
+Lbk_x64_in_fv_init:
+    .asciz "    movq $0, %u(%%rsp)\n"
+Lbk_x64_in_line_save:
+    .ascii "    movl bsk_curline(%%rip), %%eax\n"
+    .asciz "    movq %%rax, %u(%%rsp)\n"
+Lbk_x64_in_ret_line:
+    .ascii "    movq %u(%%rsp), %%rax\n"
+    .asciz "    movl %%eax, bsk_curline(%%rip)\n"
 Lbk_x64_in_epilogue:
     .ascii "    movq -8(%%rbp), %%rbx\n"
     .ascii "    leave\n"
     .asciz "    ret\n"
 Lbk_x64_in_label_def:
-    .asciz ".Lbsk_L%u:\n"
+    .asciz "%B%u:\n"
 Lbk_x64_in_line_fmt:
-    .ascii ".Lbsk_L%u:\n"
+    .ascii "%B%u:\n"
     .asciz "    movl $%u, bsk_curline(%%rip)\n"
 Lbk_x64_in_const_fmt:
     .ascii "    movabsq $%x, %%rax\n"
@@ -880,21 +1432,22 @@ Lbk_x64_in_ld_elem:
 Lbk_x64_in_st_elem:
     .asciz "    movsd %%xmm0, (%%rax)\n"
 Lbk_x64_in_jmp_label:
-    .asciz "    jmp .Lbsk_L%u\n"
+    .asciz "    jmp %B%u\n"
 Lbk_x64_in_jcc_fmt:
-    .asciz "    %s .Lbsk_L%u\n"
-Lbk_x64_in_jfor_fmt:
+    .asciz "    %s %B%u\n"
+Lbk_x64_in_jfor_fmt1:
     .ascii "    movsd %u(%%rsp), %%xmm0\n"
     .ascii "    movsd %u(%%rsp), %%xmm1\n"
     .ascii "    xorpd %%xmm2, %%xmm2\n"
     .ascii "    ucomisd %u(%%rsp), %%xmm2\n"
-    .ascii "    ja 2f\n"
+    .asciz "    ja 2f\n"
+Lbk_x64_in_jfor_fmt2:
     .ascii "    ucomisd %%xmm1, %%xmm0\n"
-    .ascii "    ja .Lbsk_L%u\n"
+    .ascii "    ja %B%u\n"
     .ascii "    jmp 3f\n"
     .ascii "2:\n"
     .ascii "    ucomisd %%xmm1, %%xmm0\n"
-    .ascii "    jb .Lbsk_L%u\n"
+    .ascii "    jb %B%u\n"
     .asciz "3:\n"
 Lbk_x64_in_gosub_fmt:
     .ascii "    leaq .Lbsk_L%u(%%rip), %%rdi\n"
@@ -908,7 +1461,58 @@ Lbk_x64_in_prstr_fmt:
     .ascii "    movl $%u, %%esi\n"
     .asciz "    call bsk_print_str\n"
 
+Lbk_x64_in_movq_ld:
+    .asciz "    movq %u(%%rsp), %%%s\n"
+Lbk_x64_in_st_rax:
+    .asciz "    movq %%rax, %u(%%rsp)\n"
+Lbk_x64_in_slit_fmt:
+    .asciz "    leaq .Lsd_%u(%%rip), %%rax\n"
+Lbk_x64_in_svar_fmt:
+    .asciz "    leaq .Lbsk_svars+%u(%%rip), %%rax\n"
+Lbk_x64_in_sdesc_fmt:
+    .asciz "    leaq .Lsdesc_%L(%%rip), %%rdi\n"
+Lbk_x64_in_cmp0_fmt:
+    .asciz "    cmpl $0, %%eax\n"
+Lbk_x64_in_smatprint_fmt:
+    .asciz "    movl $%u, %%esi\n    call bsk_smat_print\n"
+Lbk_x64_in_onsel_fmt:
+    .asciz "    movl $%u, %%edi\n    call bsk_on\n"
+Lbk_x64_in_restore_fmt:
+    .asciz "    movl $%u, %%edi\n    call bsk_restore\n"
+Lbk_x64_in_ld_cell_fmt:
+    .asciz "    movsd %u(%%rsp), %%xmm0\n"
+Lbk_x64_in_st_cell_fmt:
+    .asciz "    movsd %%xmm0, %u(%%rsp)\n"
+Lbk_x64_in_reg_rdi:     .asciz "rdi"
+
 // runtime entry points (DESIGN.md 6.4.2 ELF names)
+Lbk_x64_in_rt_saref1:   .asciz "bsk_saref1"
+Lbk_x64_in_rt_str_set:  .asciz "bsk_str_set"
+Lbk_x64_in_rt_str_cmp:  .asciz "bsk_str_cmp"
+Lbk_x64_in_rt_print_sv: .asciz "bsk_print_sv"
+Lbk_x64_in_rt_print_tab: .asciz "bsk_print_tab"
+Lbk_x64_in_rt_sread:    .asciz "bsk_sread"
+Lbk_x64_in_rt_sread_el: .asciz "bsk_sread_el"
+Lbk_x64_in_rt_input_begin: .asciz "bsk_input_begin"
+Lbk_x64_in_rt_input_num: .asciz "bsk_input_num"
+Lbk_x64_in_rt_input_str: .asciz "bsk_input_str"
+Lbk_x64_in_rt_input_str_el: .asciz "bsk_input_str_el"
+Lbk_x64_in_rt_input_end: .asciz "bsk_input_end"
+Lbk_x64_in_rt_mat_input: .asciz "bsk_mat_input"
+Lbk_x64_in_rt_smat_input: .asciz "bsk_smat_input"
+Lbk_x64_in_rt_smat_read: .asciz "bsk_smat_read"
+Lbk_x64_in_rt_change_s2n: .asciz "bsk_change_s2n"
+Lbk_x64_in_rt_change_n2s: .asciz "bsk_change_n2s"
+Lbk_x64_in_rt_change_n2s_el: .asciz "bsk_change_n2s_el"
+Lbk_x64_in_rt_randomize: .asciz "bsk_randomize"
+Lbk_x64_in_rt_sgn:      .asciz "bsk_sgn"
+Lbk_x64_in_rt_cot:      .asciz "bsk_cot"
+Lbk_x64_in_rt_num:      .asciz "bsk_num"
+Lbk_x64_in_rt_det:      .asciz "bsk_det"
+Lbk_x64_in_jl:          .asciz "jl"
+Lbk_x64_in_jle:         .asciz "jle"
+Lbk_x64_in_jg:          .asciz "jg"
+Lbk_x64_in_jge:         .asciz "jge"
 Lbk_x64_in_rt_div:      .asciz "bsk_div"
 Lbk_x64_in_rt_pow:      .asciz "bsk_pow"
 Lbk_x64_in_rt_rnd:      .asciz "bsk_rnd"
@@ -965,6 +1569,9 @@ Lbk_x64_in_err_label:   .asciz "x86_64-linux backend: bad label id"
 Lbk_x64_in_err_string:  .asciz "x86_64-linux backend: bad string id"
 Lbk_x64_in_err_slot:    .asciz "x86_64-linux backend: bad variable slot"
 Lbk_x64_in_err_mode:    .asciz "x86_64-linux backend: bad MAT PRINT mode"
+Lbk_x64_in_err_param:   .asciz "x86_64-linux backend: parameter index out of range"
+Lbk_x64_in_err_kind:    .asciz "x86_64-linux backend: multi-line FN opcode outside a multi-line FN function"
+Lbk_x64_in_err_imm:     .asciz "x86_64-linux backend: immediate operand out of range"
 Lbk_x64_in_err_frame:   .asciz "x86_64-linux backend: too many temps for a 32-bit frame"
 
 // ---- name tables (pointers) ---------------------------------------------
@@ -984,6 +1591,18 @@ Lbk_x64_in_builtin_names:
     .quad Lbk_x64_in_rt_sin, Lbk_x64_in_rt_cos, Lbk_x64_in_rt_tan
     .quad Lbk_x64_in_rt_atn, Lbk_x64_in_rt_exp, Lbk_x64_in_rt_abs
     .quad Lbk_x64_in_rt_log, Lbk_x64_in_rt_sqr, Lbk_x64_in_rt_int
+// indexed by relation - REL_EQ: signed jump taken when the string relation
+// holds after "cmpl $0, %eax" (bsk_str_cmp returns -1 / 0 / +1)
+Lbk_x64_in_sjcc_names:
+    .quad Lbk_x64_in_je             // eq
+    .quad Lbk_x64_in_jne            // ne
+    .quad Lbk_x64_in_jl             // lt
+    .quad Lbk_x64_in_jle            // le
+    .quad Lbk_x64_in_jg             // gt
+    .quad Lbk_x64_in_jge            // ge
+// indexed by opcode - OP_SGN
+Lbk_x64_in_sgn_names:
+    .quad Lbk_x64_in_rt_sgn, Lbk_x64_in_rt_cot
 // indexed by relation - REL_EQ: unsigned jump taken when the relation
 // holds after "ucomisd B, %xmm0" (A in %xmm0)
 Lbk_x64_in_jcc_names:

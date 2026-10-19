@@ -139,16 +139,23 @@ src/frontend/fe_str.s       string references, string LET/IF/PRINT items, TAB, C
 src/frontend/fe_input.s     INPUT, RESTORE, ON, RANDOMIZE, MAT INPUT (LANGUAGE.md 7.14.8, 7.15-7.18)
 src/frontend/fe_def.s       DEF with 0..8 parameters, the multi-line body pre-scan, FNEND,
                             ILLEGAL TRANSFER, argument counts (LANGUAGE.md 7.10)
-src/runtime/rt_str.s        _bsk_saref1 _bsk_str_set _bsk_str_cmp _bsk_print_sv
-                            _bsk_change_s2n _bsk_change_n2s (OUT OF ROOM), §6.7
-src/runtime/rt_input.s      _bsk_input_* _bsk_mat_input _bsk_smat_input, the input line reader,
+src/runtime/rt_str.s        _bsk_str_set _bsk_str_cmp _bsk_print_sv
+                            _bsk_change_s2n _bsk_change_n2s _bsk_change_n2s_el (OUT OF ROOM), §6.7
+src/runtime/rt_input.s      _bsk_input_* (incl. _bsk_input_str_el) _bsk_mat_input _bsk_smat_input, the input line reader,
                             BSK_EMIT_INPUT_MSGS, §6.7
 src/runtime/rt_ed4.s        _bsk_on _bsk_randomize _bsk_sgn _bsk_cot _bsk_num _bsk_det
-                            _bsk_print_tab, §6.7
-src/runtime_x86_64_linux/rt_str.s rt_input.s rt_ed4.s   the same, bsk_* names (§6.4)
+                            _bsk_print_tab, the NUM cell _bsk_rt_num (private_extern), §6.7
+src/runtime_x86_64_linux/rt_str.s     bsk_str_set bsk_str_cmp (§6.4)
+src/runtime_x86_64_linux/rt_input.s   bsk_input_* bsk_mat_input bsk_smat_input bsk_num, the input
+                                      line reader and the NUM cell (local symbol)
+src/runtime_x86_64_linux/rt_ed4.s     bsk_change_s2n bsk_change_n2s bsk_change_n2s_el bsk_on bsk_sgn bsk_cot bsk_det
 ```
 
-Existing runtime files gain: `rt_data.s` `_bsk_sread`, `_bsk_restore`, `_bsk_smat_read` and the
+`_bsk_saref1` / `bsk_saref1` lives in `rt_array.s` of each runtime, next to `_bsk_aref1`. On x86_64,
+`bsk_print_sv` and `bsk_print_tab` are in `rt_print.s` and `bsk_randomize` in `rt_rnd.s`. The NUM
+cell is private to each runtime: written by MAT INPUT, read by NUM, never part of the ABI.
+
+Existing runtime files gain: `rt_data.s` `_bsk_sread`, `_bsk_sread_el`, `_bsk_restore`, `_bsk_smat_read` and the
 string DATA cursor; `rt_mat.s` `_bsk_smat_print`; `rt_error.s` exit status 0 for code 43;
 `rt_kinit.s` the DET cell `_bsk_rt_kinv_det` (written by every inv kernel, §6.6.1) — in both
 runtimes.
@@ -176,16 +183,17 @@ changes only its own files:
 | BENCH | `bench/`, `make bench`, `make bench-cross` (BENCH.md) |
 | T | nothing new: the MAT corpus flows through `cross_pack.sh` unchanged |
 
-### 2.2 Contract counts and the Fourth Edition staging switch
+### 2.2 Contract counts
 
-The MAT contract raised `OP_COUNT` from 42 to 55 and `KW_COUNT` from 15 to 16 (its staging switch
-`BSK_MAT_CONTRACT` was removed at integration). Existing modules size tables by these counts
-(dumper, verifier, both backends, the keyword loop, the builtin table) and walk the `IRF`/`IRM`
-records by their sizes, so the Third and Fourth Edition contract is **staged** behind the switch
-`BSK_ED4_CONTRACT` (defined in `include/ir.inc` and `include/tokens.inc`, default 0):
+The MAT contract raised `OP_COUNT` from 42 to 55 and `KW_COUNT` from 15 to 16; the Third and
+Fourth Edition contract raised the counts and record sizes again. Modules size tables by these
+counts (dumper, verifier, both backends, the keyword loop, the builtin table) and walk the
+`IRF`/`IRM` records by their sizes, so each contract change was staged behind a temporary
+assembler switch while the modules were implemented, and the switch was removed at integration
+in one commit. The integrated values:
 
-| Constant | `BSK_ED4_CONTRACT=0` (current modules) | `=1` (Fourth Edition contract) |
-|----------|----------------------------------------|--------------------------------|
+| Constant | Second Edition (MAT) | Fourth Edition (current) |
+|----------|----------------------|--------------------------|
 | `OP_COUNT` | 55 | 85 (`OP_STFV + 1`) |
 | `KW_COUNT` | 16 | 22 (`KW_FNEND + 1`) |
 | `TK_COUNT` | 26 | 30 (`TK_FN0 + 1`) |
@@ -193,22 +201,9 @@ records by their sizes, so the Third and Fourth Edition contract is **staged** b
 | `IRF_SIZE` | 64 (`IRF_RESERVED` at 56) | 96 (`IRF_NPARAMS` 56, `IRF_ENDLINE` 60, `IRF_PARAMS` 64) |
 | `IRM_SIZE` | 2192 | 3488 (`IRM_SARRAYS` 3056, `IRM_NSDATA` 3472, `IRM_CAPSDATA` 3476, `IRM_SDATA` 3480) |
 
-Everything else in the contract is unconditional and already in effect: the new opcode, token,
-builtin and keyword *values*, `ERR_TABLE_SIZE` 48 and the new error texts, the limits, `SD_*`,
-`RESTORE_*`, `FUNC_KIND_FNML`, `BSK_EMIT_INPUT_MSGS`, the runtime names in `runtime.inc`. The
-x86_64 runtime uses none of the switched constants, so `Makefile.linux` has no switch.
-
-* `make BSK_ED4=1 …` assembles every compiler and runtime file with
-  `-Wa,-defsym,BSK_ED4_CONTRACT=1` (Apple `as` accepts only this spelling). Objects do not record
-  the setting: `make clean` when switching.
-* `make check-includes` assembles `tests/include_check.s` with both values;
-  `tests/include_asserts.inc` checks the matching set of counts and layouts for each.
-* During implementation every compiler module (F, D, B, BX) builds and tests with
-  `make BSK_ED4=1 test`; `make test` (switch 0) keeps passing the current corpus until the
-  integration step.
-* **Integration** deletes the switch: the `=1` values become plain constants, the `.if` blocks
-  and the Makefile lines go away, `include_asserts.inc` keeps only the `=1` assertions, and
-  `--version` changes (§4.1) — one commit, like the MAT integration.
+Every constant in `include/*.inc` is unconditional; `tests/include_asserts.inc` checks the counts
+and layouts, and `make check-includes` assembles `tests/include_check.s` once. Integration also
+changed `--version` (§4.1).
 
 ### 2.3 Third and Fourth Edition work packages
 
@@ -219,7 +214,7 @@ implementer changes only its own files:
 | Owner | Work |
 |-------|------|
 | F | compaction: `'` ends the line outside strings (LANGUAGE.md §2.1, §1.5); keywords 16–21 and `RANDOM` (§3.1); scanner tokens `TK_SVAR TK_SARRAY TK_GOTO TK_FN0`, builtins SGN COT NUM DET (§5.2); string references and every `MISMATCHED STRING OPERATION` rule (§4.5); multiple LET (§7.1); PRINT string items and TAB (§7.2); string READ/DATA, two data blocks, `NO STRING DATA` (§7.4–7.5); IF strings and IF … GOTO (§7.7); FOR rules (§7.8); DEF/FNEND with the pre-scan of multi-line bodies, per-body FOR stacks, `UNFINISHED DEF`, `NESTED DEF`, `ILLEGAL TRANSFER`, `INCORRECT NUMBER OF ARGUMENTS` (§7.10); string DIM (§7.11); MAT with string lists and MAT INPUT (§7.14); INPUT, RESTORE, ON, RANDOMIZE, CHANGE (§7.15–7.19); the phase-3 order (§10.1); canonical lowering (IR.md §4) |
-| D | builder: `_ir_add_sdata`, `_ir_set_sarray`, `_ir_func_set`, per-function labels (ir.inc); dumper: the `sarray`/`sdata` lines, the three func-head forms, every §3.2 text form, `param k`, `callfn` without argument (IR.md §5); verifier: temp kinds, per-function labels, placement table, `fnarg` rule, function records (IR.md §6); driver: `--version` at integration (§4.1) |
+| D | builder: `_ir_add_sdata`, `_ir_set_sarray`, `_ir_func_set`, per-function labels (ir.inc); dumper: the `sarray`/`sdata` lines, the three func-head forms, every §3.2 text form, `param k`, `callfn` without argument (IR.md §5); verifier: temp kinds, per-function labels, placement table, `fnarg` rule, function records (IR.md §6); driver: `--version` (§4.1) |
 | B | §5.3: string data and descriptors in the skeleton, `_bsk_svars`, string-list descriptors, frames with local cells, multi-line function labels and prologue/`ret`, every new row of the per-opcode table |
 | BX | §5.4: the same for x86_64 (five global symbols) |
 | R | §6.7 entry points (`rt_str.s`, `rt_input.s`, `rt_ed4.s`), `_bsk_sread`/`_bsk_restore`/`_bsk_smat_read` (`rt_data.s`), `_bsk_smat_print` (`rt_mat.s`), `_bsk_err` exit 0 for code 43, the DET cell written by `rt_kneon_inv.s` (§6.6.1) |
@@ -227,9 +222,10 @@ implementer changes only its own files:
 | T | nothing new beyond the `.in` stdin sidecar, already implemented in `tests/run.sh`, `tests/cross_pack.sh` and `tests/cross_run.sh` (§8.3) |
 | BENCH | nothing: the inv kernel signature is unchanged (the DET cell is a side output) |
 
-Order: D and R/RX can start at once (their contracts are complete); F needs D's builder
-functions to link, B/BX need D's new records to read. All modules build with `make BSK_ED4=1`
-(§2.2) until integration.
+Order: D and R/RX could start at once (their contracts were complete); F needed D's builder
+functions to link, B/BX needed D's new records to read. The packages are implemented and
+integrated (§2.2). "Per-function labels" needed no builder change: `_ir_new_label` already
+allocated labels in the function it is given.
 
 ## 3. Conventions inside the compiler and runtime
 
@@ -318,8 +314,8 @@ baysick --help | -h          usage text to stdout, exit 0
 baysick --version            "baysick 0.3.0 (Dartmouth BASIC, Fourth Edition 1968)" + LF, exit 0
 ```
 
-* The version text above is the one after the Fourth Edition integration (§2.2); until then the
-  compiler prints `baysick 0.2.0 (Dartmouth BASIC, Second Edition 1964)`.
+* The Fourth Edition integration (§2.2) changed the version text from
+  `baysick 0.2.0 (Dartmouth BASIC, Second Edition 1964)`.
 * Options and the input file may appear in any order; exactly one input file is required.
   `-o` and `--target` take the next argument. If an option is repeated, the last one wins.
 * Default `--target` is `arm64-macos`. The other target is `x86_64-linux` (§5.4); its descriptor
@@ -545,7 +541,7 @@ FN functions receive argument k in `d<k>` (k < 8) and return the result in `d0`.
 | builtins | `bl _bsk_sin` … `_bsk_int` (d0 → d0); `rnd`: `bl _bsk_rnd` |
 | `ald1/ald2` | `adrp/add x0, Ldesc_<L>`, `d0`(,`d1`) = subscripts, `bl _bsk_aref1/2`, `ldr d0, [x0]` |
 | `ast1/ast2` | same, then load the value temp and `str d0, [x0]` |
-| `callfn` | `ldr d0` ← A (nothing if A is none), `bl Lfn_<L>`, store `d0` |
+| `callfn` | `ldr d0` ← A (nothing if A = `IR_NONE`: no argument is loaded), `bl Lfn_<L>`, store `d0` |
 | `param` k | `ldr d0, [sp, #8*(W+k)]`, store |
 | `ret` | load A into `d0`; multi-line functions then `ldr x17, [sp, #8*(W+NP+1)]` / `adrp x16, _bsk_curline@PAGE` / `str w17, [x16, _bsk_curline@PAGEOFF]`; epilogue |
 | `jmp` | `b Lbsk_L<id>` |
@@ -570,6 +566,7 @@ FN functions receive argument k in `d<k>` (k < 8) and return the result in `d0`.
 | `sset` | `ldr x0` ← A, `ldr x1` ← B, `bl _bsk_str_set` |
 | `sjcmp` | `ldr x0` ← A, `ldr x1` ← B, `bl _bsk_str_cmp`, `cmp w0, #0`, `b.<inverse> 1f`, `b <label>`, `1:` (eq/ne/lt/le/gt/ge → inverse ne/eq/ge/gt/le/lt, signed conditions) |
 | `prsv` `sread` `insv` | `ldr x0` ← A, `bl _bsk_print_sv` / `_bsk_sread` / `_bsk_input_str` |
+| `sread` `insv` element form (A = `IR_NONE`) | `adrp/add x0, Lsdesc_<X>`, `ldr d0` ← B, `bl _bsk_sread_el` / `_bsk_input_str_el` |
 | `prtab` | `ldr d0` ← A, `bl _bsk_print_tab` |
 | `inbeg` `inend` `randomize` | `bl _bsk_input_begin` / `_bsk_input_end` / `_bsk_randomize` |
 | `innum` `num` `det` | `bl _bsk_input_num` / `_bsk_num` / `_bsk_det`, store `d0` |
@@ -580,6 +577,7 @@ FN functions receive argument k in `d<k>` (k < 8) and return the result in `d0`.
 | `smatprint` | `adrp/add x0, Lsdesc_<X>`, `mov w1, #<IMM>`, `bl _bsk_smat_print` |
 | `chgs2n` | `adrp/add x0, Ldesc_<X>`, `ldr x1` ← A, `bl _bsk_change_s2n` |
 | `chgn2s` | `ldr x0` ← A, `adrp/add x1, Ldesc_<X>`, `bl _bsk_change_n2s` |
+| `chgn2s` element form (A = `IR_NONE`) | `adrp/add x0, Lsdesc_<IMM>`, `ldr d0` ← B, `adrp/add x1, Ldesc_<X>`, `bl _bsk_change_n2s_el` |
 | `onsel` | `ldr d0` ← A, `mov w0, #<N>` (`movz`/`movk` as needed), `bl _bsk_on`, store `d0` |
 | `restore` | `mov w0, #<IMM>`, `bl _bsk_restore` |
 | `fnarg` k | `ldr d<k>` ← A (the `callfn` follows immediately and loads only `d0`) |
@@ -786,7 +784,7 @@ generated function:
 | `ald2` | `leaq .Ldesc_<L>(%rip), %rdi` / `movsd S(A), %xmm0` / `movsd S(B), %xmm1` / `call bsk_aref2` / `movsd (%rax), %xmm0` / store |
 | `ast1` | `leaq .Ldesc_<L>(%rip), %rdi` / `movsd S(A), %xmm0` / `call bsk_aref1` / `movsd S(B), %xmm0` / `movsd %xmm0, (%rax)` |
 | `ast2` | `leaq .Ldesc_<L>(%rip), %rdi` / `movsd S(A), %xmm0` / `movsd S(B), %xmm1` / `call bsk_aref2` / `movsd S(C), %xmm0` / `movsd %xmm0, (%rax)` |
-| `callfn` | `movsd S(A), %xmm0` (nothing if A is none) / `call .Lfn_<L>` / store |
+| `callfn` | `movsd S(A), %xmm0` (nothing if A = `IR_NONE`: no argument is loaded) / `call .Lfn_<L>` / store |
 | `param` k | `movsd <8*(W+k)>(%rsp), %xmm0` / store |
 | `ret` | `movsd S(A), %xmm0` / multi-line functions: `movq <8*(W+NP+1)>(%rsp), %rax` / `movl %eax, bsk_curline(%rip)` / epilogue (`movq -8(%rbp), %rbx` / `leave` / `ret`) |
 | `jmp` | `jmp .Lbsk_L<id>` |
@@ -811,6 +809,7 @@ generated function:
 | `sset` | `movq S(A), %rdi` / `movq S(B), %rsi` / `call bsk_str_set` |
 | `sjcmp` | `movq S(A), %rdi` / `movq S(B), %rsi` / `call bsk_str_cmp` / `cmpl $0, %eax` / `j<cc> <label>` with eq→`je`, ne→`jne`, lt→`jl`, le→`jle`, gt→`jg`, ge→`jge` (signed: the result is −1/0/+1) |
 | `prsv` `sread` `insv` | `movq S(A), %rdi` / `call bsk_print_sv` \| `bsk_sread` \| `bsk_input_str` |
+| `sread` `insv` element form (A = `IR_NONE`) | `leaq .Lsdesc_<X>(%rip), %rdi` / `movsd S(B), %xmm0` / `call bsk_sread_el` \| `bsk_input_str_el` |
 | `prtab` | `movsd S(A), %xmm0` / `call bsk_print_tab` |
 | `inbeg` `inend` `randomize` | `call bsk_input_begin` \| `bsk_input_end` \| `bsk_randomize` |
 | `innum` `num` `det` | `call bsk_input_num` \| `bsk_num` \| `bsk_det` / store |
@@ -821,6 +820,7 @@ generated function:
 | `smatprint` | `leaq .Lsdesc_<X>(%rip), %rdi` / `movl $<IMM>, %esi` / `call bsk_smat_print` |
 | `chgs2n` | `leaq .Ldesc_<X>(%rip), %rdi` / `movq S(A), %rsi` / `call bsk_change_s2n` |
 | `chgn2s` | `movq S(A), %rdi` / `leaq .Ldesc_<X>(%rip), %rsi` / `call bsk_change_n2s` |
+| `chgn2s` element form (A = `IR_NONE`) | `leaq .Lsdesc_<IMM>(%rip), %rdi` / `movsd S(B), %xmm0` / `leaq .Ldesc_<X>(%rip), %rsi` / `call bsk_change_n2s_el` |
 | `onsel` | `movsd S(A), %xmm0` / `movl $<N>, %edi` / `call bsk_on` / store |
 | `restore` | `movl $<IMM>, %edi` / `call bsk_restore` |
 | `fnarg` k | `movsd S(A), %xmm<k>` |
@@ -1006,6 +1006,7 @@ code) → `%edi`, pointer result `x0`→`%rax`, double result `d0`→`%xmm0`.
 | `bsk_str_set` | `%rdi` dst, `%rsi` src | — |
 | `bsk_str_cmp` | `%rdi` a, `%rsi` b | `%eax` −1 / 0 / +1 |
 | `bsk_print_sv` `bsk_sread` `bsk_input_str` | `%rdi` SD | — |
+| `bsk_sread_el` `bsk_input_str_el` | `%rdi` slist, `%xmm0` i | — |
 | `bsk_print_tab` | `%xmm0` | — |
 | `bsk_restore` | `%edi` `RESTORE_*` | — |
 | `bsk_input_begin` `bsk_input_end` `bsk_randomize` | — | — |
@@ -1014,6 +1015,7 @@ code) → `%edi`, pointer result `x0`→`%rax`, double result `d0`→`%xmm0`.
 | `bsk_smat_print` | `%rdi` desc, `%esi` mode | — |
 | `bsk_change_s2n` | `%rdi` list, `%rsi` source SD | — |
 | `bsk_change_n2s` | `%rdi` destination SD, `%rsi` list | — |
+| `bsk_change_n2s_el` | `%rdi` slist, `%xmm0` i, `%rsi` list | — |
 | `bsk_on` | `%xmm0` x, `%edi` n | `%xmm0` |
 | `bsk_sgn` `bsk_cot` | `%xmm0` | `%xmm0` |
 
@@ -1310,14 +1312,17 @@ descriptor. Errors are raised with `_bsk_err` by name (`errors.inc`).
 | `_bsk_print_sv` | x0 SD | — | §8 string item: emit each byte through the column logic (lazy spaces) |
 | `_bsk_print_tab` | d0 x | — | §8 TAB: `m = fmod(trunc(x), 75)` (trunc: `frintz` on arm64, libm `trunc` on x86_64; both exact), `m += 75` if `m < 0`; if `col < m` then `col = m` (as an integer column) |
 | `_bsk_sread` | x0 dst | — | next string DATA value (`_bsk_sdata`, own cursor) copied as by `_bsk_str_set`; none left → error 34 (exit 0) |
+| `_bsk_sread_el` | x0 slist, d0 i | — | the element form (IR.md §3.2): the next string DATA value is taken (none left → error 34, exit 0), then element i is addressed by `_bsk_saref1` (error 32: the subscript is checked at the store, §7.1, §7.4), then the value is copied into it as by `_bsk_sread` |
 | `_bsk_restore` | w0 | — | `RESTORE_ALL`: both cursors := 0; `RESTORE_NUM`: numeric cursor; `RESTORE_STR`: string cursor |
 | `_bsk_input_begin` | — | — | §7.15: read the first line (prompt rule, END OF INPUT, INPUT LINE TOO LONG); field cursor at its start |
 | `_bsk_input_num` | — | d0 | next field as a number: no field → `NOT ENOUGH INPUT -- ADD MORE`, new line; invalid → `INPUT DATA NOT IN CORRECT FORMAT -- RETYPE IT`, new line; repeat; value by `strtod` on the blank-free field text |
 | `_bsk_input_str` | x0 dst | — | the same for a string field; the value is stored with `_bsk_str_set` semantics |
+| `_bsk_input_str_el` | x0 slist, d0 i | — | the element form: the field is taken exactly as by `_bsk_input_str` (every NOT ENOUGH INPUT / RETYPE diagnostic and new line first), then element i is addressed by `_bsk_saref1` (error 32 at the store, §7.15), then the value is stored into it |
 | `_bsk_input_end` | — | — | fields left → `TOO MUCH INPUT -- EXCESS IGNORED` |
 | `_bsk_mat_input` `_bsk_smat_input` | x0 list / slist | — | §7.14.8, transactional; NUM := n |
 | `_bsk_change_s2n` | x0 list, x1 SD | — | §7.19 string → list (error 32) |
 | `_bsk_change_n2s` | x0 SD, x1 list | — | §7.19 list → string (errors 32, 44, 45, 47) |
+| `_bsk_change_n2s_el` | x0 slist, d0 i, x1 list | — | the element form: the conversion with all its checks as `_bsk_change_n2s` (errors 32 for the length, 44, 45), then element i is addressed by `_bsk_saref1` (error 32 at the store, §7.19), then assigned (47) |
 | `_bsk_on` | d0 x, w0 n | d0 | `k = trunc(x)`; `1 ≤ k ≤ n` (compared as doubles, so huge x cannot wrap) → k, else error 42 |
 | `_bsk_randomize` | — | — | §7.18: `getentropy(&v, 8)`; on failure `v = time(NULL)`; RND state := `1 + (v mod 2147483646)` (unsigned 64-bit `v`) |
 | `_bsk_sgn` | d0 | d0 | 1, 0 (either zero), −1 |
@@ -1327,10 +1332,17 @@ descriptor. Errors are raised with `_bsk_err` by name (`errors.inc`).
 
 **Input reader.** Standard input is read with `read(0, buf, RT_INBUF_SIZE)` into a static buffer
 (`EINTR` retried; any other error or 0 bytes = end of input). A line is assembled from it into a
-static line buffer of `LIM_INPUT_LINE` bytes: up to LF; a line exceeding the buffer (before its
-LF or the end of input) → error 46; one trailing CR removed; a non-empty unterminated last line
-counts. `isatty(0)` is called once, at the first line request, and remembered. On a terminal,
-before each line request: write the pending lazy spaces and `"? "` through the print buffer, set
+static line buffer: the bytes up to LF; one CR immediately before the LF removed (an
+unterminated last line keeps a trailing CR, LANGUAGE.md §7.15); a non-empty unterminated last
+line counts. A line that is still longer than `LIM_INPUT_LINE` bytes after the CR removal →
+error 46; as soon as more than `LIM_INPUT_LINE + 1` bytes precede the LF (or the end of input)
+the line can never become legal, so error 46 is raised then and nothing beyond
+`LIM_INPUT_LINE + 1` bytes is ever stored. The buffer therefore needs `LIM_INPUT_LINE + 1`
+bytes, a maximal line plus the CR that is still to be removed: the x86_64 runtime allocates
+exactly that, the arm64 runtime `LIM_INPUT_LINE + 16` (the same plus 15 bytes of slack, so the
+16-byte-aligned `__bss` object is a multiple of 16 bytes; the slack is never written).
+`isatty(0)` is called once, at the first line request, and remembered. On a terminal, before
+each line request: write the pending lazy spaces and `"? "` through the print buffer, set
 `out = col = col + 2`, flush stdout; after the line, `col = out = 0`. End of input at a line
 request: `_bsk_err(ERR_END_OF_INPUT)` (pending newline, flush, `END OF INPUT IN n`, exit 0).
 
@@ -1343,12 +1355,28 @@ unquoted string field must not contain `"` (nor, in MAT INPUT, `&`); its value s
 leading blanks. The three diagnostics come from `BSK_EMIT_INPUT_MSGS` (errors.inc): flush stdout,
 then `write(2, msg, len)` (failures ignored).
 
-**MAT INPUT.** Fields of the line(s) are validated and collected before anything is stored:
-numbers into a scratch array of doubles, strings as (offset, length) pairs into the text of the
-lines read by this statement (kept in a growable `malloc` buffer; failure → error 47). A line
-whose last non-blank byte outside quotes is `&` continues (the `&` is not part of any field).
-Then: n = 0 → NUM := 0; n + 1 > `RTA_CAP` → error 40; else `RTA_B1` := n, elements 1…n
-stored (strings with `_bsk_str_set` semantics), NUM := n.
+**MAT INPUT** (LANGUAGE.md §7.14.8) is transactional in both runtimes: every field of every
+line the statement reads is validated before anything is stored. A line whose last non-blank
+byte outside quotes is `&` continues on the next line; the line's text ends before the `&`, or
+before one comma that precedes it with only blanks between. The growable buffers are `malloc`
+memory reused by every MAT INPUT of the run (grown with `realloc` to max(needed, 2 × capacity,
+4096 bytes); failure → error 47). Any invalid field → `INPUT DATA NOT IN CORRECT FORMAT -- RETYPE
+IT`, everything this statement read is discarded and it starts again with a new line. With n
+fields: n = 0 → NUM := 0, the list unchanged; n + 1 > `RTA_CAP` → error 40; else `RTA_B1` := n,
+elements 1…n stored (strings with `_bsk_str_set` semantics), NUM := n. The two runtimes reach
+this differently:
+
+* arm64 (`src/runtime/rt_input.s`, `Lrt_in_matin`): the text of all the statement's lines
+  (each shortened at its continuation `&`) is first collected into one text buffer, one
+  LF-terminated record per line, for numeric and string lists alike. Then pass 1 scans that
+  text, validating and counting every field (the first invalid one → RETYPE); pass 2, after
+  the bound has been set, scans the same text again and stores field k into element k.
+* x86_64 (`src/runtime_x86_64_linux/rt_input.s`, `.Lrt_in_mat`): each line's fields are
+  validated as the line is read and collected: numbers as doubles into a values buffer,
+  strings as (offset, length) pairs (in the values buffer) into the text of the lines (kept, for
+  a string list only, in a text buffer). An invalid field is remembered and the rest of the
+  input is still read up to the last line; then RETYPE. If every field is good, the store loop
+  copies the collected values into elements 1…n.
 
 **String storage** grows with `realloc` and is never freed (a program's strings live until it
 exits); string constants and string DATA (`SD_CAP` = 0) are never written. The runtime still

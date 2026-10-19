@@ -1,0 +1,6 @@
+10 DIM L(3)
+20 READ A$(2), B$, C$(I)
+30 INPUT A$(1), X, D$
+40 CHANGE L TO C$(3)
+50 DATA "P", "Q", "R"
+60 END

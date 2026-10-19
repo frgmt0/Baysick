@@ -1,9 +1,8 @@
 # Baysick — notes for agents
 
 Dartmouth BASIC compiler in arm64 assembly (Apple `as` syntax), macOS/arm64. Implemented: the
-Second Edition (Oct 1964, incl. MAT matrix statements). Specified, being implemented: the Third
-and Fourth Editions (1966/1968: strings, INPUT, ON, TAB, CHANGE, multi-line DEF, MAT INPUT, …;
-LANGUAGE.md §3–§14, work packages DESIGN.md §2.3). Two targets:
+Second, Third and Fourth Editions (Oct 1964 incl. MAT matrix statements; 1966/1968: strings,
+INPUT, ON, TAB, CHANGE, multi-line DEF, MAT INPUT, …; LANGUAGE.md §3–§14). Two targets:
 `arm64-macos` (default, full pipeline) and `x86_64-linux` (cross: emits GNU `as` x86_64 text;
 assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, §6.4, §8).
 
@@ -24,11 +23,9 @@ assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, 
   `src/runtime_x86_64_linux/`, cross testing (`Makefile.linux`, `tests/cross*.sh`, CI),
   benchmarks (`bench/`). Do not edit another module's files. MAT work split: DESIGN.md §2.1;
   Third/Fourth Edition split: DESIGN.md §2.3.
-- **Staging switch:** the Fourth Edition contract counts and record sizes (`OP_COUNT`,
-  `KW_COUNT`, `TK_COUNT`, `BI_COUNT`, `IRF_SIZE`, `IRM_SIZE`) depend on `BSK_ED4_CONTRACT`
-  (default 0 = the current modules). Work on the new features with `make clean; make BSK_ED4=1
-  test`; plain `make test` must keep passing every test that passed before (DESIGN.md §2.2).
-  Integration removes the switch in one commit.
+- Contract counts and record sizes (`OP_COUNT`, `KW_COUNT`, `TK_COUNT`, `BI_COUNT`, `IRF_SIZE`,
+  `IRM_SIZE`) are plain constants (DESIGN.md §2.2). A future contract change that many modules
+  must follow may be staged behind a temporary switch, removed at integration in one commit.
 - Matrix kernels: GEMM may reassociate/use FMA (class R); every other MAT result must be
   bit-identical across targets and kernel variants (class E, DESIGN.md §6.6.4). Test products use
   exact data only. Never use undocumented CPU instructions; vendor BLAS is for `bench/` only.
@@ -40,12 +37,11 @@ assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, 
   Both targets must pass the same `tests/programs` and run-phase `tests/errors` byte for byte.
   A test may have a `NAME.in` sidecar: the program's standard input (else `/dev/null`).
   Tests named `ed4_*`, `manual4_*`, `text_*`, `c_ed4_*`, `r_ed4_*` and `tests/ir/ed4_*` cover
-  the Third/Fourth Edition and fail until it is implemented.
+  the Third/Fourth Edition.
 - No TODOs, stubs or placeholder values.
 
 ## Commands
 - Build: `make`   Test: `make test` (or `sh tests/run.sh [-v] [pattern]`)
-- Fourth Edition contract: `make clean; make BSK_ED4=1 test` (`make clean` when switching)
 - Include check: `make check-includes` (Mac); `make -f Makefile.linux check-includes` (Linux)
 - Kernel variant: `BAYSICK_KERNELS=<variant|baseline> sh tests/run.sh`
 - Benchmarks: `make bench` (Mac, vs Accelerate), `make bench-cross` (Linux host, vs OpenBLAS)

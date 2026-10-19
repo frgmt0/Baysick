@@ -4,12 +4,15 @@
 #
 # Defines (global, runtime.inc):
 #   bsk_print_num bsk_print_str bsk_print_comma bsk_print_semi
-#   bsk_print_nl
+#   bsk_print_nl bsk_print_sv bsk_print_tab
 # Defines (private to the runtime, .globl + .hidden):
 #   bsk_rt_finish_output    pending-line newline + flush (END / errors);
 #                           reports whether stdout broke
 #   bsk_rt_write_all        write(2) loop handling short writes / EINTR
 #   bsk_rt_print_fresh      newline if col != 0 (MAT PRINT, rt_mat.s)
+#   bsk_rt_flush            write the stdout buffer now (rt_input.s)
+#   bsk_rt_print_prompt     the terminal INPUT prompt "? " (rt_input.s)
+#   bsk_rt_print_linedone   col = out = 0 after a terminal line
 #
 # Column model (LANGUAGE.md section 8): `col` is the logical column,
 # `out` the number of characters physically written on this line.
@@ -30,6 +33,7 @@
                                     # (longest field: "-1.23457E-308 " = 14)
 .equ RT_CH_LF, 10                   # '\n'
 .equ RT_CH_SPACE, 32                # ' '
+.equ RT_CH_QMARK, 63                # '?'
 
     .text
 
@@ -371,6 +375,142 @@ bsk_rt_print_fresh:
     jne .Lrt_print_newline          # mid-line: end it
     ret                             # already at column 0
     .size bsk_rt_print_fresh, . - bsk_rt_print_fresh
+
+# ---------------------------------------------------------------------
+# bsk_print_sv -- PRINT a string variable or string list element
+#   (LANGUAGE.md 8 string item; DESIGN.md 6.7).
+#   Purpose : emit every byte of the value through the column logic.
+#   Inputs  : %rdi = SD record
+#   Outputs : none
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: none
+#   Frame   : none (tail jump; bsk_print_str sees our caller's alignment)
+# ---------------------------------------------------------------------
+    .globl bsk_print_sv
+    .type bsk_print_sv, @function
+    .p2align 4
+bsk_print_sv:
+    movl SD_LEN(%rdi), %esi         # length (u32, zero-extended)
+    movq SD_PTR(%rdi), %rdi         # bytes (may be 0 when length is 0)
+    jmp bsk_print_str
+    .size bsk_print_sv, . - bsk_print_sv
+
+# ---------------------------------------------------------------------
+# bsk_print_tab -- PRINT TAB(x) (LANGUAGE.md 8, DESIGN.md 6.7).
+#   Purpose : m = fmod(trunc(x), 75) (both exact), m += 75 if m < 0,
+#             so m is in 0 .. 74; if col < m then col = m (a lazy
+#             movement: nothing is written). Never starts a new line.
+#   Inputs  : %xmm0 = x (finite)
+#   Outputs : none
+#   Clobbers: all caller-saved registers (libm)
+#   Callee-saved used: %rbp = frame pointer
+#   Frame   : 8 bytes (saved %rbp; aligns %rsp for the libm calls)
+# ---------------------------------------------------------------------
+    .globl bsk_print_tab
+    .type bsk_print_tab, @function
+    .p2align 4
+bsk_print_tab:
+    pushq %rbp
+    movq %rsp, %rbp
+    call trunc@PLT                  # k = trunc(x), exact
+    movl $TAB_MODULUS, %eax
+    cvtsi2sdl %eax, %xmm1           # 75.0
+    call fmod@PLT                   # k mod 75 with the sign of k, exact
+    pxor %xmm1, %xmm1
+    ucomisd %xmm1, %xmm0
+    jae 1f                          # m >= 0 (also -0)
+    movl $TAB_MODULUS, %eax
+    cvtsi2sdl %eax, %xmm1
+    addsd %xmm1, %xmm0              # m in -74 .. -1: + 75, exact
+1:
+    cvttsd2si %xmm0, %rax           # 0 <= m <= 74
+    cmpq .Lrt_print_col(%rip), %rax
+    jbe 2f                          # col >= m: TAB is ignored
+    movq %rax, .Lrt_print_col(%rip) # col = m (lazy spaces)
+2:
+    popq %rbp
+    ret
+    .size bsk_print_tab, . - bsk_print_tab
+
+# ---------------------------------------------------------------------
+# bsk_rt_flush -- write the stdout buffer now (INPUT diagnostics and
+#   the terminal prompt, rt_input.s). Same rules as every flush: once
+#   stdout is broken the bytes are discarded.
+#   Inputs  : none
+#   Outputs : none
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: none
+#   Frame   : none (tail jump; .Lrt_print_flush aligns itself)
+# ---------------------------------------------------------------------
+    .globl bsk_rt_flush
+    .hidden bsk_rt_flush
+    .type bsk_rt_flush, @function
+    .p2align 4
+bsk_rt_flush:
+    jmp .Lrt_print_flush
+    .size bsk_rt_flush, . - bsk_rt_flush
+
+# ---------------------------------------------------------------------
+# bsk_rt_print_prompt -- the INPUT prompt on a terminal (LANGUAGE.md
+#   7.15, DESIGN.md 6.7): write the pending lazy spaces (col - out),
+#   then "?" and a space; col = out = col + 2; flush stdout.
+#   Inputs  : none
+#   Outputs : none
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: %rbx = spaces still to write, %rbp = frame
+#             pointer
+#   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad)
+# ---------------------------------------------------------------------
+    .globl bsk_rt_print_prompt
+    .hidden bsk_rt_print_prompt
+    .type bsk_rt_print_prompt, @function
+    .p2align 4
+bsk_rt_print_prompt:
+    pushq %rbp
+    movq %rsp, %rbp
+    pushq %rbx
+    subq $8, %rsp                   # %rsp = 0 (mod 16)
+    movq .Lrt_print_col(%rip), %rbx
+    subq .Lrt_print_out(%rip), %rbx # pending spaces = col - out
+1:
+    testq %rbx, %rbx
+    jz 2f
+    movl $RT_CH_SPACE, %edi
+    call .Lrt_print_putc
+    subq $1, %rbx
+    jmp 1b
+2:
+    movl $RT_CH_QMARK, %edi
+    call .Lrt_print_putc            # "?"
+    movl $RT_CH_SPACE, %edi
+    call .Lrt_print_putc            # " " (written, not lazy)
+    movq .Lrt_print_col(%rip), %rax
+    addq $2, %rax                   # the prompt's two columns
+    movq %rax, .Lrt_print_col(%rip)
+    movq %rax, .Lrt_print_out(%rip) # out = col: nothing pending
+    call .Lrt_print_flush           # the user must see the prompt
+    addq $8, %rsp
+    popq %rbx
+    popq %rbp
+    ret
+    .size bsk_rt_print_prompt, . - bsk_rt_print_prompt
+
+# ---------------------------------------------------------------------
+# bsk_rt_print_linedone -- after a line was read from a terminal the
+#   cursor is at the start of a new line: col = out = 0 (nothing is
+#   written).
+#   Inputs  : none   Outputs : none   Clobbers: none
+#   Callee-saved used: none   Frame: none (leaf)
+# ---------------------------------------------------------------------
+    .globl bsk_rt_print_linedone
+    .hidden bsk_rt_print_linedone
+    .type bsk_rt_print_linedone, @function
+    .p2align 4
+bsk_rt_print_linedone:
+    movq $0, .Lrt_print_col(%rip)
+    movq $0, .Lrt_print_out(%rip)
+    ret
+    .size bsk_rt_print_linedone, . - bsk_rt_print_linedone
 
 # ---------------------------------------------------------------------
 # bsk_rt_finish_output -- termination step for END, STOP, OUT OF DATA

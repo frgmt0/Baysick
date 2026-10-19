@@ -15,14 +15,17 @@
 // _bk_x64_emit -- BKD_EMIT: append one complete GNU as file for the
 // Module to the OutBuf, in the order of DESIGN.md 5.4.3: .text (main as
 // bsk_program, then present FN functions in letter order), .rodata
-// (string literals, DATA block, count), .data (array descriptors), .bss
-// (globals, array storage), and the .note.GNU-stack marker.
+// (string literals, DATA block and count, string DATA bytes),
+// .data.rel.ro (SD_* records of the string constants, bsk_sdata and its
+// count), .data (array and string list descriptors), .bss (globals, string
+// variables, array and string list storage), and the .note.GNU-stack
+// marker. A module without string DATA gets an empty bsk_sdata (count 0).
 // In:  x0 = const Module*, x1 = OutBuf*
 // Out: x0 = 0 on success, else pointer to a NUL-terminated reason
 // Clobbers: x0-x17, d0-d7, d16-d31
 // Callee-saved used: x19 = Module*, x20 = OutBuf*, x21 = loop index,
 //                    x22 = pointer to the current table entry,
-//                    x23 = loop limit
+//                    x23 = loop limit (or the DATA count)
 // Frame: 48 bytes
 // ---------------------------------------------------------------------
     .globl _bk_x64_emit
@@ -128,6 +131,81 @@ Lbk_x64_em_data_done:
     mov x2, x23
     bl _bk_x64_fmt
 
+    // ---- string DATA bytes .Lsdb_<k> (still in .rodata) --------------------
+    ldr w23, [x19, #IRM_NSDATA]
+    ldr x22, [x19, #IRM_SDATA]
+    mov x21, #0
+Lbk_x64_em_sdb_loop:
+    cmp x21, x23
+    b.hs Lbk_x64_em_sdb_done
+    // label line, then the bytes (an empty value is the label alone)
+    mov x0, x20
+    adrp x1, Lbk_x64_em_sdb_label@PAGE
+    add x1, x1, Lbk_x64_em_sdb_label@PAGEOFF
+    mov x2, x21
+    bl _bk_x64_fmt
+    mov x0, x20
+    ldr x1, [x22, #IRS_PTR]
+    ldr w2, [x22, #IRS_LEN]
+    bl _bk_x64_bytes
+    add x22, x22, #IRS_SIZE
+    add x21, x21, #1
+    b Lbk_x64_em_sdb_loop
+Lbk_x64_em_sdb_done:
+
+    // ---- .data.rel.ro: SD_* records of the string constants ----------------
+    mov x0, x20
+    adrp x1, Lbk_x64_em_sec_relro@PAGE
+    add x1, x1, Lbk_x64_em_sec_relro@PAGEOFF
+    bl _ob_puts
+    ldr w23, [x19, #IRM_NSTRINGS]
+    ldr x22, [x19, #IRM_STRINGS]
+    mov x21, #0
+Lbk_x64_em_sd_loop:
+    cmp x21, x23
+    b.hs Lbk_x64_em_sd_done
+    // ".Lsd_<id>:" / ".quad .Lstr_<id>" / ".long <len>, 0"
+    mov x0, x20
+    adrp x1, Lbk_x64_em_sd_fmt@PAGE
+    add x1, x1, Lbk_x64_em_sd_fmt@PAGEOFF
+    mov x2, x21
+    mov x3, x21
+    ldr w4, [x22, #IRS_LEN]
+    bl _bk_x64_fmt
+    add x22, x22, #IRS_SIZE
+    add x21, x21, #1
+    b Lbk_x64_em_sd_loop
+Lbk_x64_em_sd_done:
+
+    // ---- bsk_sdata: one SD_* record per string DATA value ------------------
+    mov x0, x20
+    adrp x1, Lbk_x64_em_sdata_head@PAGE
+    add x1, x1, Lbk_x64_em_sdata_head@PAGEOFF
+    bl _ob_puts
+    ldr w23, [x19, #IRM_NSDATA]
+    ldr x22, [x19, #IRM_SDATA]
+    mov x21, #0
+Lbk_x64_em_sdata_loop:
+    cmp x21, x23
+    b.hs Lbk_x64_em_sdata_done
+    // ".quad .Lsdb_<k>" / ".long <len>, 0"
+    mov x0, x20
+    adrp x1, Lbk_x64_em_sdata_fmt@PAGE
+    add x1, x1, Lbk_x64_em_sdata_fmt@PAGEOFF
+    mov x2, x21
+    ldr w3, [x22, #IRS_LEN]
+    bl _bk_x64_fmt
+    add x22, x22, #IRS_SIZE
+    add x21, x21, #1
+    b Lbk_x64_em_sdata_loop
+Lbk_x64_em_sdata_done:
+    // bsk_sdata_count
+    mov x0, x20
+    adrp x1, Lbk_x64_em_sdata_count@PAGE
+    add x1, x1, Lbk_x64_em_sdata_count@PAGEOFF
+    mov x2, x23
+    bl _bk_x64_fmt
+
     // ---- .data: array descriptors (RTA_*), letter order ----------------
     mov x0, x20
     adrp x1, Lbk_x64_em_sec_data@PAGE
@@ -166,12 +244,42 @@ Lbk_x64_em_desc_next:
     cmp x21, #NUM_LETTERS
     b.lo Lbk_x64_em_desc_loop
 
+    // ---- .data: string list descriptors (RTA_*), letter order ------------------
+    mov x21, #0
+Lbk_x64_em_sdesc_loop:
+    add x22, x19, #IRM_SARRAYS
+    add x22, x22, x21, lsl #4
+    ldr w9, [x22, #IRA_DIMS]
+    cbz w9, Lbk_x64_em_sdesc_next
+    // ".Lsdesc_<L>:" / ".quad .Lbsk_sarr_<L>" / ".long 1, b1, 0, 1, letter, b1+1"
+    ldr w5, [x22, #IRA_B1]
+    add x6, x5, #1
+    mov x0, x20
+    adrp x1, Lbk_x64_em_sdesc_fmt@PAGE
+    add x1, x1, Lbk_x64_em_sdesc_fmt@PAGEOFF
+    mov x2, x21
+    mov x3, x21
+    mov x4, x5
+    mov x5, x21
+    bl _bk_x64_fmt
+Lbk_x64_em_sdesc_next:
+    add x21, x21, #1
+    cmp x21, #NUM_LETTERS
+    b.lo Lbk_x64_em_sdesc_loop
+
     // ---- .bss: the NSLOTS global cells -----------------------------------
     ldr w9, [x19, #IRM_NSLOTS]
     lsl x2, x9, #3
     mov x0, x20
     adrp x1, Lbk_x64_em_vars@PAGE
     add x1, x1, Lbk_x64_em_vars@PAGEOFF
+    bl _bk_x64_fmt
+
+    // ---- .bss: the 286 string variables (SD_* records) --------------------
+    mov x0, x20
+    adrp x1, Lbk_x64_em_svars@PAGE
+    add x1, x1, Lbk_x64_em_svars@PAGEOFF
+    mov x2, #(NUM_LETTERS * SLOT_PER_LETTER * SD_SIZE)
     bl _bk_x64_fmt
 
     // ---- .bss: zero-filled array element storage, letter order -----------
@@ -197,6 +305,27 @@ Lbk_x64_em_arr_next:
     add x21, x21, #1
     cmp x21, #NUM_LETTERS
     b.lo Lbk_x64_em_arr_loop
+
+    // ---- .bss: zero-filled string list storage, letter order ---------------
+    mov x21, #0
+Lbk_x64_em_sarr_loop:
+    add x22, x19, #IRM_SARRAYS
+    add x22, x22, x21, lsl #4
+    ldr w9, [x22, #IRA_DIMS]
+    cbz w9, Lbk_x64_em_sarr_next
+    // bytes = SD_SIZE * (b1 + 1)
+    ldr w10, [x22, #IRA_B1]
+    add x10, x10, #1
+    lsl x3, x10, #4
+    mov x0, x20
+    adrp x1, Lbk_x64_em_sarr@PAGE
+    add x1, x1, Lbk_x64_em_sarr@PAGEOFF
+    mov x2, x21
+    bl _bk_x64_fmt
+Lbk_x64_em_sarr_next:
+    add x21, x21, #1
+    cmp x21, #NUM_LETTERS
+    b.lo Lbk_x64_em_sarr_loop
 
     // ---- non-executable stack marker (last line of the file) -------------
     mov x0, x20
@@ -291,9 +420,52 @@ Lbk_x64_em_arr:
     .ascii "    .p2align 3\n"
     .ascii ".Lbsk_arr_%L:\n"
     .asciz "    .zero %u\n"
+Lbk_x64_em_sdb_label:
+    .asciz ".Lsdb_%u:\n"
+Lbk_x64_em_sec_relro:
+    .ascii "    .section .data.rel.ro,\"aw\",@progbits\n"
+    .asciz "    .p2align 3\n"
+Lbk_x64_em_sd_fmt:
+    .ascii ".Lsd_%u:\n"
+    .ascii "    .quad .Lstr_%u\n"
+    .asciz "    .long %u, 0\n"
+Lbk_x64_em_sdata_head:
+    .ascii "    .globl bsk_sdata\n"
+    .ascii "    .type bsk_sdata, @object\n"
+    .asciz "bsk_sdata:\n"
+Lbk_x64_em_sdata_fmt:
+    .ascii "    .quad .Lsdb_%u\n"
+    .asciz "    .long %u, 0\n"
+Lbk_x64_em_sdata_count:
+    .ascii "    .globl bsk_sdata_count\n"
+    .ascii "    .type bsk_sdata_count, @object\n"
+    .ascii "bsk_sdata_count:\n"
+    .asciz "    .quad %u\n"
+Lbk_x64_em_sdesc_fmt:
+    .ascii ".Lsdesc_%L:\n"
+    .ascii "    .quad .Lbsk_sarr_%L\n"
+    .asciz "    .long 1, %u, 0, 1, %u, %u\n"
+Lbk_x64_em_svars:
+    .ascii "    .p2align 3\n"
+    .ascii ".Lbsk_svars:\n"
+    .asciz "    .zero %u\n"
+Lbk_x64_em_sarr:
+    .ascii "    .p2align 3\n"
+    .ascii ".Lbsk_sarr_%L:\n"
+    .asciz "    .zero %u\n"
 Lbk_x64_em_tail:
     .asciz "    .section .note.GNU-stack,\"\",@progbits\n"
 Lbk_x64_em_err_nomain:
     .asciz "x86_64-linux backend: module has no main function"
 Lbk_x64_em_err_dims:
     .asciz "x86_64-linux backend: array with more than 2 dimensions"
+
+// The emitted SD_* records ("    .quad <bytes>" / "    .long <len>, 0") and
+// string variable block are written out by layout; keep them tied to
+// runtime.inc.
+.if (SD_PTR != 0) || (SD_LEN != 8) || (SD_CAP != 12) || (SD_SIZE != 16)
+    .error "x64_emit.s emits SD_* records with a different layout than runtime.inc"
+.endif
+.if (RTA_DATA != 0) || (RTA_DIMS != 8) || (RTA_B1 != 12) || (RTA_B2 != 16) || (RTA_ROWLEN != 20) || (RTA_LETTER != 24) || (RTA_CAP != 28) || (RTA_SIZE != 32)
+    .error "x64_emit.s emits RTA_* descriptors with a different layout than runtime.inc"
+.endif

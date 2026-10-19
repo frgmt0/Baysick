@@ -73,7 +73,10 @@
 .equ OP_MATINV,     54  /*  X=target array, A=source array */
 // Third and Fourth Edition opcodes (IR.md 3.2). "sref" temps hold the
 // address of a 16-byte string descriptor (SD_*, runtime.inc); every other
-// temp holds a double. String list letters 0..25 are in X.
+// temp holds a double. String list letters 0..25 are in X (in IMM for the
+// element form of OP_CHGN2S). The element form of OP_SREAD / OP_INSV /
+// OP_CHGN2S (A = IR_NONE) stores into string list element B: the value is
+// taken first, the subscript checked at the store (IR.md 3.2).
 .equ OP_SLIT,       55  /*  DST sref, X=string id */
 .equ OP_SVAR,       56  /*  DST sref, X=string slot 0..285 */
 .equ OP_SALD1,      57  /*  DST sref, X=string list letter, A=subscript */
@@ -81,10 +84,10 @@
 .equ OP_SJCMP,      59  /*  REL, A=sref, B=sref, X=label */
 .equ OP_PRSV,       60  /*  A=sref */
 .equ OP_PRTAB,      61  /*  A=column */
-.equ OP_SREAD,      62  /*  A=destination sref */
+.equ OP_SREAD,      62  /*  A=destination sref; element form: A=IR_NONE, X=string list, B=subscript */
 .equ OP_INBEG,      63  /*  - */
 .equ OP_INNUM,      64  /*  DST */
-.equ OP_INSV,       65  /*  A=destination sref */
+.equ OP_INSV,       65  /*  A=destination sref; element form: A=IR_NONE, X=string list, B=subscript */
 .equ OP_INEND,      66  /*  - */
 .equ OP_MATINPUT,   67  /*  X=numeric list */
 .equ OP_SMATINPUT,  68  /*  X=string list */
@@ -92,7 +95,7 @@
 .equ OP_SMATREAD,   70  /*  X=string list */
 .equ OP_SMATPRINT,  71  /*  X=string list, IMM=MATPR_ZONED or MATPR_PACKED */
 .equ OP_CHGS2N,     72  /*  X=numeric list, A=source sref */
-.equ OP_CHGN2S,     73  /*  X=numeric list, A=destination sref */
+.equ OP_CHGN2S,     73  /*  X=numeric list, A=destination sref; element form: A=IR_NONE, IMM=string list, B=subscript */
 .equ OP_ONSEL,      74  /*  DST, A=selector, IMM=number of line numbers N */
 .equ OP_RESTORE,    75  /*  IMM=RESTORE_ALL, RESTORE_NUM or RESTORE_STR */
 .equ OP_RANDOMIZE,  76  /*  - */
@@ -115,20 +118,7 @@
 .equ RESTORE_NUM,   1   /* RESTORE*: numeric data block only */
 .equ RESTORE_STR,   2   /* RESTORE$: string data block only */
 
-// Contract staging switch (DESIGN.md 2.2). 0: the counts and layouts the
-// current (Second Edition) modules are built with. 1: the Third/Fourth
-// Edition contract. Build with `make BSK_ED4=1` during the implementation
-// phase; the integration step deletes the switch and keeps only the
-// BSK_ED4_CONTRACT=1 values. Every other constant is unconditional.
-.ifndef BSK_ED4_CONTRACT
-.equ BSK_ED4_CONTRACT, 0
-.endif
-
-.if BSK_ED4_CONTRACT
 .equ OP_COUNT,      85
-.else
-.equ OP_COUNT,      55
-.endif
 
 // ---- Relation codes (u16 IRI_REL, OP_JCMP only; 0 otherwise) ------------
 .equ REL_NONE,      0
@@ -165,7 +155,7 @@
 .equ IRI_C,         16  /* u32 operand temp, or IR_NONE */
 .equ IRI_X,         20  /* u32 aux: slot / label / array letter / string id / fn letter, or IR_NONE */
                         // MAT opcodes also hold array letters in IRI_A / IRI_B (IR.md 3.1)
-.equ IRI_IMM,       24  /* u64 constant bits / BASIC line number / return label id / MATPR_* / RESTORE_* / k / N, else 0 */
+.equ IRI_IMM,       24  /* u64 constant bits / BASIC line number / return label id / MATPR_* / RESTORE_* / k / N / string list (chgn2s element form), else 0 */
 .equ IRI_SIZE,      32
 .equ IRI_SHIFT,     5   /* log2(IRI_SIZE) */
 
@@ -184,7 +174,7 @@
 .equ IRA_SIZE,      16
 .equ IRA_FLAG_DIMMED, 1
 
-// ---- Function record (IRF_*), 64 bytes (96 with BSK_ED4_CONTRACT) -----------
+// ---- Function record (IRF_*), 96 bytes -----------------------------------
 .equ IRF_PRESENT,   0   /* u32 1 if this function exists */
 .equ IRF_KIND,      4   /* u32 FUNC_KIND_* */
 .equ IRF_FNIDX,     8   /* u32 letter 0..25 for FN, 0 for main */
@@ -197,17 +187,12 @@
 .equ IRF_LABELS,    40  /* ptr to u32[nlabels]: BASIC line number for line labels, 0 for internal */
 .equ IRF_CAPLABELS, 48  /* u32 capacity (builder private) */
 .equ IRF_DEFLINE,   52  /* u32 line number of the DEF statement (FN), 0 for main */
-.if BSK_ED4_CONTRACT
 .equ IRF_NPARAMS,   56  /* u32 number of parameters 0..LIM_FN_PARAMS (0 for main) */
 .equ IRF_ENDLINE,   60  /* u32 line number of the FNEND (FUNC_KIND_FNML), else 0 */
 .equ IRF_PARAMS,    64  /* u32[LIM_FN_PARAMS] parameter slots in order; unused entries IR_NONE */
 .equ IRF_SIZE,      96
-.else
-.equ IRF_RESERVED,  56  /* u64 must be 0 */
-.equ IRF_SIZE,      64
-.endif
 
-// ---- Module record (IRM_*), 2192 bytes (3488 with BSK_ED4_CONTRACT) --------
+// ---- Module record (IRM_*), 3488 bytes ------------------------------------
 .equ IRM_NFORS,     0   /* u32 number of FOR statements */
 .equ IRM_NSLOTS,    4   /* u32 = SLOT_FOR_BASE + 2*nfors */
 .equ IRM_NSTRINGS,  8   /* u32 */
@@ -219,15 +204,11 @@
 .equ IRM_RESERVED,  40  /* u64 must be 0 */
 .equ IRM_ARRAYS,    48  /* 26 x IRA_SIZE, inline */
 .equ IRM_FUNCS,     464 /* 27 x IRF_SIZE, inline (index 0 = main, 1+L = FN letter L) */
-.if BSK_ED4_CONTRACT
 .equ IRM_SARRAYS,   3056 /* 26 x IRA_SIZE, inline: string lists A$..Z$ (DIMS 0 unused, 1 list; B2 0) */
 .equ IRM_NSDATA,    3472 /* u32 number of string DATA values */
 .equ IRM_CAPSDATA,  3476 /* u32 (builder private) */
 .equ IRM_SDATA,     3480 /* ptr to IRS_SIZE entries (string DATA values, program order) */
 .equ IRM_SIZE,      3488
-.else
-.equ IRM_SIZE,      2192
-.endif
 
 // ---------------------------------------------------------------------------
 // IR builder API (implemented in src/ir/ir_build.s). AAPCS64. All memory
@@ -246,7 +227,7 @@
 //  _ir_set_array(x0=Module*, w1=letter, w2=dims, w3=b1, w4=b2, w5=flags)
 //  _ir_set_fors(x0=Module*, w1=nfors)      (also sets NSLOTS)
 //
-// Third/Fourth Edition additions (BSK_ED4_CONTRACT layouts):
+// Third/Fourth Edition additions:
 //  _ir_add_sdata(x0=Module*, x1=bytes, w2=len) -> w0 = string DATA index
 //                                          (bytes copied)
 //  _ir_set_sarray(x0=Module*, w1=letter, w2=b1, w3=flags)

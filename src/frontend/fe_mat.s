@@ -2,23 +2,31 @@
 // src/frontend/fe_mat.s -- MAT statement parser and lowering
 // (LANGUAGE.md section 7.14.2, IR.md sections 3.1 and 4.3).
 //
-//   _fe_mat()          parse the text after "MAT" and lower it into main
+//   _fe_mat()          parse the text after "MAT" and lower it into the
+//                      current function
 //   _fe_mat_finish()   after all lines: every letter named by a MAT
 //                      statement whose dimensionality is still unknown
 //                      becomes a 10 x 10 table (LANGUAGE.md 7.11)
 //
 // Grammar (compacted text, LANGUAGE.md 7.14.2):
-//   mat-statement := "MAT" ( mat-read | mat-print | mat-assign )
+//   mat-statement := "MAT" ( mat-read | mat-print | mat-input | mat-assign )
 //   mat-read      := "READ" mat-target { "," mat-target }
 //   mat-target    := name [ "(" expression [ "," expression ] ")" ]
-//   mat-print     := "PRINT" name { sep name } [ sep ]     sep := "," | ";"
+//                  | sname [ "(" expression ")" ]
+//   mat-print     := "PRINT" pname { sep pname } [ sep ]   sep := "," | ";"
+//   pname         := name | sname
+//   mat-input     := "INPUT" ( name | sname )
 //   mat-assign    := name "=" rhs
 //   rhs           := name | name ( "+" | "-" | "*" ) name
 //                  | "(" expression ")" "*" name
 //                  | ( "ZER" | "CON" ) [ "(" expression [ "," expression ] ")" ]
 //                  | "IDN" [ "(" expression ")" ]
 //                  | ( "TRN" | "INV" ) "(" name ")"
-//   name          := letter                    not followed by a digit
+//   name          := letter                    not followed by a digit or "$"
+//   sname         := letter "$"                a string list (LANGUAGE.md 4.4)
+//
+// String lists are only allowed in MAT READ, MAT PRINT and MAT INPUT; in
+// an assignment they are MISMATCHED STRING OPERATION.
 //
 // Every name used by a MAT statement is recorded in the bit mask
 // _fe_mat_names (fe_compile.s); a subscripted MAT READ target also fixes
@@ -33,9 +41,10 @@
     .section __TEXT,__text,regular,pure_instructions
 
 // ---------------------------------------------------------------------
-// _fe_mat -- MAT statement: choose READ, PRINT or an assignment
+// _fe_mat -- MAT statement: choose READ, PRINT, INPUT or an assignment
 //   (text starting with READ is MAT READ, else text starting with PRINT
-//   is MAT PRINT, else it is an assignment) and run its parser.
+//   is MAT PRINT, else text starting with INPUT is MAT INPUT, else it is
+//   an assignment) and run its parser.
 //   in:  scanner after "MAT"
 //   out: none (code emitted into main)
 //   clobbers: x0-x17, d0-d7
@@ -69,6 +78,17 @@ _fe_mat:
     bl Lfe_mat_print
     b Lfe_mat_ret
 2:
+    // "INPUT" ?
+    adrp x0, Lfe_mat_s_input@PAGE
+    add x0, x0, Lfe_mat_s_input@PAGEOFF
+    mov w1, #5
+    bl Lfe_mat_prefix
+    cbz w0, 3f
+    mov w0, #5
+    bl _fe_advance
+    bl Lfe_mat_input
+    b Lfe_mat_ret
+3:
     // anything else is an assignment (MAT R = ..., MAT P = ...)
     bl Lfe_mat_assign
 Lfe_mat_ret:
@@ -77,13 +97,15 @@ Lfe_mat_ret:
 
 // ---------------------------------------------------------------------
 // Lfe_mat_read -- MAT READ target {, target}  (IR.md 4.3): per target,
-//   [r; [c;] matredim X, tr [, tc];] matread X. A subscripted target is
-//   a use of X as a list (one dimension) or a table (two).
+//   [r; [c;] matredim X, tr [, tc];] matread X, or for a string list
+//   [r; smatredim X$, tr;] smatread X$. A subscripted numeric target is a
+//   use of X as a list (one dimension) or a table (two); a string list
+//   takes one dimension only (a second -> ILLEGAL VARIABLE).
 //   in:  scanner after "READ"
 //   out: none
 //   clobbers: x0-x17, d0-d7
 //   callee-saved: w19 = target letter, w20 = r temp, w21 = c temp
-//        (or IR_NONE)
+//        (or IR_NONE), w22 = 1 for a string list
 //   frame: 48 bytes
 // ---------------------------------------------------------------------
     .p2align 2
@@ -91,21 +113,29 @@ Lfe_mat_read:
     stp x29, x30, [sp, #-48]!
     mov x29, sp
     stp x19, x20, [sp, #16]
-    str x21, [sp, #32]
-    // a MAT READ needs DATA values just like READ (phase-3 NO DATA)
-    adrp x9, _fe_has_read@PAGE
-    mov w10, #1
-    str w10, [x9, _fe_has_read@PAGEOFF]
+    stp x21, x22, [sp, #32]
 Lfe_mat_read_loop:
+    mov w0, #1                          // string lists allowed
     bl Lfe_mat_name                     // ILLEGAL VARIABLE if no name
     mov w19, w0
+    mov w22, w1
+    // a MAT READ needs DATA values of its kind (phase-3 NO [STRING] DATA)
+    adrp x9, _fe_has_read@PAGE
+    add x9, x9, _fe_has_read@PAGEOFF
+    adrp x10, _fe_has_sread@PAGE
+    add x10, x10, _fe_has_sread@PAGEOFF
+    cmp w22, #0
+    csel x9, x9, x10, eq
+    mov w10, #1
+    str w10, [x9]
     mov w0, #0
     bl _fe_peek
     cmp w0, #'('
     b.ne Lfe_mat_read_elems
-    // dimension list: evaluated, then the target is redimensioned
     mov w0, #1
     bl _fe_advance
+    cbnz w22, Lfe_mat_read_sdim
+    // dimension list: evaluated, then the target is redimensioned
     mov w0, #2                          // one or two dimensions
     bl Lfe_mat_dims
     mov w20, w0
@@ -121,9 +151,23 @@ Lfe_mat_read_loop:
     mov w4, w19
     mov x5, #0
     bl Lfe_mat_emit
+    b Lfe_mat_read_elems
+Lfe_mat_read_sdim:
+    // X$(r): r; smatredim X$, tr (a second dimension is ILLEGAL VARIABLE)
+    mov w0, w19
+    bl _fe_ssubscript
+    mov w1, w0
+    mov w0, #OP_SMATREDIM
+    mov w2, #IR_NONE
+    mov w4, w19
+    mov x5, #0
+    bl Lfe_mat_emit
 Lfe_mat_read_elems:
-    // matread X
+    // matread X / smatread X$
     mov w0, #OP_MATREAD
+    cbz w22, 1f
+    mov w0, #OP_SMATREAD
+1:
     mov w1, #IR_NONE
     mov w2, #IR_NONE
     mov w4, w19
@@ -140,7 +184,7 @@ Lfe_mat_read_elems:
     bl _fe_advance
     b Lfe_mat_read_loop
 Lfe_mat_read_done:
-    ldr x21, [sp, #32]
+    ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
     ldp x29, x30, [sp], #48
     ret
@@ -149,26 +193,69 @@ Lfe_mat_read_format:
     bl _fe_err
 
 // ---------------------------------------------------------------------
+// Lfe_mat_input -- MAT INPUT V / MAT INPUT V$ (LANGUAGE.md 7.14.8,
+//   IR.md 4.3): `matinput V` / `smatinput V$`. A numeric name is a use as
+//   a list (a table -> ILLEGAL VARIABLE); dimensions -> INCORRECT FORMAT.
+//   in:  scanner after "INPUT"
+//   out: none
+//   clobbers: x0-x17
+//   callee-saved: w19 = letter, w20 = 1 for a string list
+//   frame: 32 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lfe_mat_input:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]
+    mov w0, #1                          // string lists allowed
+    bl Lfe_mat_name
+    mov w19, w0
+    mov w20, w1
+    cbnz w20, 1f
+    mov w0, w19
+    mov w1, #1                          // MAT INPUT fixes a list
+    bl _fe_array_use
+1:
+    bl _fe_expect_eol                   // MAT INPUT V(5): INCORRECT FORMAT
+    mov w0, #OP_MATINPUT
+    cbz w20, 2f
+    mov w0, #OP_SMATINPUT
+2:
+    mov w1, #IR_NONE
+    mov w2, #IR_NONE
+    mov w4, w19
+    mov x5, #0
+    bl Lfe_mat_emit
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret
+
+// ---------------------------------------------------------------------
 // Lfe_mat_print -- MAT PRINT name { sep name } [ sep ]  (IR.md 4.3): per
 //   item, `prnl` unless it is the first, then `matprint X, packed` if the
-//   separator after it is ';', else `matprint X, zoned`.
+//   separator after it is ';', else `matprint X, zoned` (a string list:
+//   `smatprint X$, packed|zoned`).
 //   in:  scanner after "PRINT"
 //   out: none
 //   clobbers: x0-x17
 //   callee-saved: w19 = item letter, w20 = 1 while at the first item,
-//        w21 = MATPR_* mode, w22 = 1 if the item ended the line
-//   frame: 48 bytes
+//        w21 = MATPR_* mode, w22 = 1 if the item ended the line,
+//        w23 = 1 for a string list
+//   frame: 64 bytes
 // ---------------------------------------------------------------------
     .p2align 2
 Lfe_mat_print:
-    stp x29, x30, [sp, #-48]!
+    stp x29, x30, [sp, #-64]!
     mov x29, sp
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
+    str x23, [sp, #48]
     mov w20, #1
 Lfe_mat_print_loop:
+    mov w0, #1                          // string lists allowed
     bl Lfe_mat_name                     // ILLEGAL VARIABLE if no name
     mov w19, w0
+    mov w23, w1
     // what follows the name selects the format of this item
     mov w0, #0
     bl _fe_peek
@@ -198,8 +285,11 @@ Lfe_mat_print_emit:
     bl Lfe_mat_emit
 1:
     mov w20, #0
-    // matprint X, zoned|packed
+    // matprint X, zoned|packed (smatprint for a string list)
     mov w0, #OP_MATPRINT
+    cbz w23, 2f
+    mov w0, #OP_SMATPRINT
+2:
     mov w1, #IR_NONE
     mov w2, #IR_NONE
     mov w4, w19
@@ -212,9 +302,10 @@ Lfe_mat_print_emit:
     cmp w0, #FE_PEEK_EOL
     b.ne Lfe_mat_print_loop
 Lfe_mat_print_done:
+    ldr x23, [sp, #48]
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #48
+    ldp x29, x30, [sp], #64
     ret
 
 // ---------------------------------------------------------------------
@@ -236,6 +327,7 @@ Lfe_mat_assign:
     mov x29, sp
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
+    mov w0, #0                          // no string lists in assignments
     bl Lfe_mat_name                     // MAT = A -> ILLEGAL VARIABLE
     mov w19, w0
     mov w0, #0
@@ -354,6 +446,7 @@ Lfe_mat_assign_func:
     // TRN(Y) / INV(Y): mattrn|matinv X, Y
     mov w0, #4                          // the name and its '('
     bl _fe_advance
+    mov w0, #0
     bl Lfe_mat_name
     mov w20, w0
     mov w0, #0
@@ -386,6 +479,7 @@ Lfe_mat_assign_scale:
     b.ne Lfe_mat_assign_format          // MAT C = (2)A
     mov w0, #1
     bl _fe_advance
+    mov w0, #0
     bl Lfe_mat_name
     mov w21, w0
     bl _fe_expect_eol
@@ -399,6 +493,7 @@ Lfe_mat_assign_scale:
 
 Lfe_mat_assign_operand:
     // Y alone (copy), or Y op Z with op one of + - *
+    mov w0, #0
     bl Lfe_mat_name                     // MAT C = A1 + B -> ILLEGAL VARIABLE
     mov w20, w0
     mov w0, #0
@@ -426,6 +521,7 @@ Lfe_mat_assign_operand:
 2:
     mov w0, #1
     bl _fe_advance
+    mov w0, #0
     bl Lfe_mat_name
     mov w21, w0
     bl _fe_expect_eol                   // one operation only: A + B - C
@@ -445,20 +541,25 @@ Lfe_mat_assign_format:
     bl _fe_err
 
 // ---------------------------------------------------------------------
-// Lfe_mat_name -- a MAT name: a letter not followed by a digit. Anything
-//   else (not a letter, letter+digit) is ILLEGAL VARIABLE. The letter is
-//   recorded in _fe_mat_names (it fixes no dimensionality).
-//   in:  none
-//   out: w0 = letter 0..25 (one byte consumed)
+// Lfe_mat_name -- a MAT name: a letter not followed by a digit, or (a
+//   string list) a letter followed by '$'. Not a letter, or letter+digit
+//   (also A1$) -> ILLEGAL VARIABLE; a string list where none is allowed
+//   (assignments) -> MISMATCHED STRING OPERATION. A numeric letter is
+//   recorded in _fe_mat_names (it fixes no dimensionality); a string list
+//   is marked used.
+//   in:  w0 = 1 if a string list is allowed, else 0
+//   out: w0 = letter 0..25 (letter and '$' consumed), w1 = 1 for a string
+//        list, else 0
 //   clobbers: x0-x17
-//   callee-saved: w19 = letter
+//   callee-saved: w19 = letter, w20 = string allowed
 //   frame: 32 bytes
 // ---------------------------------------------------------------------
     .p2align 2
 Lfe_mat_name:
     stp x29, x30, [sp, #-32]!
     mov x29, sp
-    str x19, [sp, #16]
+    stp x19, x20, [sp, #16]
+    mov w20, w0
     mov w0, #0
     bl _fe_peek
     sub w19, w0, #'A'
@@ -469,6 +570,8 @@ Lfe_mat_name:
     sub w9, w0, #'0'
     cmp w9, #9
     b.ls Lfe_mat_name_bad               // letter + digit
+    cmp w0, #'$'
+    b.eq Lfe_mat_name_string
     mov w0, #1
     bl _fe_advance
     // _fe_mat_names |= 1 << letter
@@ -479,7 +582,22 @@ Lfe_mat_name:
     orr w10, w10, w11
     str w10, [x9, _fe_mat_names@PAGEOFF]
     mov w0, w19
-    ldr x19, [sp, #16]
+    mov w1, #0
+    b Lfe_mat_name_ret
+Lfe_mat_name_string:
+    // X$: only MAT READ, MAT PRINT and MAT INPUT handle string lists
+    cbnz w20, 1f
+    mov w0, #ERR_MISMATCHED_STRING
+    bl _fe_err
+1:
+    mov w0, #2
+    bl _fe_advance
+    mov w0, w19
+    bl _fe_sarray_use
+    mov w0, w19
+    mov w1, #1
+Lfe_mat_name_ret:
+    ldp x19, x20, [sp, #16]
     ldp x29, x30, [sp], #32
     ret
 Lfe_mat_name_bad:
@@ -635,6 +753,8 @@ Lfe_mat_s_read:
     .ascii "READ"
 Lfe_mat_s_print:
     .ascii "PRINT"
+Lfe_mat_s_input:
+    .ascii "INPUT"
 Lfe_mat_s_zer:
     .ascii "ZER"
 Lfe_mat_s_con:
