@@ -668,7 +668,7 @@ All AAPCS64. "Error" means `_bsk_err(code)` is called and the function does not 
 | `_bsk_abs _bsk_sqr _bsk_int` | d0 | d0 | `fabs`, `sqrt(fabs)`, `trunc` (`frintz`) |
 | `_bsk_log` | d0 | d0 | 0 → error 37; else `log(fabs(x))` |
 | `_bsk_rnd` | — | d0 | LANGUAGE.md §6 generator |
-| `_bsk_aref1` | x0 desc, d0 i | x0 addr | `r = floor(i + 0.5)`; `0 <= r <= B1` else error 32; address of element r |
+| `_bsk_aref1` | x0 desc, d0 i | x0 addr | `r = ⌊i + ½⌋` evaluated exactly (floor, then +1 if the fractional part >= 0.5; LANGUAGE.md §7.11); `0 <= r <= B1` else error 32; address of element r |
 | `_bsk_aref2` | x0 desc, d0 i, d1 j | x0 addr | both subscripts checked; address of (ri, rj) |
 | `_bsk_gosub_push` | x0 code address | — | depth 1024 → error 39 |
 | `_bsk_gosub_pop` | — | x0 code address | empty → error 33 |
@@ -910,18 +910,23 @@ sh tests/cross.sh [-v] [-H HOST] [PATTERN...]
 ```
 
 * Host: `-H HOST`, else `$BAYSICK_CROSS_HOST`, else `desktop` (an `ssh` destination with key
-  authentication; `ssh -o BatchMode=yes` is used, so a password prompt is an error).
+  authentication; `ssh -o BatchMode=yes -- HOST` is used, so a password prompt is an error and a host starting with `-` cannot be read as an option).
 * Steps: `cross_pack.sh` into a local `mktemp -d` directory (removed on exit); stream it as
   `tar -C <bundle> -cf - .` into **one** `ssh` call whose remote command is
   `sh -c '<script>' sh [-v]`, where `<script>` contains no single quote (so it works under any
   login shell) and does: `d=$(mktemp -d "${TMPDIR:-/tmp}/baysick-cross.XXXXXX")`,
-  `trap 'rm -rf "$d"' EXIT HUP INT TERM` (written with double quotes inside the script),
+  `trap "rm -rf \"\$d\"" EXIT` plus `trap "rm -rf \"\$d\"; exit 2" HUP INT TERM PIPE` (double quotes inside the script; the signal trap removes the directory itself because dash/busybox `sh` do not run the EXIT trap on a fatal signal, e.g. when the ssh connection drops),
   `tar -C "$d" -xf -`, `BAYSICK_TEST_TIMEOUT=<value> sh "$d/tests/cross_run.sh" [-v] "$d"`, and
   exits with its status. Nothing is left on the remote machine.
 * Environment: `BAYSICK` (passed to `cross_pack.sh`), `BAYSICK_TEST_TIMEOUT` (forwarded),
   `BAYSICK_CROSS_HOST`.
-* Exit: the status of `cross_run.sh` (0/1/2); 2 if packing fails or `ssh` itself fails
-  (status 255).
+* Exit: the status of `cross_run.sh` (0/1/2); 2 if packing fails, `ssh` itself fails
+  (status 255) or the remote status is anything else (e.g. 127 no `sh`, 137 killed).
+* `make cross-pack` removes `build/x86_64-linux-bundle` first, so it can be run repeatedly
+  (`cross_pack.sh` itself still refuses a non-empty `-o` directory).
+* All three scripts (and `cross_pack.sh`/`run.sh` PATTERNs) treat signals HUP/INT/TERM/PIPE by
+  removing their temp directory and exiting 2; patterns are matched literally (globbing is off
+  while they are split).
 
 ### 8.4 CI (`.github/workflows/ci.yml`)
 

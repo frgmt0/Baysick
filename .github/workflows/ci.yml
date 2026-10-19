@@ -43,10 +43,53 @@ jobs:
         # so there is nothing left over to upload; build/ is the useful artifact.
         run: make test
 
+      - name: Pack x86_64-linux test bundle
+        # Compiles tests/programs and the run-phase tests/errors with
+        # --target x86_64-linux; the Linux job below assembles, links and runs them.
+        run: make cross-pack
+
+      - name: Upload x86_64-linux test bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-linux-bundle
+          path: build/x86_64-linux-bundle/
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload build directory on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-macos-arm64
           path: build/
+          if-no-files-found: ignore
+
+  x86_64-linux:
+    # No checkout: the bundle is self-contained, so Linux tests exactly what
+    # the Mac job packed (docs/DESIGN.md section 8.4).
+    needs: macos-arm64
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download x86_64-linux test bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: x86_64-linux-bundle
+          path: bundle
+
+      - name: Toolchain info
+        run: |
+          uname -m
+          as --version | head -1
+          gcc --version | head -1
+
+      - name: Cross tests
+        run: sh bundle/tests/cross_run.sh bundle
+
+      - name: Upload runtime build directory on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-x86_64-linux
+          path: bundle/build-x86_64-linux/
           if-no-files-found: ignore

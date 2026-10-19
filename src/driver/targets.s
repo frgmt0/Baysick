@@ -12,4 +12,5 @@
     .p2align 3
 _drv_targets:
     .quad _bk_arm64_macos_desc          // src/backend/arm64_macos/a64_desc.s
+    .quad _bk_x86_64_linux_desc         // src/backend/x86_64_linux/x64_desc.s
     .quad 0                             // end of table

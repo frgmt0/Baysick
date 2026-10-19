@@ -28,7 +28,9 @@ Two targets:
 * **`x86_64-linux`** — cross target: the compiler, still running on the Mac, emits GNU `as`
   x86_64 assembly; it is assembled and linked on an x86_64 Linux machine against an x86_64
   runtime (also hand-written assembly). Specified in `docs/DESIGN.md` §5.4, §6.4 and §8; the
-  backend and runtime are being implemented (module split: `docs/DESIGN.md` §2).
+  backend (`src/backend/x86_64_linux/`) and runtime (`src/runtime_x86_64_linux/`) are
+  implemented and cross-tested with `make cross` against all program and run-phase error tests
+  (module split: `docs/DESIGN.md` §2).
 
 ## Documents
 

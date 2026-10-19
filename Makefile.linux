@@ -1,0 +1,55 @@
+# Baysick -- x86_64-linux runtime build (GNU make, GNU as, ar).
+#
+#   make -f Makefile.linux                  build build-x86_64-linux/libbaysickrt.a
+#   make -f Makefile.linux check-includes   assemble tests/include_check_x86_64.s
+#   make -f Makefile.linux clean            remove build-x86_64-linux/
+#
+# Run on x86_64 Linux. No compiler is needed to build the runtime; gcc is only
+# used (by tests/cross_run.sh) to link test programs. See docs/DESIGN.md
+# section 8.2. AS and AR can be overridden from the environment or the command line.
+
+UNAME_SM := $(shell uname -sm)
+ifneq ($(UNAME_SM),Linux x86_64)
+$(error Makefile.linux: build the x86_64 runtime on x86_64 Linux (uname -sm is '$(UNAME_SM)'))
+endif
+
+AS ?= as
+AR ?= ar
+BUILD := build-x86_64-linux
+
+ASFLAGS := --64 --fatal-warnings -I include
+
+RUNTIME_SRCS := $(wildcard src/runtime_x86_64_linux/*.s)
+RUNTIME_OBJS := $(patsubst src/runtime_x86_64_linux/%.s,$(BUILD)/obj/%.o,$(RUNTIME_SRCS))
+INCLUDES     := $(wildcard include/*.inc)
+
+.PHONY: all clean check-includes check-sources
+.DEFAULT_GOAL := all
+
+all: $(BUILD)/libbaysickrt.a
+
+# Fail with a clear message (instead of a confusing ar error) while the
+# runtime has not been written yet.
+check-sources:
+	@if [ -z "$(RUNTIME_SRCS)" ]; then \
+	  echo "make: no assembly sources in: src/runtime_x86_64_linux" >&2; \
+	  exit 1; \
+	fi
+
+$(BUILD)/libbaysickrt.a: $(RUNTIME_OBJS) | check-sources
+	rm -f $@
+	$(AR) rcs $@ $(RUNTIME_OBJS)
+
+$(BUILD)/obj/%.o: src/runtime_x86_64_linux/%.s $(INCLUDES)
+	@mkdir -p $(dir $@)
+	$(AS) $(ASFLAGS) -o $@ $<
+
+# The include files are shared with the arm64 build (Apple as); here GNU as
+# treats `//` as a comment only at the start of a line (DESIGN.md section 3.4).
+check-includes: $(INCLUDES) tests/include_check_x86_64.s tests/include_asserts.inc
+	@mkdir -p $(BUILD)
+	$(AS) $(ASFLAGS) -I tests -o $(BUILD)/include_check.o tests/include_check_x86_64.s
+	@echo "include files assemble and layout assertions hold"
+
+clean:
+	rm -rf $(BUILD)

@@ -53,9 +53,11 @@ FAILED=""
 
 selected() {
     [ -z "$PATTERNS" ] && return 0
+    set -f  # patterns are literal, never globs
     for p in $PATTERNS; do
-        case "$1" in *"$p"*) return 0 ;; esac
+        case "$1" in *"$p"*) set +f; return 0 ;; esac
     done
+    set +f
     return 1
 }
 

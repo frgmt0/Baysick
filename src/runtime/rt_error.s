@@ -22,9 +22,10 @@
 //             Exit status EXIT_RUN_OK (0) for ERR_OUT_OF_DATA, else
 //             EXIT_RUN_ERROR (1); also 1 for OUT OF DATA if writing
 //             stdout failed (LANGUAGE.md section 10).
-//   Inputs  : w0 = ERR_* code; must be a run-time code (32..39). A code
-//             outside the table or without a message (a caller bug) is
-//             not printed; the process still exits with status 1.
+//   Inputs  : w0 = ERR_* code; must be a run-time code
+//             (ERR_FIRST_RUNTIME..ERR_TABLE_SIZE-1). Any other code (a
+//             caller bug) prints nothing and exits with status 1
+//             (DESIGN.md 6.2).
 //   Outputs : never returns
 //   Clobbers: everything
 //   Callee-saved used: x19 = error code, x20 = write cursor in the
@@ -46,7 +47,10 @@ _bsk_err:
     bl _bsk_rt_finish_output
     mov w22, w0                     // 1 if stdout broke
 
-    // Look up the message; an invalid code prints nothing.
+    // Look up the message; a code that is not a run-time error prints
+    // nothing.
+    cmp w19, #ERR_FIRST_RUNTIME
+    b.lo Lrt_err_exit
     cmp w19, #ERR_TABLE_SIZE
     b.hs Lrt_err_exit
     adrp x9, Lrt_errmsg@PAGE

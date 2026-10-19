@@ -5,6 +5,8 @@
 #   make                  build build/baysick and build/libbaysickrt.a
 #   make test             build, then run tests/run.sh
 #   make check-includes   assemble the contract include files (layout assertions)
+#   make cross-pack       pack the x86_64-linux test bundle into build/x86_64-linux-bundle
+#   make cross            pack and run the bundle on a Linux host (tests/cross.sh)
 #   make clean            remove build/
 #
 # The compiler finds its runtime at run time as <dir of baysick>/libbaysickrt.a,
@@ -20,14 +22,14 @@ ASFLAGS := -arch arm64 -mmacosx-version-min=11.0 -I include
 SDK      = $(if $(SDKROOT),$(SDKROOT),$(shell xcrun --show-sdk-path))
 LDFLAGS  = -lSystem -syslibroot $(SDK) -e _main -arch arm64 -platform_version macos 11.0 11.0
 
-COMPILER_DIRS := src/frontend src/ir src/driver src/backend/arm64_macos
+COMPILER_DIRS := src/frontend src/ir src/driver src/backend/arm64_macos src/backend/x86_64_linux
 COMPILER_SRCS := $(wildcard src/frontend/*.s src/ir/*.s src/driver/*.s src/backend/*/*.s)
 RUNTIME_SRCS  := $(wildcard src/runtime/*.s)
 COMPILER_OBJS := $(patsubst src/%.s,$(BUILD)/obj/%.o,$(COMPILER_SRCS))
 RUNTIME_OBJS  := $(patsubst src/%.s,$(BUILD)/obj/%.o,$(RUNTIME_SRCS))
 INCLUDES      := $(wildcard include/*.inc)
 
-.PHONY: all test clean check-includes check-sources
+.PHONY: all test clean check-includes check-sources cross-pack cross
 .DEFAULT_GOAL := all
 
 all: $(BUILD)/baysick $(BUILD)/libbaysickrt.a
@@ -70,6 +72,15 @@ check-includes: $(INCLUDES) tests/include_check.s tests/include_asserts.inc
 
 test: check-includes all
 	sh tests/run.sh
+
+# x86_64-linux cross testing (docs/DESIGN.md section 8.3): pack the compiled
+# test cases into a bundle, or pack + run them on a Linux host over ssh.
+cross-pack: all
+	rm -rf $(BUILD)/x86_64-linux-bundle
+	sh tests/cross_pack.sh -o $(BUILD)/x86_64-linux-bundle
+
+cross: all
+	sh tests/cross.sh
 
 clean:
 	rm -rf $(BUILD)
