@@ -23,8 +23,19 @@
 // TK_BUILTIN for SEG$ and POS (BI_SEG, BI_POS); statements CALL, SUBEND,
 // SUB (KW_CALL..KW_SUB; SUBEND is tested before SUB).
 // =====================================================================
+// Baysick extensions: statement LINPUT (KW_LINPUT; `#` after LINPUT is read
+// by its statement parser, as after INPUT). END and STOP accept an optional
+// expression (the exit status) and PRINT # accepts the designator -1
+// (standard error), so neither needs a token or keyword of its own.
+// =====================================================================
 .ifndef BSK_TOKENS_INC
 .equ BSK_TOKENS_INC, 1
+
+// Contract staging switch of the Baysick extensions (DESIGN.md 2.2, 2.6):
+// selects KW_COUNT below. Defined identically in ir.inc.
+.ifndef BSK_EXT_CONTRACT
+.equ BSK_EXT_CONTRACT, 0
+.endif
 
 // ---- Scanner modes ----------------------------------------------------
 .equ SCAN_OPERAND,      0
@@ -134,7 +145,13 @@
 .equ KW_SUBEND,         25  /* Sixth Edition (7.27); tested before SUB, which is a prefix of it */
 .equ KW_SUB,            26  /* Sixth Edition (7.27) */
 
+.equ KW_LINPUT,         27  /* Baysick extension (LANGUAGE.md 15.2); no other keyword is a prefix of it or has it as a prefix */
+
+.if BSK_EXT_CONTRACT
+.equ KW_COUNT,          28
+.else
 .equ KW_COUNT,          27
+.endif
 
 // ---- MAT sub-keywords (after "MAT", in this order) and MAT function ids --
 // "MAT" is followed by READ, PRINT, INPUT (Fourth Edition), or an

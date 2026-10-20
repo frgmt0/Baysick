@@ -1,0 +1,3 @@
+10 LINPUT A$
+20 END A$
+30 PRINT A$

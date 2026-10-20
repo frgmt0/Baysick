@@ -1,0 +1,54 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=1 strings=1 data=0
+sarray L dims=1 b1=10
+sarray T dims=2 b1=2 b2=2
+string s0 "DONE"
+stemps 1
+file #1 "IN.TXT"
+func main temps=16 labels=11
+  line 10
+  line 20
+  line 30
+  t0 = svar A$
+  linput t0
+  line 40
+  t1 = const 0x4000000000000000 ; 2
+  linput L$, t1
+  line 50
+  t2 = const 0x3FF0000000000000 ; 1
+  jeof t2, @90
+  line 60
+  t3 = const 0x3FF0000000000000 ; 1
+  t4 = const 0x3FF0000000000000 ; 1
+  t5 = const 0x4000000000000000 ; 2
+  t6 = scell %s0
+  fsel t3
+  linput t6
+  t7 = sald2 T$, t4, t5
+  sset t7, t6
+  line 70
+  t8 = const 0x3FF0000000000000 ; 1
+  t9 = svar B$
+  fsel t8
+  linput t9
+  line 80
+  jmp @50
+  line 90
+  t10 = const 0x3FF0000000000000 ; 1
+  t11 = neg t10
+  fsel t11
+  prstr s0
+  t12 = svar B$
+  t13 = len t12
+  fsel t11
+  prnum t13
+  fsel t11
+  prnl
+  line 100
+  t14 = const 0x4004000000000000 ; 2.5
+  exit t14
+  line 110
+  t15 = const 0x3FF0000000000000 ; 1
+  exit t15
+  end
+endfunc

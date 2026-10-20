@@ -70,6 +70,12 @@ recursion. Specified in `docs/LANGUAGE.md` ("The Sixth Edition", §4.6, §6.2, �
 §3.4 and `docs/DESIGN.md` (§2.2, §2.5, §5.3–§5.4, §6.9). Its tests are `tests/programs/ed6_*`,
 `manual6_*`, `tests/errors/c_ed6_*`, `r_ed6_*` and `tests/ir/ed6_*`.
 
+Baysick extensions (no edition has them): specified, being implemented — `LINPUT [#k,] A$` reads
+a line verbatim (end of input tested with `IF END #`), `PRINT #-1` writes standard error, and
+`END e` / `STOP e` end the program with exit status e. Specified in `docs/LANGUAGE.md` §15,
+`docs/IR.md` §3.5 and `docs/DESIGN.md` (§2.2, §2.6, §6.10, §8.6). Its tests are
+`tests/programs/ext_*`, `tests/errors/c_ext_*`, `r_ext_*` and `tests/ir/ext_*`.
+
 ## Documents
 
 * `docs/LANGUAGE.md` — normative language spec (statements, MAT, number format, errors,

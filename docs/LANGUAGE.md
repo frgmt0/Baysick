@@ -18,7 +18,10 @@ of the **Fifth Edition** (1970: sequential files with `FILES`, `PRINT #`, `INPUT
 arguments and string values; two-dimensional string arrays), and by a scoped part of the **Sixth
 Edition** (1971: the string functions `SEG$` and `POS`, the concatenation operator `&`, and
 `CALL`/`SUB`/`SUBEND` subprograms with parameters by reference and no shared variables;
-"The Sixth Edition" below; **implemented**, DESIGN.md §2.5). Sections marked
+"The Sixth Edition" below; **implemented**, DESIGN.md §2.5). Beyond the editions, Baysick specifies
+three **Baysick extensions** that belong to no edition — a verbatim line input `LINPUT`, output
+to standard error with `PRINT #-1`, and a chosen exit status with `END e` / `STOP e` (§15; "The
+Baysick extensions" below; specified, being implemented, DESIGN.md §2.6). Sections marked
 **Baysick decision:** are places where the historical behaviour is unknown, impractical on a
 modern machine, or deliberately extended; each states the choice and why. §14 lists every place
 where a later edition *changed* the meaning of a program an earlier edition already accepted,
@@ -130,6 +133,16 @@ it is stated. The Sixth Edition features Baysick does **not** implement, each a 
 | `CALL A$` (a computed subprogram name) | not implemented: [B85] p. 35 says only that quoted names "paved the way" for it; names are constants |
 | removal of `FILES`, the old overlay subprograms, `CHANGE … BIT`, the Fifth Edition items left out above | unchanged: Baysick keeps every earlier statement (one language level), and the items left out of the Fifth Edition stay out |
 | the on-line debugger, `MARGIN`, random-access file typing, other "minor changes" [K81 p. 530] | not implemented: not part of the language a program's output depends on, or not documented |
+
+**The Baysick extensions.** Three features that no Dartmouth edition up to the Sixth provides, and
+that a compiler written in Baysick needs (`docs/SEA_BOOTSTRAP.md` §2 rows 2 and 17), are specified
+as Baysick's own additions in §15, kept apart from the editions: `LINPUT` reads the next line of
+standard input or of a file verbatim, with `IF END #` as its end test (§15.2); `PRINT #-1` writes
+to standard error with every PRINT rule and its own column state (§15.3); `END e` and `STOP e`
+end the program with the exit status e (§15.4). None of them has a historical source (only the
+name `LINPUT` is attested, by [W], unverified), so every rule of §15 is a Baysick decision. They
+are part of the one language level: always accepted, with no flag. Their run-time error code
+(62) follows the codes of every edition (§11).
 
 ## 0. Sources
 
@@ -297,15 +310,16 @@ line number (the *statement text*).
 
 ## 3. Statements and keyword recognition
 
-3.1. The statement text must begin with one of the twenty-seven keywords, tested **in this
+3.1. The statement text must begin with one of the twenty-eight keywords, tested **in this
 order** as a prefix of the statement text:
 
 `LET PRINT END READ DATA GOTO IF FOR NEXT GOSUB RETURN DEF DIM REM STOP MAT INPUT RESTORE ON
-RANDOMIZE CHANGE FNEND FILES SCRATCH CALL SUBEND SUB`
+RANDOMIZE CHANGE FNEND FILES SCRATCH CALL SUBEND SUB LINPUT`
 
 (`FILES` and `SCRATCH` are the Fifth Edition keywords, §7.21–§7.22; the other file statements
 start with `PRINT`, `INPUT`, `IF` and `RESTORE`. `CALL`, `SUBEND` and `SUB` are the Sixth Edition
-keywords, §7.27.)
+keywords, §7.27. `LINPUT` is the keyword of a Baysick extension, §15.2; no other keyword is a
+prefix of it — `LET` is not, `L` being followed by `E` — and it is a prefix of none.)
 
 The keyword `RANDOMIZE` also matches the shorter spelling `RANDOM` ([M68] p. 45: "RANDOMIZE (or
 more briefly RANDOM)"): the text is tested for `RANDOMIZE` first, then for `RANDOM`. Likewise
@@ -789,7 +803,7 @@ string expression (§5.2, §4.6) is a string item; anything else is an expressio
 §8. A `#` right after `PRINT` makes the statement a PRINT # (§7.24).
 
 ### 7.3 END
-`END` with nothing after it. Exactly one END, and it must be the **highest-numbered line**
+`END` with nothing after it (Baysick extension: or an expression, the exit status, §15.4). Exactly one END, and it must be the **highest-numbered line**
 ([M64] p. 7, 30) **of the main program** (Sixth Edition: lines of SUB blocks, §7.27, may follow
 it — they are not lines of the main program). An END followed by a line of the main program →
 `END IS NOT LAST IN n` (n = the END line; this also catches two ENDs). No END at all →
@@ -1143,7 +1157,8 @@ the same letter → `DUPLICATE DIMENSION IN n`; dimensionality conflict → `ILL
 `REM` followed by anything. No effect.
 
 ### 7.13 STOP
-`STOP` with nothing after it. Terminates the run exactly like END ([M64] p. 45).
+`STOP` with nothing after it (Baysick extension: or an expression, the exit status, §15.4).
+Terminates the run exactly like END ([M64] p. 45).
 
 ### 7.14 MAT (matrix statements)
 
@@ -1545,7 +1560,8 @@ are evaluated (as in READ), then the next field is taken:
 After the last target, if fields remain on the current line, `TOO MUCH INPUT -- EXCESS IGNORED`
 is written to stderr. The three messages are [M68] p. 74's texts; they are diagnostics, not
 errors: the program continues and its exit status is unaffected. Each is one line on stderr
-(stdout is flushed first), without `IN n`. Every line ends with LF, so two INPUT statements never
+(stdout is flushed first; Baysick extension: a pending standard-error line of `PRINT #-1` is
+ended first, §15.3), without `IN n`. Every line ends with LF, so two INPUT statements never
 share a line.
 
 Errors: no target → `ILLEGAL VARIABLE`; other syntax as READ.
@@ -1671,8 +1687,8 @@ the Dartmouth look (`FILES INPUT; RESULT`).
 expression, the **designator** ([G70] p. 60: "an integer, variable, subscripted variable, or an
 arithmetic expression"). Its value x is evaluated when the statement executes and truncated
 toward zero, k = trunc(x) ([G70] p. 60: "the value is truncated to an integer"); 0 ≤ k ≤ N (N =
-the number of FILES names) is required, else run-time error `INVALID FILE NUMBER IN n` (exit 1;
-[G70] p. 88). A string expression as designator → `MISMATCHED STRING OPERATION` (compile time).
+the number of FILES names; Baysick extension: −1 ≤ k ≤ N for `PRINT #`, §15.3) is required, else
+run-time error `INVALID FILE NUMBER IN n` (exit 1; [G70] p. 88). A string expression as designator → `MISMATCHED STRING OPERATION` (compile time).
 
 **File 0 is the terminal** ([G70] p. 71: "The statement PRINT #0 … directs the system to print
 the results at your terminal"): `PRINT #0` writes standard output exactly like PRINT (same column
@@ -1730,15 +1746,12 @@ one CR immediately before the LF removed, a last line without LF a line if it is
 line longer than 65 536 bytes → `INPUT LINE TOO LONG` (exit 1). A read error (other than `EINTR`)
 is treated as the end of the file.
 
-**Extension path (not part of this edition).** Two later Baysick extensions are planned
-(`docs/SEA_BOOTSTRAP.md` §4 item 3): a verbatim line-input statement and a way to write to
-standard error and choose the exit status. This file model leaves room for both without changing
-any valid program: a verbatim line input reads the next line of file k (or standard input, k = 0)
-with the same per-file line reader and the same IF END condition, assigning it to a string
-target without splitting, quoting or blank removal — it needs only a new keyword, which is
-`ILLEGAL INSTRUCTION` today; standard error can be reached through a designator that is
-`INVALID FILE NUMBER` today (a negative one, e.g. `#-1`), or through a new statement, and the exit
-status through a new statement. No FILES name is reserved, so no host path loses its meaning.
+**Baysick extensions (§15).** This file model is extended, outside the Fifth Edition, by `LINPUT`
+(§15.2: the next line of file k or of standard input, k = 0, read by the same reader with the
+same `IF END` condition and assigned verbatim) and by the designator **−1**, standard error,
+which only `PRINT #` accepts (§15.3: every other file statement still reports `INVALID FILE
+NUMBER` for it). So the designator range is −1 … N for `PRINT #` and 0 … N for every other file
+statement. No FILES name is reserved, so no host path loses its meaning.
 
 ### 7.22 SCRATCH
 
@@ -1780,7 +1793,8 @@ PRINT "#" expression [ "," item-list ]
 ([G70] p. 71: "PRINT #file designator, output list"; [K81] p. 529: sequential files are written
 with PRINT.) The item list is exactly that of PRINT (§7.2), with the same constraints and errors;
 `PRINT #k` alone (or `PRINT #k,` with nothing after the comma) writes an empty line. For k = 0
-the statement is PRINT. For k ≥ 1 the file must be in write mode (§7.21, else `ILLEGAL FILE
+the statement is PRINT. (Baysick extension: for k = −1 it writes standard error with its own
+column state, §15.3.) For k ≥ 1 the file must be in write mode (§7.21, else `ILLEGAL FILE
 COMMAND`) and the output follows **all of §8 with the file's own state**: each file has its own
 `col` and `out` counters and lazy spaces, its own zones (`,`), `;` and TAB columns and its own
 75-column rules (a number starts a new line of that file if fewer than 12 columns remain; a `,`
@@ -1859,7 +1873,8 @@ program jumps to the line if file k is **at its end**:
 * k = 0: standard input is at its end when no byte remains unread; to know, the runtime reads
   standard input (waiting for a terminal user to type a line or end-of-file); on a terminal
   stdout is flushed first. IF END #0 does not reset the output column: only a line read by INPUT
-  (§7.15) or INPUT #0 (§7.25) sets `col = out = 0`.
+  (§7.15) or INPUT #0 (§7.25) — and, Baysick extension, by LINPUT or LINPUT #0 on a terminal
+  (§15.2) — sets `col = out = 0`.
 
 **Baysick decision:** IF END tests *before* reading (is there another line?), so the loop
 `10 IF END #1 THEN 90` / `20 INPUT #1, A$` / `30 … GOTO 10` reads every line and never fails.
@@ -1867,7 +1882,8 @@ program jumps to the line if file k is **at its end**:
 READ past the end assign zeros; a pre-test needs no such substitute values. An empty line still
 counts as a line: if the last line of a file is empty, IF END is false before it and the INPUT #
 that skips it (it has no field) then finds no further line → `END OF FILE`. Reading lines
-verbatim, empty ones included, is the planned extension of §7.21.
+verbatim, empty ones included, is the Baysick extension `LINPUT` (§15.2), for which this test is
+exactly "is there another line".
 
 Syntax errors: the designator is an ordinary expression (§5.1–§5.3), so its errors are the
 expression errors, and after it `THEN` or `GOTO` must follow, else `INCORRECT FORMAT`
@@ -2171,10 +2187,15 @@ teletype shows none either).
 * MAT PRINT (§7.14.5) prints through these same rules.
 * **At program termination** (END, STOP, OUT OF DATA, END OF INPUT, or any run-time error): if
   `col ≠ 0`, a newline is written to stdout; then stdout is flushed. Before that, every file in
-  write mode gets the same treatment with its own state (§10).
+  write mode gets the same treatment with its own state (§10). After it, standard
+  error's pending line is ended (Baysick extension, §15.5).
 * **Files (Fifth Edition).** `PRINT #k` (k ≥ 1, §7.24) applies every rule of this section to file
   k with file k's own `col` and `out`, which start at 0 when SCRATCH #k puts the file in write
   mode. Standard output's state is used by PRINT, `PRINT #0`, MAT PRINT and the INPUT prompt.
+* **Standard error (Baysick extension, §15.3).** `PRINT #-1` applies every rule of this section
+  to standard error with its own `col` and `out` (0 at the start of the run), independent of
+  standard output and of every file; standard error is unbuffered and standard output is written
+  before each of its writes; a BASIC message on standard error first ends its pending line.
 * INPUT on a terminal writes its prompt through this state and resets it after the line is read
   (§7.15). Run-time error text goes to stderr after
   this flush.
@@ -2233,12 +2254,14 @@ Examples (field shown between brackets; `·` = space):
 
 | Event | stdout | stderr | exit status |
 |-------|--------|--------|-------------|
-| END or STOP executed | pending-line newline (§8), flush | — | 0 |
+| END or STOP executed | pending-line newline (§8), flush | pending standard-error newline (§15.5) | 0 |
 | READ with no data left | pending-line newline, flush | `OUT OF DATA IN n` + LF | **0** |
-| INPUT or MAT INPUT needs a line, stdin at its end | pending-line newline, flush | `END OF INPUT IN n` + LF | **0** |
+| INPUT, MAT INPUT or (Baysick extension) LINPUT without `#` needs a line, stdin at its end | pending-line newline, flush | `END OF INPUT IN n` + LF | **0** |
 | any other run-time error | pending-line newline, flush | `<MESSAGE> IN n` + LF | 1 |
 | INPUT diagnostic (§7.15), program continues | flush | `<MESSAGE>` + LF | — |
 | END or STOP, and writing a file's last output fails (Fifth Edition) | pending-line newline, flush | `CAN'T WRITE FILE IN n` + LF | 1 |
+| END e or STOP e executed (Baysick extension, §15.4), k = trunc(e) in 0 … 255 | pending-line newline, flush | pending standard-error newline (§15.5) | **k** (1 after a failed write) |
+| END e or STOP e, k outside 0 … 255 (Baysick extension) | pending-line newline, flush | `EXIT STATUS OUT OF RANGE IN n` + LF | 1 |
 
 `n` is the line number of the statement being executed (for errors inside a single-line FN
 expression, the calling statement; inside a multi-line DEF body, the body line, §7.10; inside a
@@ -2262,20 +2285,23 @@ DATA` and `END OF INPUT`), because output was lost. **Baysick decision**, the sa
 for a broken stdout below.
 
 **Streams.** Programs read standard input only through INPUT, MAT INPUT and, in the Fifth
-Edition, INPUT #0 and IF END #0 (§7.15, §7.21), lazily: a program that executes none of them never
+Edition, INPUT #0 and IF END #0 (§7.15, §7.21), and the Baysick extension LINPUT (§15.2), lazily: a program that executes none of them never
 reads it, so its behaviour does not depend on stdin. Input is
 read with `read(0, …)` into a runtime buffer; bytes after the last line consumed are never
 interpreted. Standard output is written only by PRINT, PRINT #0, MAT PRINT, the INPUT prompt
 (terminal only) and the termination newline; files only by PRINT #, the pending newline that RESTORE # writes
-(§7.23) and their termination newline (§7.21–§7.24); standard error only by BASIC error messages and the three
-INPUT diagnostics. A read error on stdin (other than `EINTR`) is treated as end of input.
+(§7.23) and their termination newline (§7.21–§7.24); standard error only by BASIC error messages, the three
+INPUT diagnostics and, as a Baysick extension, `PRINT #-1` and its termination newline (§15.3,
+§15.5; every row of the table above also ends a pending standard-error line before its message). A read error on stdin (other than `EINTR`) is treated as end of input.
 
 **Baysick decision:** if writing stdout fails (any `write` error other than `EINTR`, or a write
 that transfers 0 bytes), the runtime silently discards all further stdout output and the
-program's exit status becomes **1** even after END, STOP or OUT OF DATA (a run-time error
+program's exit status becomes **1** even after END, STOP, `END e` or `STOP e` with any status k
+(§15.4) or OUT OF DATA (a run-time error
 still exits 1 and its stderr message is still written); nothing extra is printed. Rationale:
 output was lost, so success must not be reported, and stderr stays reserved for BASIC errors.
-(A closed pipe normally raises `SIGPIPE`, which ends the process before this applies.)
+(A closed pipe normally raises `SIGPIPE`, which ends the process before this applies; the runtime
+never changes the `SIGPIPE` action it inherits, and the same holds for standard error, §15.3.)
 
 ### 10.1 Compiler diagnostics
 
@@ -2293,7 +2319,9 @@ The compiler stops at the **first** error, determined in this order:
    the SUB, SUBEND and CALL syntax errors, `DUPLICATE SUBPROGRAM`, `NESTED SUB`,
    `UNFINISHED SUB` at an END or at a SUBEND with an open FOR, `UNFINISHED DEF` at a SUBEND,
    `ILLEGAL INSTRUCTION` for a SUBEND outside a SUB block, `ILLEGAL VARIABLE` for a DIM of a
-   parameter array).
+   parameter array; Baysick extensions, §15: the LINPUT syntax errors, the errors of the
+   expression after END or STOP — after the END checks of §7.3, which are decided first, at
+   the keyword).
 3. **Whole program**, in this order: `UNFINISHED DEF` (a DEF still open after the last line;
    reported at the DEF line); `UNFINISHED SUB` (Sixth Edition: a SUB block still open after the
    last line; reported at the SUB line); `FOR WITHOUT NEXT`; `NO END INSTRUCTION`; `NO DATA`;
@@ -2366,7 +2394,8 @@ Compile-time ("IN n" column says whether a line number is printed). Codes 1–31
 | 60 | `UNFINISHED SUB` | yes | SUB block without SUBEND (n = SUB line, also at an END); FOR open at SUBEND (n = SUBEND line) (§7.27) (Baysick) |
 | 61 | `ARGUMENT MISMATCH` | yes | CALL with a whole array for a variable parameter or a variable or expression for an array parameter (§7.27) (Baysick) |
 
-Run-time:
+Run-time: codes 32–56 and, for the Baysick extensions (§15), 62 (after every edition's codes, so
+that no code moves):
 
 | Code | Message | Exit | Raised when |
 |-----:|---------|:----:|-------------|
@@ -2381,20 +2410,21 @@ Run-time:
 | 40 | `DIMENSION ERROR` | 1 | MAT: operands do not conform, a dimension argument below 1, a result or new shape that does not fit the target's storage, a list given more than one column, a matrix with a zero dimension, IDN of a non-square matrix (§7.14; text from [M68] p. 73); Sixth Edition: a list passed for a table parameter or a table for a list parameter (§7.27) |
 | 41 | `SINGULAR MATRIX` | 1 | MAT INV: a pivot not larger than the tolerance (§7.14.6) (Baysick) |
 | 42 | `ON EVALUATED OUT OF RANGE` | 1 | ON: integer part below 1 or above the number of line numbers ([M68] p. 74) |
-| 43 | `END OF INPUT` | 0 | INPUT/MAT INPUT needs a line, stdin is at its end (§7.15) (Baysick) |
+| 43 | `END OF INPUT` | 0 | INPUT/MAT INPUT needs a line, stdin is at its end (§7.15); Baysick extension: also LINPUT without `#` (§15.2) (Baysick) |
 | 44 | `STRING TOO LONG` | 1 | CHANGE list to string with more than 65 536 characters; Sixth Edition: a concatenation `&` longer than 65 536 bytes (§4.6) (Baysick) |
 | 45 | `ILLEGAL CHARACTER` | 1 | CHANGE list to string: a code outside 0–255 (text from [M68] p. 71) |
 | 46 | `INPUT LINE TOO LONG` | 1 | an input line longer than 65 536 bytes (Baysick) |
 | 47 | `OUT OF ROOM` | 1 | string storage could not be allocated ([M68] p. 74); Sixth Edition: also the storage of a subprogram activation (§7.27) |
 | 48 | `CAN'T OPEN FILE` | 1 | a file cannot be opened for reading (INPUT #, IF END #) or writing (SCRATCH #) (§7.21) ([G70] p. 87) |
-| 49 | `INVALID FILE NUMBER` | 1 | a file designator whose integer part is below 0 or above the number of FILES names (text and meaning: [G70] p. 88); Baysick decision: also `SCRATCH #0`, `RESTORE #0` (§7.21) |
-| 50 | `ILLEGAL FILE COMMAND` | 1 | PRINT # to a file in read mode, INPUT # from a file in write mode (§7.21) ([G70] p. 88) |
-| 51 | `END OF FILE` | 1 | INPUT # needs a line and the file (or standard input, #0) has none left (§7.25) (Baysick) |
+| 49 | `INVALID FILE NUMBER` | 1 | a file designator whose integer part is below 0 (Baysick extension: below −1 for PRINT #, §15.3) or above the number of FILES names (text and meaning: [G70] p. 88); Baysick decision: also `SCRATCH #0`, `RESTORE #0` (§7.21) |
+| 50 | `ILLEGAL FILE COMMAND` | 1 | PRINT # to a file in read mode, INPUT # from a file in write mode (Baysick extension: also LINPUT #) (§7.21) ([G70] p. 88) |
+| 51 | `END OF FILE` | 1 | INPUT # needs a line and the file (or standard input, #0) has none left (§7.25); Baysick extension: also LINPUT # (§15.2) (Baysick) |
 | 52 | `INCORRECT FORMAT IN FILE` | 1 | an INPUT # field is not valid for its target (§7.25) ([G70] p. 88) |
 | 53 | `CAN'T WRITE FILE` | 1 | writing a file failed (§7.21, §10) ([G70] p. 87) |
 | 54 | `ILLEGAL 'VAL' ARGUMENT` | 1 | VAL of a string that is not a number (§6.1) ([G70] p. 88) |
 | 55 | `ASC OF EMPTY STRING` | 1 | ASC of the empty string (§6.1) (Baysick) |
 | 56 | `TOO MANY CALLS` | 1 | CALL would start the 1025th active activation, or the active activations' costs would exceed the call budget of 2 097 152 words (§7.27) (Baysick) |
+| 62 | `EXIT STATUS OUT OF RANGE` | 1 | `END e` or `STOP e` with trunc(e) outside 0–255 (§15.4) (Baysick extension) |
 
 INPUT diagnostics (stderr, no `IN n`, program continues; [M68] p. 74; §7.15):
 `INPUT DATA NOT IN CORRECT FORMAT -- RETYPE IT`, `NOT ENOUGH INPUT -- ADD MORE`,
@@ -2438,11 +2468,14 @@ MAT syntax errors use the existing compile-time messages (§7.14.2); the [M68] m
 | pending GOSUBs | 1024 | TOO MANY GOSUBS |
 | FILES names (file numbers 1–8; file 0 is the terminal) | 8 (`LIM_FILES`) | TOO MANY FILES |
 | bytes of a FILES name | 255 (`LIM_FILE_NAME`; a 255-byte line holds at most 249) | — (LINE TOO LONG first) |
-| open files at once | the 8 FILES numbers plus standard input and output | — |
+| open files at once | the 8 FILES numbers plus standard input and output (and, Baysick extension, standard error, §15.3) | — |
 | SUB parameters / CALL arguments | 16 (`LIM_SUB_PARAMS`) | INCORRECT FORMAT |
 | active subprogram activations | 1024 (`LIM_CALL_DEPTH`); summed activation cost 2 097 152 words (`LIM_CALL_WORDS`, §7.27) | TOO MANY CALLS |
 | subprograms | no limit of their own (at most 5 000: each has a SUB and a SUBEND line) | PROGRAM TOO LONG |
 | SUB/CALL name | the bytes between the quotes, at least 1 (a 255-byte line holds at most 249) | — |
+| exit status of `END e` / `STOP e` (Baysick extension) | 0–255 after truncation (`LIM_EXIT_STATUS`) | EXIT STATUS OUT OF RANGE |
+| `PRINT #` designators (Baysick extension) | −1 (standard error) … N; every other file statement 0 … N | INVALID FILE NUMBER |
+| a LINPUT line (Baysick extension) | 65 536 bytes, as every input line | INPUT LINE TOO LONG |
 
 The 1964 limits ([M64] Appendix B: 300 data, 26 FORs, 1500 array elements, …) are relaxed
 because they reflected GE-225 core memory, not the language.
@@ -2558,6 +2591,24 @@ Sixth Edition (each where [K81] and [B85] give only the feature's existence and 
     line; `NESTED SUB`, `UNFINISHED SUB`, `DUPLICATE SUBPROGRAM`; jumps between units are
     `ILLEGAL TRANSFER`; no `SUBEXIT` (`GOTO` the SUBEND line).
 
+Baysick extensions (§15; no edition has them, so every item is Baysick's own):
+
+50. Scope: `LINPUT`, `PRINT #-1`, `END e` / `STOP e`; no command-line arguments or environment,
+    no run-time `FILE` statement, no chosen status for OUT OF DATA, END OF INPUT or run-time
+    errors (§15.1).
+51. `LINPUT [#k,] target`: exactly one string target; the next line of the shared reader
+    assigned verbatim (no field splitting, quotes, blank removal; CR LF and the 65 536-byte limit
+    as for INPUT); without `#` the INPUT rules (prompt on a terminal, `END OF INPUT`, exit 0),
+    with `#k` the INPUT # rules (`END OF FILE`, exit 1); `IF END #k` is its end test.
+52. Standard error is designator −1 of PRINT # only, with its own column state and every §8
+    rule; unbuffered, standard output written before each of its writes; a BASIC message ends a
+    pending standard-error line first; write failures ignored; every other file statement keeps
+    `INVALID FILE NUMBER` for −1.
+53. `END e` and `STOP e` exit with trunc(e), 0–255 (else `EXIT STATUS OUT OF RANGE`, exit 1),
+    after the normal termination steps; a failed write forces exit status 1 whatever e is.
+54. Termination order: files, standard output, standard error's pending newline, the message
+    (§15.5).
+
 ## 14. Edition differences
 
 ### 14.1 Texts that were errors and are now programs
@@ -2609,6 +2660,15 @@ compiled before (§14.2 has no Sixth Edition rows). Not a meaning change but wor
 the Sixth Edition a program may contain lines that are not in the main program, which is why §7.3
 now says "the last line of the main program".
 
+**Baysick extensions (§15).** Two of the three extensions give meaning to text that was a compile
+error: a statement starting with `LINPUT` (`ILLEGAL INSTRUCTION`) and `END` or `STOP` followed by
+an expression (`INCORRECT FORMAT`, leftover text after the keyword). The third changes the
+behaviour of a program that compiled: `PRINT #k` with trunc(k) = −1 stopped with
+`INVALID FILE NUMBER IN n` (exit 1) and now writes to standard error. This is deliberate: it
+changes only a program that ended in a run-time error, and only at that error (the program
+continues where it used to stop). No test pins these texts: `tests/errors/r_ed5_invalid_negative`
+uses `INPUT #-1`, which is still `INVALID FILE NUMBER` (§15.3), so no earlier test is rewritten.
+
 ### 14.2 Meanings changed by later editions (Baysick keeps the earlier one)
 
 | # | Program text | Second Edition (Baysick) | Third/Fourth Edition | Source |
@@ -2629,3 +2689,263 @@ behaviour because a later feature exists, and nothing in the Fourth Edition's ne
 the changed meanings (`docs/SEA_BOOTSTRAP.md`). A program that needs the floor of a negative
 number tests `IF X < INT(X)` and subtracts 1; a program wanting contiguous output prints strings
 (`CHANGE` builds a string from character codes).
+
+## 15. Baysick extensions
+
+**Status: normative, not historical.** The three features of this section belong to **no
+Dartmouth edition**: they are Baysick's own additions, made because a compiler written in
+Baysick — the Sea compiler, `docs/SEA_BOOTSTRAP.md` §2 rows 2 and 17 — needs them and nothing up
+to the Sixth Edition provides them. Every rule here is a **Baysick decision** (like `END OF INPUT`
+and `ILLEGAL TRANSFER` before them); no source is cited because none exists, except [W]'s
+unverified mention of a later Dartmouth `LINPUT` (`docs/SEA_BOOTSTRAP.md` §1), which gives the
+statement its name and nothing else. The extensions reuse the Fifth Edition file model (§7.21:
+designators `#k`, file 0 = the terminal, `IF END #`, the input line reader) and the PRINT rules
+of §8, so they add one keyword (`LINPUT`), two statement forms (`END` and `STOP` with an
+expression) and one designator value (`#-1`), and nothing else. Like every edition's additions
+they are always accepted (one language level, no flag): each gives meaning to a text that was a
+compile error, except `PRINT #-1`, which compiled and stopped with `INVALID FILE NUMBER` at run
+time (§14.1).
+
+### 15.1 Scope
+
+| Need (`docs/SEA_BOOTSTRAP.md` §2) | Extension | Section |
+|-----------------------------------|-----------|---------|
+| row 2: read a line verbatim; end of input testable | `LINPUT target`, `LINPUT #k, target` | §15.2 |
+| row 17: diagnostics on standard error | `PRINT #-1, items` | §15.3 |
+| row 17: a chosen exit status | `END expression`, `STOP expression` | §15.4 |
+
+Not included, each a Baysick decision:
+
+| Feature | Decision and reason |
+|---------|---------------------|
+| command-line arguments, environment variables (row 18) | not provided: Sea's driver passes everything on standard input (`docs/SEA_BOOTSTRAP.md` §4 item 3), so a compiled program still ignores its arguments and environment (except `BAYSICK_KERNELS`, DESIGN.md §6.6), and its behaviour depends only on its standard input and its files |
+| the run-time `FILE` statement | still deferred ("The Sixth Edition"): `LINPUT` reads FILES numbers and standard input like `INPUT #` does, and a compiler reading its source on standard input and writing fixed-name files needs no run-time binding of names |
+| several targets in one `LINPUT`, `MAT LINPUT`, a `LINE INPUT` spelling | not provided (§15.2 decisions) |
+| reading standard error, `SCRATCH #-1`, `RESTORE #-1`, `IF END #-1` | not provided: standard error is an output stream; these stay `INVALID FILE NUMBER` (§15.3) |
+| a statement that flushes standard output | not needed: standard output is written before every standard-error write and at termination (§15.3, §15.5) |
+| a chosen exit status for `OUT OF DATA`, `END OF INPUT` or a run-time error | not provided: their statuses stay those of §10; a program that wants another status avoids the condition: it tests `IF END #` before reading input, and counts its DATA values (no statement tests for the end of the data) before reading, then ends with `STOP e` |
+| exit statuses above 255, negative statuses, signals | not provided: a POSIX exit status is one byte (§15.4) |
+
+### 15.2 LINPUT
+
+```
+LINPUT target
+LINPUT "#" expression "," target
+target := string-variable | letter "$" "(" expression [ "," expression ] ")"
+```
+
+The target is exactly one **string target of INPUT** (§7.15): a string variable `A$` … `Z9$`, a
+string list element `L$(i)` or a string table element `T$(i, j)`; inside a multi-line DEF body a
+string parameter of the function, inside a subprogram a string parameter of the SUB (which names
+the caller's variable, §7.27), like any string variable there. LINPUT reads the **next line** of
+its input and assigns it to the target **verbatim**: every byte of the line, in order, with no
+splitting at commas, no interpretation of `"`, no removal of leading or trailing blanks, `&`
+not special, byte 0 and every other byte kept; an empty line gives the empty string.
+
+**Lines** are the input lines of §7.15 and §7.21, read by the same reader: the bytes up to the
+next LF (not included); one CR immediately before the LF removed; a last line without LF counts
+as a line if it is not empty (it keeps a trailing CR, since no LF follows it); a line longer than
+65 536 bytes (after CR removal) → `INPUT LINE TOO LONG IN n` (exit 1). A line therefore always
+fits a string (§12). Standard input has one reader shared by INPUT, MAT INPUT, INPUT #0, IF END #0
+and LINPUT (§7.21), and every file k ≥ 1 one reader shared by INPUT #k, IF END #k and LINPUT #k;
+each INPUT-like statement starts at the beginning of the next unread line, and LINPUT consumes
+exactly one line. (INPUT and INPUT # discard the rest of their last line, so a LINPUT after them
+reads the line after it.) LINPUT always reads the reader's **next unread line**: if it runs while
+an INPUT or INPUT # statement on the same reader is still in progress (from a function called by
+a target's subscript), the rest of that statement's partly read line is discarded, and the
+enclosing statement then finds no field left on its current line and continues on the line after
+the one LINPUT read, as §7.15 (`NOT ENOUGH INPUT -- ADD MORE`, a new line) and §7.25 (the next
+line, silently) say for an exhausted line.
+
+| Line in the input (bytes) | Value assigned | `LEN` |
+|---------------------------|----------------|------:|
+| `f(a, b)` LF | `f(a, b)` | 7 |
+| `print("x") & y` LF | `print("x") & y` | 14 |
+| `   two  blanks  ` LF | `   two  blanks  ` (every blank kept) | 16 |
+| LF (an empty line) | the empty string | 0 |
+| `abc` CR LF | `abc` | 3 |
+| `abc` CR CR LF | `abc` CR | 4 |
+| `a` NUL `b` LF | the three bytes `a`, 0, `b` | 3 |
+| `last` at the end of the input, no LF | `last` | 4 |
+
+**Without `#`** LINPUT reads **standard input with the INPUT rules** (§7.15): on a terminal it
+first writes the prompt (the pending spaces of the output line, then `?` and a space, to stdout,
+which is then flushed) and after the line `col = out = 0`; when standard input is not a terminal
+nothing is written and the column state is unchanged. If standard input is at its end:
+`END OF INPUT IN n`, **exit status 0**, exactly as for INPUT (§10).
+
+**With `#k`** LINPUT reads **file k with the INPUT # rules** (§7.25): the designator is evaluated
+and truncated (§7.21); k = 0 is standard input without a prompt (on a terminal stdout is flushed
+before the line is read and `col = out = 0` after it, as for INPUT #0); k ≥ 1 must be in read mode
+(else `ILLEGAL FILE COMMAND`) and is opened if necessary (`CAN'T OPEN FILE`); k = −1 (standard
+error, §15.3) and every other k outside 0 … N → `INVALID FILE NUMBER`. If the file has no line
+left: `END OF FILE IN n`, **exit status 1**. The end of a file is tested beforehand with
+`IF END #k` (§7.26), which for a file in read mode (and for standard input) is true exactly when
+no byte of the file remains unread — that is, exactly when the next `LINPUT #k` would find no
+line. (For a file in write mode `IF END #k` is false, and `LINPUT #k` is `ILLEGAL FILE COMMAND`.)
+So
+
+```
+100 IF END #0 THEN 200
+110 LINPUT #0, L$
+120 ...
+130 GOTO 100
+200 ...
+```
+
+reads every line of standard input, empty lines and the last line without LF included, and
+continues at line 200 after the last one; it never ends the program at the end of the input. It
+can still fail: a line over 65 536 bytes is `INPUT LINE TOO LONG`, and for a file k ≥ 1 the
+first `IF END #k` may be `CAN'T OPEN FILE`.
+
+**Order of evaluation:** the designator (if any); then the target's subscripts; then the file
+number and the mode are checked and the line is read; then, for an array element, the subscript
+is checked at the store (`SUBSCRIPT ERROR`, as for INPUT, §7.15); then the line is assigned. A
+function called by a subscript may print or change files before the line is read (as in
+§7.25).
+
+**Compile-time errors:** no target, or a text that is not a target (`LINPUT`, `LINPUT 5`,
+`LINPUT "X"`, `LINPUT #1,`) → `ILLEGAL VARIABLE`; a numeric target (`LINPUT A`, `LINPUT #1,
+X(2)`) → `MISMATCHED STRING OPERATION`; anything after the target, a second target included
+(`LINPUT A$, B$`) → `INCORRECT FORMAT`; `#` and its designator as for INPUT # (§7.25): a missing
+`,` after the designator (`LINPUT #1`, `LINPUT #1 A$`) → `INCORRECT FORMAT`, `LINPUT #` at the end
+of the line → `ILLEGAL FORMULA`, a string designator → `MISMATCHED STRING OPERATION`.
+
+**Baysick decisions:** (a) the name `LINPUT` — [W] attributes it to a later Dartmouth BASIC
+(unverified); it is one word, so no compaction rule can split it, and no keyword is a prefix of
+it or has it as a prefix (§3.1); the later two-word `LINE INPUT` of other dialects is not
+accepted, one spelling being enough; (b) exactly one target: each target needs its own line and
+its own `IF END` test, which a list would hide; (c) the two forms mirror INPUT and INPUT #0: the
+form without `#` is the interactive one (prompt, end of input ends the program successfully), the
+`#` form the file one (no prompt, end of file is an error unless tested), so "a `#` selects the
+file rules" holds for every statement; (d) the line is the reader's line, CR rule and length
+limit included, so INPUT, INPUT # and LINPUT can never disagree about where a line ends, and the
+only difference from INPUT # is that the fields are not split.
+
+### 15.3 Standard error: PRINT #-1
+
+The designator value **k = −1** (the file number of `PRINT #`, §7.24, truncated: −2 < x ≤ −1)
+names **standard error** (`FILE_NUM_STDERR`). `PRINT #-1` (any expression with that value, e.g.
+`PRINT #E, …` with E = −1) writes its items to standard error with **all of §8**, using
+standard error's own state: its own `col` and `out` (0 at the start of the run), lazy spaces,
+zones (`,`), the `;` rule, TAB and the 75-column rules (a number starts a new line of standard
+error if fewer than 12 columns remain; a `,` that reaches column 75 ends its line). Printing to
+standard error never changes the column of standard output or of any file, and the reverse.
+`PRINT #-1` alone writes an empty line to standard error. Standard error is always writable:
+there is no mode check. As for every `PRINT #`, the number is checked immediately before each
+output (§7.24); k ≤ −2 → `INVALID FILE NUMBER` as before.
+
+**Only PRINT #.** Standard error is an output stream: `INPUT #-1`, `LINPUT #-1`, `IF END #-1`,
+`SCRATCH #-1` and `RESTORE #-1` → `INVALID FILE NUMBER IN n` (exit 1), exactly as before.
+
+**Order of the bytes.** Standard error is **not buffered**, and standard output is written first:
+before any byte is written to standard error, every buffered byte of standard output is written
+(flushed) — only then: an output action that writes no byte (a `,` or TAB that only moves `col`,
+lazy blanks) writes nothing anywhere and does not flush standard output, and a `PRINT #-1,;`
+produces no output at all and does nothing (§7.24); then each output action of `PRINT #-1` — a string item, a number item, a TAB or `,`
+or `;` that writes a newline, the end-of-statement newline — writes its bytes (with the lazy
+spaces before its first non-blank byte) to standard error before the statement continues. So when
+standard output and standard error are the same file or terminal (`2>&1`), their bytes appear in
+the order the program produced them. Files are not affected: a file's output reaches the host
+file only at the moments of §7.21, whatever is written to standard error.
+
+**BASIC messages start a line.** Before a BASIC message is written to standard error — a
+run-time error, `OUT OF DATA`, `END OF INPUT`, one of the three INPUT diagnostics (§7.15) or
+MAT INPUT's `INPUT DATA NOT IN CORRECT FORMAT -- RETYPE IT` (§7.14.8) — if standard error's
+`col ≠ 0` a newline is written to standard error first; after the message `col = out = 0` (every
+message ends with LF). At every termination standard error's pending line is ended (§15.5). So
+no message is ever glued to the end of a program's partial standard-error line, and the last
+byte a program writes to standard error is always LF.
+
+**A failed write to standard error** is ignored: the bytes are lost, nothing is reported and the
+exit status is unchanged (there is no other stream to report on, and BASIC messages already
+ignore it, DESIGN.md §6.7). A closed pipe is the exception it shares with standard output (§10): the
+runtime leaves `SIGPIPE` at the action the program inherited, so with the default action a write
+to a pipe whose reader has gone ends the process by the signal, exactly as a write to standard
+output does; if the parent made the program ignore `SIGPIPE`, the write fails with `EPIPE` and is
+ignored like every other failed standard-error write (while standard output's `EPIPE` makes the
+exit status 1, §10). **Baysick decision:** one signal rule for both streams; ignoring `SIGPIPE`
+process-wide would also change standard output, so that a filter piped into `head` would run to
+its end instead of stopping.
+
+Example: with standard output and standard error both redirected to one file,
+
+```
+10 PRINT "COMPILING";
+20 PRINT #-1, "ERROR:", "LINE"; 3
+30 PRINT " DONE"
+40 END
+```
+
+leaves the bytes `COMPILINGERROR:         LINE 3` LF ` DONE` LF in it: `COMPILING` is written
+when line 20 is about to write its first standard-error byte; `ERROR:`, 9 lazy blanks to the zone
+at column 15, `LINE`, the number ` 3` (its trailing blank stays lazy) and the newline go to
+standard error; ` DONE` continues standard output's line, whose `col` is still 9 from line 10,
+and the end of line 30's PRINT ends it. Captured separately, standard output is `COMPILING DONE` LF and
+standard error `ERROR:         LINE 3` LF.
+
+**Baysick decisions:** (a) a designator, not a new statement: PRINT # already has every rule
+standard error needs (zones, TAB, its own column state), so the whole of §8 applies without a
+second set of rules; (b) −1 because it was `INVALID FILE NUMBER` (no FILES number loses its
+meaning and no host path is reserved, §7.21) and 2, the Unix descriptor number, is a FILES
+number; (c) unbuffered, standard output first: the only rule that gives program order on a
+shared stream without a flush statement; a compiler writes few diagnostics, so the cost does not
+matter; (d) failures ignored, as for BASIC messages.
+
+### 15.4 Exit status: END and STOP with an expression
+
+```
+END [ expression ]
+STOP [ expression ]
+```
+
+Without the expression both statements are exactly as before (§7.3, §7.13: exit status 0). With
+it the expression x is evaluated when the statement executes and truncated, k = trunc(x) (like a
+designator, §7.21, ON and TAB: the integer part); **0 ≤ k ≤ 255** (`LIM_EXIT_STATUS`) is
+required, else the run-time error `EXIT STATUS OUT OF RANGE IN n` (exit 1; it ends the program
+like every run-time error). So `STOP 1.9` exits 1, `STOP -0.5` exits 0, `STOP 256` and `STOP -1`
+are errors. Then the program terminates **exactly as END does** (§10, §15.5): files in write mode
+finished in ascending order, standard output's pending newline and flush, standard error's
+pending newline — and the exit status is k, **except that a failed write makes it 1**: if a
+file's output could not be written at this termination the program ends instead as the run-time
+error `CAN'T WRITE FILE IN n` (exit 1, n = the END/STOP line), and if a write to standard output
+failed at any time, the termination flush included, or an earlier file write failed (§10), the
+status is 1 whatever k is. A program
+therefore never reports a status other than 1 after it lost output, and a status 0 always means
+that every byte arrived.
+
+`END e` keeps every rule of END (§7.3): exactly one END, the last line of the main program, so it
+runs only when control reaches the end; `STOP e` may stand anywhere — in the main program, in a
+multi-line DEF body, in a subprogram, where it ends the whole program and the active activations
+are abandoned (§7.27). Compile-time errors: a string expression →
+`MISMATCHED STRING OPERATION`; an expression error → that error (`STOP )` → `ILLEGAL FORMULA`);
+text after the expression → `INCORRECT FORMAT` (`STOP 1, 2`). For END, the checks of §7.3 (`END IS NOT
+LAST`, then `UNFINISHED DEF`, `UNFINISHED SUB`) are decided at the keyword, before the expression
+is parsed (`END A$` followed by another line of the
+main program is `END IS NOT LAST`). Spaces are removed by compaction
+(§2), so `STOP 1 2` is `STOP 12`.
+
+**Baysick decisions:** (a) END and STOP take the status, not a new statement: STOP already
+terminates "exactly like END" anywhere, and the status is the only thing a new statement would
+add; (b) truncation like every other integer-valued operand that is not a subscript (designators,
+ON, TAB); (c) 0–255 because a POSIX exit status is one byte; out of range is an error, not
+reduced modulo 256 or clamped, since `STOP 256` would otherwise report success; (d) a failed
+write forces 1, the one rule of §10 that already holds for END (k = 0), so the status a program
+chooses can never hide lost output.
+
+### 15.5 Termination and the three streams
+
+Every termination — END or STOP with or without a status, `OUT OF DATA`, `END OF INPUT`, every
+run-time error — does these steps in this order (§8, §10, DESIGN.md §6.8, §6.10):
+
+1. every file in write mode, in ascending file number: a newline if its `col ≠ 0`, then its
+   buffered output is written;
+2. standard output: a newline if its `col ≠ 0`, then its buffer is written;
+3. standard error: a newline if its `col ≠ 0`;
+4. the message, if any, to standard error (`<MESSAGE> IN n` + LF);
+5. exit with the status of §10 (END/STOP with a status: §15.4).
+
+A failure in step 1 after END or STOP turns the termination into the run-time error
+`CAN'T WRITE FILE` (§10), which runs steps 1–5 again for what is left (files already finished are
+not finished twice). Standard error has no buffer, so step 3 writes at most one LF; standard
+output's bytes always precede the message, as before.

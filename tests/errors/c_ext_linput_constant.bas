@@ -1,0 +1,2 @@
+10 LINPUT "X"
+20 END

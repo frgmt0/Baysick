@@ -106,8 +106,30 @@
 //                                       DIMENSION ERROR, OUT OF ROOM)
 //  _bsk_sub_leave()                     end the newest activation (SUBEND)
 //  Changed by the Sixth Edition: _bsk_gosub_pop raises ILLEGAL RETURN when
-//  no GOSUB of the current activation is pending; _bsk_err accepts exactly
-//  the codes ERR_FIRST_RUNTIME..ERR_END_RUNTIME-1 (DESIGN.md 6.9).
+//  no GOSUB of the current activation is pending; _bsk_err accepts the
+//  codes ERR_FIRST_RUNTIME..ERR_END_RUNTIME-1 (DESIGN.md 6.9) and, with the
+//  Baysick extensions below, ERR_EXT_FIRST_RUNTIME..ERR_EXT_END_RUNTIME-1.
+//
+//  Baysick extensions (DESIGN.md 6.10; LANGUAGE.md 10, 15):
+//  _bsk_linput(x0=dst SD*)              LINPUT: the next line, verbatim
+//                                       (pending _bsk_fsel: file rules,
+//                                       END OF FILE; none: INPUT rules,
+//                                       prompt, END OF INPUT)
+//  _bsk_linput_el(x0=slist, d0=i)       the same into element i: the line
+//                                       first, then the subscript check
+//  _bsk_exit(d0=status)                 noreturn: END/STOP with a status:
+//                                       trunc(status) in 0..LIM_EXIT_STATUS
+//                                       (else EXIT STATUS OUT OF RANGE), then
+//                                       exactly _bsk_end with that status
+//  Changed by the extensions: _bsk_fsel accepts FILE_NUM_STDERR (-1); the
+//  print entry points then write standard error with its own column state
+//  (stdout flushed before the first byte to fd 2, each call's bytes written
+//  before it returns); the input
+//  entry points and _bsk_linput* raise INVALID FILE NUMBER for it, and
+//  _bsk_feof, _bsk_scratch, _bsk_frestore still reject it. _bsk_end,
+//  _bsk_err and the INPUT and MAT INPUT diagnostics end a pending stderr line
+//  first; _bsk_err accepts ERR_EXT_FIRST_RUNTIME..ERR_EXT_END_RUNTIME-1 (62)
+//  besides 32..56. The runtimes never change the SIGPIPE action.
 //
 //  MAT statements (DESIGN.md 6.5; x0/x1/x2 = RTA descriptors, LANGUAGE.md 7.14):
 //  _bsk_mat_redim1(x0=desc, d0=rows)              shape rows x 1

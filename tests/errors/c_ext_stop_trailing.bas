@@ -1,0 +1,3 @@
+10 LINPUT A$
+20 STOP 1, 2
+30 END

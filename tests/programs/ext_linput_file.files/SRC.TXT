@@ -1,0 +1,6 @@
+12, "FIRST", IGNORED REST
+  indented, with "quotes" & ampersand
+
+tab	inside
+CRLF line
+final no newline

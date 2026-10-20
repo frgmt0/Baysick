@@ -82,7 +82,7 @@ its body plus internal labels; single-line functions have no labels.
 | temp | u32 index `0..NTEMPS-1` | `t<n>` |
 | slot | u32 in `IRI_X`: `0..285` user scalars, `286+2k` LIMIT of FOR k, `287+2k` STEP of FOR k | `A`, `X7`, `%lim3`, `%step3` |
 | string slot | u32 in `IRI_X` (`svar`): `0..285`, numbered like scalar slots, a separate space | `A$`, `X7$` |
-| string list | u32 letter 0..25 in `IRI_X` (`sald1`, `smat*`, element form of `sread`/`insv`); in `IRI_IMM` (element form of `chgn2s`, §3.2) | `A$` … `Z$` |
+| string list | u32 letter 0..25 in `IRI_X` (`sald1`, `smat*`, element form of `sread`/`insv`, and of `linput`, §3.5); in `IRI_IMM` (element form of `chgn2s`, §3.2) | `A$` … `Z$` |
 | string table | u32 letter 0..25 in `IRI_X` (`sald2`; `smatredim`, `smatread`, `smatprint` accept a string list or table) | `A$` … `Z$` |
 | string temp cell | u32 in `IRI_X` (`scell`): `0..NSTEMPS-1` | `%s<n>` |
 | label | u32 id in `IRI_X` (or `IRI_IMM` for gosub's return label) | `@<line>` for a line label, `L<id>` for an internal label |
@@ -200,7 +200,7 @@ Placement rules (checked by the verifier, §6). Opcode groups:
   prnl stop`, the MAT opcodes 42–54, and `sjcmp prsv prtab sread inbeg innum insv inend
   matinput smatinput smatredim smatread smatprint chgs2n chgn2s onsel restore randomize`, and
   (Fifth Edition) `fsel jeof scratch frestore`, and (Sixth Edition) `vaddr aaddr1 aaddr2 taddr
-  aref saref subarg callsub` (the CALL statement).
+  aref saref subarg callsub` (the CALL statement), and (Baysick extensions, §3.5) `linput exit`.
 
 `nop` belongs to no group: it is allowed in every function kind.
 
@@ -217,8 +217,8 @@ in the main module's `main`, `subret` only in a SUB body.
 (Without Fifth Edition features S and X never occur in a single-line function, so the table is the
 Fourth Edition table for every Fourth Edition program.)
 
-Instructions after an unconditional transfer (`jmp`, `return`, `end`, `stop`, `ret`, `sret`, `subret`) up to the
-next label are reachable only through labels, as usual.
+Instructions after an unconditional transfer (`jmp`, `return`, `end`, `stop`, `ret`, `sret`, `subret`, and
+`exit`, §3.5) up to the next label are reachable only through labels, as usual.
 
 ### 3.1 MAT opcodes
 
@@ -345,7 +345,7 @@ string parameter. `callfn` calls numeric functions only, `scallfn` string functi
 #### 3.3.2 The `fsel` rule
 
 `fsel A` is always **immediately** followed by one of `prnum prstr prsv prcomma prsemi prtab prnl
-inbeg innum insv inend`, and that instruction acts on file `trunc(A)` (the runtime checks the
+inbeg innum insv inend` or (Baysick extension, §3.5) `linput`, and that instruction acts on file `trunc(A)` (the runtime checks the
 number, `INVALID FILE NUMBER`, and the mode, `ILLEGAL FILE COMMAND`) instead of standard output /
 the standard-input INPUT dialogue: on file 0 a print opcode is exactly the plain one, an input
 opcode reads standard input with the INPUT # rules (no prompt, no diagnostics, END OF FILE). A
@@ -399,6 +399,28 @@ As for `fnarg` (§3.2): a CALL with k arguments (k ≥ 2) is the k − 1 instruc
 …, `subarg k−1, …`, in this order, **immediately** followed by its `callsub` (A = argument 0);
 a CALL with one argument is `callsub` with A and no `subarg`; with none, `callsub` with A =
 `IR_NONE`. The number of arguments equals the callee's `SUBNPARAMS`.
+
+### 3.5 Baysick extension opcodes
+
+Opcodes 111–112 (LANGUAGE.md §15: features of no edition). Each is one runtime call (DESIGN.md
+§6.10). Unused fields as in §2.1. Standard error needs no opcode of its own: `PRINT #-1` is the
+ordinary PRINT # lowering (§4.3), and the runtime's `fsel` accepts the value −1 for the print
+opcodes that follow it (LANGUAGE.md §15.3).
+
+| Op | Fields | Text form | Semantics |
+|----|--------|-----------|-----------|
+| `linput` 111 | A=sref; element form: X=slist, B | `linput t6`; `linput L$, t6` | LINPUT: the string A references (element form: element B of string list X) := the next input line, verbatim (LANGUAGE.md §15.2). Without a preceding `fsel`: standard input with the INPUT rules (prompt on a terminal, END OF INPUT); after `fsel`: file trunc(fsel A) with the INPUT # rules (END OF FILE; −1 → INVALID FILE NUMBER). A is never a `slit` |
+| `exit` 112 | A | `exit t3` | END e / STOP e: k = trunc(A), 0 ≤ k ≤ 255 else EXIT STATUS OUT OF RANGE; then terminate exactly like `end` with exit status k (1 after a failed write, LANGUAGE.md §15.4) |
+
+**Element form of `linput`** is that of `insv` (§3.2): A = `IR_NONE`, X the string list letter, B
+the subscript temp, IMM 0, DST and C `IR_NONE`; the runtime reads the line first and only then
+applies the subscript rule of `sald1` (SUBSCRIPT ERROR at the store, LANGUAGE.md §15.2). A string
+table element target uses the cell form of `insv` (§4.3). The plain form may target a `svar`
+(in a SUB unit also a string parameter slot), a `scell` or a `sparam` reference, like `insv`.
+
+`exit` is an unconditional transfer like `stop`: it never returns. It may occur wherever `stop`
+may (group T: `main`, a multi-line FN body, a SUB body); `main` still ends with `end` (an `END e`
+line is `exit` followed by `end`, §4.3).
 
 ## 4. Canonical lowering (frontend → IR)
 
@@ -533,6 +555,8 @@ it — then, into the same function:
 | `CHANGE L TO s` | a string variable V$: `ts = svar V$`, `chgn2s L, ts`; a list element `M$(i)`: i, then the element form `chgn2s L, M$, ti` (the conversion's checks come before the subscript check) |
 | `END` | `end` |
 | `STOP` | `stop` |
+| `END e` (Baysick extension) | e; `exit te`; `end` (the `end` is unreachable; it keeps `main` ending with `end`) |
+| `STOP e` (Baysick extension) | e; `exit te` |
 | `MAT READ X1, X2, …` | for each target in order: if it has dimensions `(r)` or `(r, c)`: r; [c;] `matredim X, tr` or `matredim X, tr, tc`; then `matread X`. A string list `X$`: [r; `smatredim X$, tr`;] `smatread X$` |
 | `MAT PRINT X1 s1 X2 s2 …` | for each item in order: `prnl` if it is not the first item; `matprint X, packed` if the separator after it is `;`, else `matprint X, zoned` (a string list: `smatprint X$, packed` / `zoned`) |
 | `MAT INPUT V` / `MAT INPUT V$` | `matinput V` / `smatinput V$` |
@@ -547,17 +571,19 @@ it — then, into the same function:
 | `MAT X = TRN(Y)` / `INV(Y)` | `mattrn X, Y` / `matinv X, Y` |
 | `FILES …` (Fifth Edition) | nothing (each name is added with `_ir_add_file` when the line is parsed) |
 | string table element target `T$(i,j)` in `LET` (Fifth Edition) | target phase: i; j. Store phase: `te = sald2 T$, ti, tj`, `sset te, tr` (the `sald2` immediately before its `sset`, like `sald1`) |
-| string table element target `T$(i,j)` in `READ`, `INPUT` | i; j; `tC = scell %sK`; `sread tC` / `insv tC`; `te = sald2 T$, ti, tj`; `sset te, tC` (the value is taken into the cell first, then the subscripts are checked at the store) |
+| string table element target `T$(i,j)` in `READ`, `INPUT`, `LINPUT` | i; j; `tC = scell %sK`; `sread tC` / `insv tC` / `linput tC`; `te = sald2 T$, ti, tj`; `sset te, tC` (the value is taken into the cell first, then the subscripts are checked at the store) |
 | `CHANGE L TO T$(i,j)` | i; j; `tC = scell %sK`; `chgn2s L, tC`; `te = sald2 T$, ti, tj`; `sset te, tC` |
 | `LET FNx$ = r` (in the body of FNx$; also one target of a multiple string LET) | target phase: `tv = sfv`; store phase: `sset tv, tr` |
-| a string parameter target `P$` (multi-line body) in LET, READ, INPUT, INPUT #, CHANGE | as a string variable with `tr = sparam k` in place of `tr = svar P$` |
+| a string parameter target `P$` (multi-line body) in LET, READ, INPUT, INPUT #, CHANGE, LINPUT, LINPUT # | as a string variable with `tr = sparam k` in place of `tr = svar P$` |
 | `MAT READ T$(r, c)` (string table) | r; c; `smatredim T$, tr, tc`; `smatread T$` (without dimensions: `smatread T$`) |
 | `MAT PRINT … T$ …` (string table) | `smatprint T$, zoned` / `packed`, as for a string list |
 | `SCRATCH #e` | e; `scratch te` |
 | `RESTORE #e` | e; `frestore te` |
 | `IF END #e THEN n` (also `GOTO`) | e; `jeof te, @n` |
-| `PRINT #e` [`,` items] | e (→ tF); then exactly the PRINT lowering of the items (above), except that every emitted `prnum prstr prsv prtab prcomma prsemi prnl` is immediately preceded by `fsel tF` (the item's value — its expression or string reference — is lowered before the `fsel`). `PRINT #e` alone: e; `fsel tF`; `prnl` |
+| `PRINT #e` [`,` items] | e (→ tF); then exactly the PRINT lowering of the items (above), except that every emitted `prnum prstr prsv prtab prcomma prsemi prnl` is immediately preceded by `fsel tF` (the item's value — its expression or string reference — is lowered before the `fsel`). `PRINT #e` alone: e; `fsel tF`; `prnl`. Baysick extension: the same lowering when e is −1 (standard error, LANGUAGE.md §15.3); only the runtime distinguishes it |
 | `INPUT #e, x1, …` | e (→ tF); `fsel tF`; `inbeg`; then each target exactly as in INPUT except that every `innum` / `insv` is immediately preceded by `fsel tF` (the subscripts, and for a string variable its `svar`, come before the `fsel`; a string table element uses the cell form above with `fsel tF` before its `insv tC`); after the last target `fsel tF`, `inend` |
+| `LINPUT t` (Baysick extension) | a string variable V$: `tr = svar V$`, `linput tr`; a list element `L$(i)`: i, then the element form `linput L$, ti`; a table element: the cell form above |
+| `LINPUT #e, t` (Baysick extension) | e (→ tF); then the target exactly as in `LINPUT t`, with `fsel tF` immediately before its `linput` (the subscripts, and for a string variable its `svar`, come before the `fsel`; a table element: i; j; `tC = scell %sK`; `fsel tF`; `linput tC`; `te = sald2 T$, ti, tj`; `sset te, tC`) |
 | `SUB "s" [: p…]` (Sixth Edition; the first line of its SUB unit) | nothing (its `line` starts the SUB body; `_ir_sub_set` records the parameters) |
 | `SUBEND` (in its SUB body) | `subret` |
 | `CALL "s"` | `callsub "s"` |
@@ -706,6 +732,10 @@ G17 := the value formatted exactly as C printf("%.17g")
   section, and with no Sixth Edition feature at all it is byte-identical to the Fifth Edition
   format. The text forms of the §3.4 opcodes are in its table; `callsub` names the unit by its
   quoted name. See `tests/ir/ed6_*.ir`.
+* Baysick extensions (§3.5): the text forms `linput tA`, `linput L$, tB` and `exit tA`; nothing else
+  in the dump changes, so a dump of a program without `LINPUT`, `END e` or `STOP e` is
+  byte-identical to the Sixth Edition format (a `PRINT #-1` dumps as any PRINT #). See
+  `tests/ir/ext_*.ir`.
 * `const` lines end with `" ; " G17` like data lines.
 * MAT opcodes print as in §3 (`matprint A, zoned`, `matscale C, t3, A`, …); see
   `tests/ir/mat_ops.ir` for every form. The §3.2 opcodes print as in their table; see
@@ -871,6 +901,16 @@ internal error (exit 4). Checks:
      result is internal error 4.
    * Not checked (guaranteed by the frontend): that no cell is allocated by two instructions
      (`scell`, `sseg`), and that a `taddr` temp is not read after its `callsub`.
+
+10. Baysick extensions (§3.5):
+   * `linput` has the field usage of `insv` (rule 1): the plain form has an sref in A that is never
+     defined by a `slit` (rule 2, rule 8), and X, B `IR_NONE`; the element form has A = `IR_NONE`,
+     a number temp in B and in X a declared string **list** (`DIMS` = 1; in a SUB unit a parameter
+     string array with `DIMS` 1 too, rule 9); IMM 0, DST and C `IR_NONE` in both.
+   * `exit` has a number temp in A and every other field unused; it is allowed where `stop` is
+     (group T, §3) and is an unconditional transfer.
+   * `fsel` may also be immediately followed by `linput` (rule 8).
+   * Opcodes are `< OP_COUNT` (rule 1): with the extensions `OP_COUNT` is 113.
 
 ## 7. Writing a new backend
 

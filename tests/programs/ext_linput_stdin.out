@@ -1,0 +1,10 @@
+[f(a, b)] 7
+[print("x") & y] 14
+[   two  blanks  ] 16
+[] 0
+[abc] 3
+[abc] 4
+["quoted, with comma"] 20
+[  ] 2
+[last] 4
+LINES 9

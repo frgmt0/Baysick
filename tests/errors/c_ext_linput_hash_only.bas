@@ -1,0 +1,2 @@
+10 LINPUT #
+20 END

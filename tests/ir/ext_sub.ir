@@ -1,0 +1,34 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=1 strings=1 data=0
+string s0 ""
+func main temps=2 labels=3
+  line 10
+  t0 = svar A$
+  callsub "RD", t0
+  line 20
+  t1 = svar A$
+  prsv t1
+  prnl
+  line 30
+  end
+endfunc
+sub "RD" params=S$ def=40 subend=80
+unit slots=286 fors=0 funcs=1
+func SUB temps=5 labels=5
+  line 40
+  line 50
+  t0 = const 0x0000000000000000 ; 0
+  t1 = svar S$
+  fsel t0
+  linput t1
+  line 60
+  t2 = svar S$
+  t3 = slit s0
+  sjcmp ne, t2, t3, @80
+  line 70
+  t4 = const 0x4008000000000000 ; 3
+  exit t4
+  line 80
+  subret
+endfunc
+endsub

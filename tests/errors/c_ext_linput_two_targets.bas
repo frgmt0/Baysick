@@ -1,0 +1,2 @@
+10 LINPUT A$, B$
+20 END

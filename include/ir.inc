@@ -162,7 +162,29 @@
 .equ OP_CALLSUB,    109 /*  X=SUB unit index, A=argument 0 reference or IR_NONE */
 .equ OP_SUBRET,     110 /*  - (SUBEND: return from the current SUB) */
 
+// Baysick extension opcodes (IR.md 3.5; LANGUAGE.md 15).
+// OP_LINPUT has the plain and the element form of OP_INSV and may follow an
+// OP_FSEL (the fsel rule, IR.md 3.3.2). OP_EXIT is an unconditional transfer
+// like OP_STOP. Standard error needs no opcode: it is the designator
+// FILE_NUM_STDERR of the print opcodes after an OP_FSEL (limits.inc).
+.equ OP_LINPUT,     111 /*  A=sref (never a slit); element form: A=IR_NONE, X=string list letter, B=subscript */
+.equ OP_EXIT,       112 /*  A=number: terminate like END/STOP with exit status trunc(A) */
+
+// Contract staging switch of the Baysick extensions (DESIGN.md 2.2, 2.6).
+// 0: the counts the current (Sixth Edition) modules are built with. 1: the
+// extension contract. Build with `make BSK_EXT=1` during the implementation
+// phase; the integration step deletes the switch and keeps only the
+// BSK_EXT_CONTRACT=1 values. Every other constant is unconditional. (Also
+// defined, identically guarded, in tokens.inc.)
+.ifndef BSK_EXT_CONTRACT
+.equ BSK_EXT_CONTRACT, 0
+.endif
+
+.if BSK_EXT_CONTRACT
+.equ OP_COUNT,      113
+.else
 .equ OP_COUNT,      111
+.endif
 
 // ---- Relation codes (u16 IRI_REL, OP_JCMP only; 0 otherwise) ------------
 .equ REL_NONE,      0

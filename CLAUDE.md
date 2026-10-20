@@ -4,6 +4,9 @@ Dartmouth BASIC compiler in arm64 assembly (Apple `as` syntax), macOS/arm64. Imp
 Second through Sixth Editions (Oct 1964 incl. MAT matrix statements; 1966/1968: strings, INPUT,
 ON, TAB, CHANGE, multi-line DEF, MAT INPUT, …; 1970: sequential files, `LEN ASC STR$ VAL`,
 string DEF, string tables; 1971: `SEG$`, `POS`, `&`, `CALL`/`SUB`/`SUBEND`; LANGUAGE.md §3–§14).
+Specified, being implemented: three **Baysick extensions** outside every edition (LANGUAGE.md
+§15: `LINPUT [#k,] A$` verbatim line input, `PRINT #-1` to standard error, `END e` / `STOP e`
+exit status; work packages DESIGN.md §2.6).
 Two targets:
 `arm64-macos` (default, full pipeline) and `x86_64-linux` (cross: emits GNU `as` x86_64 text;
 assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, §6.4, §8).
@@ -25,10 +28,16 @@ assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, 
   `src/runtime_x86_64_linux/`, cross testing (`Makefile.linux`, `tests/cross*.sh`, CI),
   benchmarks (`bench/`). Do not edit another module's files. MAT work split: DESIGN.md §2.1;
   Third/Fourth Edition split: DESIGN.md §2.3; Fifth Edition split: DESIGN.md §2.4; Sixth
-  Edition split: DESIGN.md §2.5.
-- Contract counts and record sizes (`OP_COUNT`, `KW_COUNT`, `TK_COUNT`, `BI_COUNT`, `IRF_SIZE`,
-  `IRM_SIZE`) are plain constants (DESIGN.md §2.2). A future contract change that many modules
-  must follow may be staged behind a temporary switch, removed at integration in one commit.
+  Edition split: DESIGN.md §2.5; Baysick extensions split: DESIGN.md §2.6.
+- **Staging switch:** the Baysick extensions contract counts (`OP_COUNT` 111 → 113, `KW_COUNT`
+  27 → 28) depend on `BSK_EXT_CONTRACT` (default 0 = the current modules; every other count and
+  record size is a plain constant, DESIGN.md §2.2). Work on the extensions with `make clean; make
+  BSK_EXT=1 test`; plain `make test` must keep passing every test that passed before (384 Mac,
+  210 cross). Expected failures until the extensions are in: every `ext_*`, `c_ext_*`, `r_ext_*`
+  and `tests/ir/ext_*` test (60 Mac, 43 cross; the `streams=` ones also need T, DESIGN.md §8.6).
+  The 12 whose only extension is `PRINT #-1` pass at switch 0 once R/RX are in (the 3 `streams=merged` ones once T
+  is in too): after R+RX 51 Mac / 34 cross remain, after T 48 / 31 (DESIGN.md §2.6).
+  Runtime code is unconditional. Integration removes the switch in one commit.
 - Matrix kernels: GEMM may reassociate/use FMA (class R); every other MAT result must be
   bit-identical across targets and kernel variants (class E, DESIGN.md §6.6.4). Test products use
   exact data only. Never use undocumented CPU instructions; vendor BLAS is for `bench/` only.
@@ -44,11 +53,14 @@ assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, 
   Tests named `ed4_*`, `manual4_*`, `text_*`, `c_ed4_*`, `r_ed4_*` and `tests/ir/ed4_*` cover
   the Third/Fourth Edition; `ed5_*`, `manual5_*`, `c_ed5_*`, `r_ed5_*` and `tests/ir/ed5_*`
   cover the Fifth Edition; `ed6_*`, `manual6_*`, `c_ed6_*`, `r_ed6_*` and `tests/ir/ed6_*`
-  cover the Sixth Edition.
+  cover the Sixth Edition; `ext_*`, `c_ext_*`, `r_ext_*` and `tests/ir/ext_*` cover the Baysick
+  extensions (LANGUAGE.md §15); a run-phase `.meta` may add `streams=merged` or
+  `streams=no-stdout` (DESIGN.md §8.6).
 - No TODOs, stubs or placeholder values.
 
 ## Commands
 - Build: `make`   Test: `make test` (or `sh tests/run.sh [-v] [pattern]`)
+- Extensions contract: `make clean; make BSK_EXT=1 test` (`make clean` when switching)
 - Include check: `make check-includes` (Mac); `make -f Makefile.linux check-includes` (Linux)
 - Kernel variant: `BAYSICK_KERNELS=<variant|baseline> sh tests/run.sh`
 - Benchmarks: `make bench` (Mac, vs Accelerate), `make bench-cross` (Linux host, vs OpenBLAS)

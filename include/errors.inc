@@ -14,6 +14,7 @@
 .equ BSK_ERRORS_INC, 1
 
 // ---- Compile-time errors (codes 1..31 and, Sixth Edition, 57..61) ----
+// (Run-time: 32..56 and, Baysick extensions, 62; see ERR_FIRST_RUNTIME.)
 .equ ERR_NONE,                  0
 .equ ERR_ILLEGAL_CONSTANT,      1   /* "ILLEGAL CONSTANT" */
 .equ ERR_ILLEGAL_FORMULA,       2   /* "ILLEGAL FORMULA" */
@@ -87,9 +88,19 @@
 .equ ERR_UNFINISHED_SUB,        60  /* "UNFINISHED SUB"         (SUB without SUBEND, FOR open at SUBEND; Baysick addition) */
 .equ ERR_ARG_MISMATCH,          61  /* "ARGUMENT MISMATCH"      (array for scalar or vice versa in a CALL; Baysick addition) */
 
+// Baysick extensions (LANGUAGE.md 15, 11):
+// codes from ERR_EXT_FIRST on, after every edition's codes, so that no
+// existing code moves. The extensions' run-time codes are exactly
+// ERR_EXT_FIRST_RUNTIME .. ERR_EXT_END_RUNTIME-1; they have no
+// compile-time code of their own.
+.equ ERR_EXIT_RANGE,            62  /* "EXIT STATUS OUT OF RANGE" (END/STOP status not in 0..LIM_EXIT_STATUS; Baysick extension) */
+
 .equ ERR_FIRST_RUNTIME,         32
-.equ ERR_END_RUNTIME,           57  /* one past the last run-time code */
-.equ ERR_TABLE_SIZE,            62  /* valid indices 0..61; the unused entry 0 is 0 */
+.equ ERR_END_RUNTIME,           57  /* one past the last run-time code of the editions */
+.equ ERR_EXT_FIRST,             62  /* first code of the Baysick extensions */
+.equ ERR_EXT_FIRST_RUNTIME,     62  /* first run-time code of the Baysick extensions */
+.equ ERR_EXT_END_RUNTIME,       63  /* one past the last run-time code of the Baysick extensions */
+.equ ERR_TABLE_SIZE,            63  /* valid indices 0..62; the unused entry 0 is 0 */
 
 // ---------------------------------------------------------------------
 // BSK_EMIT_ERRMSG_TABLE name
@@ -122,7 +133,7 @@
     .quad \name\()_m48, \name\()_m49, \name\()_m50, \name\()_m51
     .quad \name\()_m52, \name\()_m53, \name\()_m54, \name\()_m55
     .quad \name\()_m56, \name\()_m57, \name\()_m58, \name\()_m59
-    .quad \name\()_m60, \name\()_m61
+    .quad \name\()_m60, \name\()_m61, \name\()_m62
 \name\()_m1:  .asciz "ILLEGAL CONSTANT"
 \name\()_m2:  .asciz "ILLEGAL FORMULA"
 \name\()_m3:  .asciz "ILLEGAL RELATION"
@@ -184,6 +195,7 @@
 \name\()_m59: .asciz "NESTED SUB"
 \name\()_m60: .asciz "UNFINISHED SUB"
 \name\()_m61: .asciz "ARGUMENT MISMATCH"
+\name\()_m62: .asciz "EXIT STATUS OUT OF RANGE"
     .p2align 3
 .endm
 

@@ -29,6 +29,10 @@
 .equ LIM_FILE_NAME,         255       /* max bytes of one FILES name (implied by LIM_PHYS_LINE_LEN) */
 .equ LIM_SUB_PARAMS,        16        /* max SUB parameters / CALL arguments -> INCORRECT FORMAT (Sixth Edition) */
 
+// ---- Baysick extensions (LANGUAGE.md 15) ------------------------------
+.equ FILE_NUM_STDERR,       -1        /* designator of standard error: PRINT # only; every other file statement -> INVALID FILE NUMBER */
+.equ LIM_EXIT_STATUS,       255       /* END/STOP status 0..255 (truncated) -> EXIT STATUS OUT OF RANGE */
+
 // ---- Language-fixed sizes --------------------------------------------
 .equ NUM_LETTERS,           26
 .equ NUM_SCALAR_SLOTS,      286       /* 26 letters x (bare + digits 0..9) */
@@ -51,7 +55,7 @@
 .equ EXIT_INTERNAL,         4         /* out of memory, IR verifier failure, internal bug */
 
 // ---- Compiled-program exit codes ---------------------------------------
-.equ EXIT_RUN_OK,           0         /* END, STOP, OUT OF DATA or END OF INPUT */
+.equ EXIT_RUN_OK,           0         /* END, STOP, OUT OF DATA or END OF INPUT (END/STOP with a status: that status) */
 .equ EXIT_RUN_ERROR,        1         /* any other run-time error */
 
 .endif

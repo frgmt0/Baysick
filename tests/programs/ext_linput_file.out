@@ -1,0 +1,7 @@
+FIRST 12
+[  indented, with "quotes" & ampersand] 37
+[] 0
+[tab	inside] 10
+[CRLF line] 9
+[final no newline] 16
+END AFTER 5

@@ -1,0 +1,6 @@
+# sea demo, with "quotes" & commas
+let x1 = 42;
+  f(a, b) @ 7
+
+y=x1*2
+z = "s"
