@@ -18,6 +18,9 @@
 // ASC(, VAL( take a string expression (fe_sexpr.s) and give a number;
 // FNx( arguments may be string expressions (_fe_call, fe_sexpr.s); FNx
 // is the value variable only in the body of the *numeric* FNx.
+// Sixth Edition (LANGUAGE.md 5.2, 6.2): SEG$( is a string expression
+// (MISMATCHED STRING OPERATION here); POS(a, b [, m]) takes two string
+// expressions and an optional start position and gives a number.
 //
 // Grammar (left-associative at every level, sign only at the start):
 //   expression := [+|-] term { (+|-) term }
@@ -46,6 +49,7 @@
 .equ FE_LVL_PRIMARY,    3
 
 .equ FE_CTX_ML,         2           // _fe_ctx_kind of a multi-line body (fe_def.s)
+.equ FE_BITS_ONE,       0x3FF0000000000000  // IEEE-754 bits of 1.0
 
     .section __TEXT,__text,regular,pure_instructions
 
@@ -334,6 +338,10 @@ Lfe_expr_primary_builtin:
     ldr w19, [sp, #(48 + TOK_INDEX)]
     cmp w19, #BI_STR                    // STR$( : a string expression
     b.eq Lfe_expr_primary_string
+    cmp w19, #BI_SEG                    // SEG$( : a string expression too
+    b.eq Lfe_expr_primary_string
+    cmp w19, #BI_POS                    // POS( : string arguments, a number
+    b.eq Lfe_expr_primary_pos
     cmp w19, #BI_LEN
     b.hs Lfe_expr_primary_sfunc         // LEN( ASC( VAL(
     ldr w9, [sp, #(48 + TOK_LEN)]
@@ -392,6 +400,54 @@ Lfe_expr_primary_sfunc:
     mov w1, w20
     sub w0, w19, #BI_LEN
     add w0, w0, #OP_LEN                 // BI_LEN..BI_VAL -> OP_LEN..OP_VAL
+    bl _fe_emit_new
+    b Lfe_expr_primary_ret
+
+Lfe_expr_primary_pos:
+    // POS(a, b [, m]) (LANGUAGE.md 6.2, IR.md 4.2): a's string reference,
+    // b's, then m (without m: `tm = const 1`); `tN = pos ta, tb, tm`. A
+    // number for a or b, or an arithmetic operator after one of them, is
+    // MISMATCHED STRING OPERATION; a missing ',' or ')' ILLEGAL FORMULA.
+    bl _fe_paren_open
+    bl _fe_sexpr_need
+    mov w20, w0                         // ta
+    bl _fe_sref_end
+    mov w0, #TK_COMMA
+    mov w1, #ERR_ILLEGAL_FORMULA
+    bl _fe_expect_op
+    bl _fe_sexpr_need
+    mov w21, w0                         // tb
+    bl _fe_sref_end
+    bl _fe_next_op
+    cmp w0, #TK_RPAREN
+    b.eq 1f
+    cmp w0, #TK_COMMA
+    b.eq 2f
+    mov w0, #ERR_ILLEGAL_FORMULA        // anything else before ')'
+    bl _fe_err
+1:
+    // POS(a, b): the start position is the constant 1
+    adrp x9, _fe_depth@PAGE
+    ldr w10, [x9, _fe_depth@PAGEOFF]
+    sub w10, w10, #1
+    str w10, [x9, _fe_depth@PAGEOFF]
+    FE_NONE
+    mov x5, #FE_BITS_ONE
+    mov w0, #OP_CONST
+    bl _fe_emit_new
+    mov w22, w0
+    b 3f
+2:
+    // POS(a, b, m)
+    bl _fe_expr
+    mov w22, w0
+    bl _fe_paren_close
+3:
+    FE_NONE
+    mov w1, w20
+    mov w2, w21
+    mov w3, w22
+    mov w0, #OP_POS
     bl _fe_emit_new
     b Lfe_expr_primary_ret
 

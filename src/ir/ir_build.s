@@ -2,7 +2,8 @@
 // src/ir/ir_build.s -- IR builder API (include/ir.inc, docs/IR.md).
 //
 // All memory comes from _drv_alloc and is never freed. Growable arrays
-// (instructions, labels, strings, data, string data, FILES names) double their capacity by
+// (instructions, labels, strings, data, string data, FILES names, Sixth
+// Edition: SUB units) double their capacity by
 // allocating a new block and copying; the old block is abandoned.
 // Every function follows AAPCS64 and preserves x19-x28, d8-d15.
 // =====================================================================
@@ -12,6 +13,7 @@
 .equ Lir_INIT_LABELS,   64          // first label block (u32 entries)
 .equ Lir_INIT_STRINGS,  16          // first string table block (entries)
 .equ Lir_INIT_DATA,     64          // first data block (u64 entries)
+.equ Lir_INIT_SUBS,     8           // first SUB unit table block (pointers)
 
     .section __TEXT,__text,regular,pure_instructions
 
@@ -558,6 +560,155 @@ Lir_set_fnkind_bad:
     IR_ADR x0, Lir_m_badfunc
     b _drv_fatal
 
+// ---------------------------------------------------------------------
+// _ir_new_sub -- create the next SUB unit of a program (Sixth Edition,
+// IR.md 2.2, 4.1): a zeroed Module (NSLOTS = SLOT_FOR_BASE) with
+// PARENT = main, UNITIDX = the main module's old NSUBS, a copy of the
+// name, SUBLINE, no parameters (SUBPARAMS IR_NONE), appended to the main
+// module's IRM_SUBS table.
+//   in:  x0 = main Module*, x1 = name bytes, w2 = name length,
+//        w3 = line of the SUB statement
+//   out: x0 = the new unit's Module*
+//   clobbers: x0-x17
+//   callee-saved: x19 = main Module*, x20 = name bytes, x21 = name
+//                 length, x22 = SUB line, x23 = unit Module*
+//   frame: 64 bytes
+// ---------------------------------------------------------------------
+    .globl _ir_new_sub
+    .p2align 2
+_ir_new_sub:
+    stp x29, x30, [sp, #-64]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]
+    stp x21, x22, [sp, #32]
+    str x23, [sp, #48]
+    mov x19, x0
+    mov x20, x1
+    mov w21, w2
+    mov w22, w3
+    // the unit: a fresh module of its own
+    bl _ir_module_new
+    mov x23, x0
+    str x19, [x23, #IRM_PARENT]
+    ldr w9, [x19, #IRM_NSUBS]
+    str w9, [x23, #IRM_UNITIDX]
+    str w22, [x23, #IRM_SUBLINE]
+    // no parameters until _ir_sub_set: every SUBPARAMS entry IR_NONE
+    mov w9, #IR_NONE
+    mov x10, #0
+1:
+    add x11, x23, x10, lsl #2
+    str w9, [x11, #IRM_SUBPARAMS]
+    add x10, x10, #1
+    cmp x10, #LIM_SUB_PARAMS
+    b.lo 1b
+    // private copy of the name's bytes
+    mov x0, x21
+    bl _drv_alloc
+    str x0, [x23, #IRM_SUBNAME]
+    str w21, [x23, #IRM_SUBNAMELEN]
+    cbz x21, 2f
+    mov x1, x20
+    mov x2, x21
+    bl _memcpy
+2:
+    // room for one more pointer in the main module's IRM_SUBS
+    ldr w9, [x19, #IRM_NSUBS]
+    ldr w10, [x19, #IRM_CAPSUBS]
+    cmp w9, w10
+    b.lo 3f
+    // full: double the table (first block Lir_INIT_SUBS entries)
+    lsl w11, w10, #1
+    mov w12, #Lir_INIT_SUBS
+    cmp w10, #0
+    csel w11, w12, w11, eq
+    str w11, [x19, #IRM_CAPSUBS]
+    ldr x0, [x19, #IRM_SUBS]
+    lsl x1, x9, #3                      // bytes in use
+    lsl x2, x11, #3                     // new size
+    bl Lir_grow
+    str x0, [x19, #IRM_SUBS]
+3:
+    // SUBS[n] = unit; NSUBS = n + 1
+    ldr x10, [x19, #IRM_SUBS]
+    ldr w9, [x19, #IRM_NSUBS]
+    str x23, [x10, x9, lsl #3]
+    add w9, w9, #1
+    str w9, [x19, #IRM_NSUBS]
+    mov x0, x23
+    ldr x23, [sp, #48]
+    ldp x21, x22, [sp, #32]
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #64
+    ret
+
+// ---------------------------------------------------------------------
+// _ir_sub_set -- record the parameters and the SUBEND line of a unit
+// (IR.md 2.2, 4.1).
+//   in:  x0 = unit Module*, w1 = nparams 0..LIM_SUB_PARAMS,
+//        x2 = u32[nparams] slots / letters, x3 = u8[nparams] SUBP_* kinds
+//        (both unread if nparams = 0), w4 = SUBEND line
+//   out: none (SUBNPARAMS, SUBPARAMS with the rest IR_NONE, SUBPKINDS
+//        with the rest 0, SUBENDLINE)
+//   clobbers: x0, x9-x12 (leaf except for the out-of-range fatal error)
+// ---------------------------------------------------------------------
+    .globl _ir_sub_set
+    .p2align 2
+_ir_sub_set:
+    cmp w1, #LIM_SUB_PARAMS
+    b.hi Lir_sub_set_bad
+    str w1, [x0, #IRM_SUBNPARAMS]
+    str w4, [x0, #IRM_SUBENDLINE]
+    // entry k: the caller's values for k < nparams, IR_NONE / 0 after
+    mov x9, #0
+1:
+    mov w10, #IR_NONE
+    mov w11, #0
+    cmp w9, w1
+    b.hs 2f
+    ldr w10, [x2, x9, lsl #2]
+    ldrb w11, [x3, x9]
+2:
+    add x12, x0, x9, lsl #2
+    str w10, [x12, #IRM_SUBPARAMS]
+    add x12, x0, x9
+    strb w11, [x12, #IRM_SUBPKINDS]
+    add x9, x9, #1
+    cmp x9, #LIM_SUB_PARAMS
+    b.lo 1b
+    ret
+Lir_sub_set_bad:
+    IR_ADR x0, Lir_m_badsubparams
+    b _drv_fatal
+
+// ---------------------------------------------------------------------
+// _ir_set_param_array -- enter an array parameter of a unit (IR.md 2.2):
+// arrays (numeric) or sarrays (string) entry of the letter := DIMS,
+// B1 = B2 = 0, FLAGS = IRA_FLAG_PARAM.
+//   in:  x0 = unit Module*, w1 = letter 0..25, w2 = dims 1, 2 or
+//        IRA_DIMS_ANY, w3 = 0 numeric array / 1 string array
+//   out: none
+//   clobbers: x0, x9 (leaf except for the out-of-range fatal error)
+// ---------------------------------------------------------------------
+    .globl _ir_set_param_array
+    .p2align 2
+_ir_set_param_array:
+    cmp w1, #NUM_LETTERS
+    b.hs Lir_set_array_bad
+    // entry = module + IRM_ARRAYS (or IRM_SARRAYS) + letter * IRA_SIZE
+    mov w9, #IRA_SIZE
+    umaddl x0, w1, w9, x0
+    add x9, x0, #IRM_ARRAYS
+    add x0, x0, #IRM_SARRAYS
+    cmp w3, #0
+    csel x0, x9, x0, eq
+    str w2, [x0, #IRA_DIMS]
+    str wzr, [x0, #IRA_B1]
+    str wzr, [x0, #IRA_B2]
+    mov w9, #IRA_FLAG_PARAM
+    str w9, [x0, #IRA_FLAGS]
+    ret
+
     .section __TEXT,__cstring,cstring_literals
 Lir_m_badfunc:
     .asciz "ir: function index out of range"
@@ -565,3 +716,5 @@ Lir_m_badletter:
     .asciz "ir: array letter out of range"
 Lir_m_badnparams:
     .asciz "ir: too many function parameters"
+Lir_m_badsubparams:
+    .asciz "ir: too many SUB parameters"

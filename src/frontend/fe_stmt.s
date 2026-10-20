@@ -37,6 +37,12 @@
 // function (+8 = its `sfv` sref). PRINT # and INPUT # (fe_files.s,
 // fe_input.s) emit `fsel` through _fe_fsel before every print / input
 // opcode; IF END # is recognised after IF before any comparison.
+// Sixth Edition: CALL, SUBEND and SUB are in fe_sub.s; END must be the
+// last line of the main program (lines of SUB blocks may follow) and ends
+// an open SUB block with UNFINISHED SUB; jumps must stay in their program
+// unit; TOO MANY LOOPS counts the FOR statements of all units; DIM of a
+// SUB's array parameter is ILLEGAL VARIABLE; SEG$( is a string item and a
+// string comparison like STR$(, and never a target.
 // =====================================================================
 .include "baysick.inc"
 
@@ -205,10 +211,18 @@ Lfe_stmt_name:
     // STR$( is a function call, never a target (LANGUAGE.md 4.6)
     cmp w19, #('S' - 'A')
     b.ne 5f
+    // (and SEG$(, Sixth Edition)
+    cmp w20, #'E'
+    b.ne 9f
+    cmp w21, #'G'
+    b.eq 8f
+    b 5f
+9:
     cmp w20, #'T'
     b.ne 5f
     cmp w21, #'R'
     b.ne 5f
+8:
     mov w0, #3
     bl _fe_peek
     cmp w0, #'$'
@@ -778,6 +792,14 @@ _fe_jump_target:
     b 4f
 3:
     // the target must belong to the same function as this line
+    // ... and to the same program unit (LANGUAGE.md 7.27)
+    adrp x9, _fe_lineunit@PAGE
+    ldr x9, [x9, _fe_lineunit@PAGEOFF]
+    ldr w10, [x9, w0, uxtw #2]
+    adrp x9, _fe_curunit@PAGE
+    ldr w11, [x9, _fe_curunit@PAGEOFF]
+    cmp w10, w11
+    b.ne 7f
     adrp x9, _fe_linefn@PAGE
     ldr x9, [x9, _fe_linefn@PAGEOFF]
     ldr w10, [x9, w0, uxtw #2]
@@ -785,6 +807,7 @@ _fe_jump_target:
     ldr w11, [x9, _fe_curowner@PAGEOFF]
     cmp w10, w11
     b.eq 5f
+7:
     adrp x9, _fe_xfer_line@PAGE
     ldr w10, [x9, _fe_xfer_line@PAGEOFF]
     cbnz w10, 4f
@@ -1051,7 +1074,8 @@ Lfe_let_is_no:
 //   in: scanner after "PRINT"   out: none
 //   clobbers: x0-x17, d0-d7
 //   callee-saved: w19 = previous element (FE_PR_*), x20 = saved
-//        position, w21 = string length / temp
+//        position, w21 = string length / temp, x21 / w22 = position /
+//        token after a string constant (Sixth Edition: '&' follows?)
 //   frame: 96 bytes (frame record, x19-x22, 40-byte token at sp+48)
 // ---------------------------------------------------------------------
 .equ FE_PR_NONE,        0
@@ -1107,6 +1131,8 @@ Lfe_stmt_print_loop:
     ldr w9, [sp, #(48 + TOK_INDEX)]
     cmp w9, #BI_STR
     b.eq Lfe_stmt_print_sref
+    cmp w9, #BI_SEG                     // SEG$( too (Sixth Edition)
+    b.eq Lfe_stmt_print_sref
 2:
     cmp w0, #TK_COMMA
     b.eq Lfe_stmt_print_comma
@@ -1123,6 +1149,16 @@ Lfe_stmt_print_loop:
     bl _fe_err
 
 Lfe_stmt_print_string:
+    // a constant followed by '&' starts a concatenation: a string
+    // expression item (`prsv`, IR.md 4.3)
+    bl _fe_getpos
+    mov x21, x0
+    bl _fe_next_op
+    mov w22, w0                         // the token after the constant
+    mov x0, x21
+    bl _fe_setpos
+    cmp w22, #TK_AMP
+    b.eq Lfe_stmt_print_sref
     // prstr sK (the constant counts toward TOO MANY LABELS)
     ldr x0, [sp, #(48 + TOK_PTR)]
     ldr w1, [sp, #(48 + TOK_LEN)]
@@ -1237,13 +1273,20 @@ Lfe_stmt_print_end:
 Lfe_stmt_end:
     stp x29, x30, [sp, #-16]!
     mov x29, sp
+    // END IS NOT LAST: a line of the main program follows (the lines of
+    // SUB blocks may follow it, LANGUAGE.md 7.3)
     adrp x9, _fe_lineidx@PAGE
     ldr w9, [x9, _fe_lineidx@PAGEOFF]
     adrp x10, _fe_nlines@PAGE
     ldr w10, [x10, _fe_nlines@PAGEOFF]
+    adrp x11, _fe_lineunit@PAGE
+    ldr x11, [x11, _fe_lineunit@PAGEOFF]
+3:
     add w9, w9, #1
     cmp w9, w10
-    b.eq 1f
+    b.hs 1f
+    ldr w12, [x11, x9, lsl #2]
+    cbnz w12, 3b                        // a line of a SUB block
     mov w0, #ERR_END_NOT_LAST
     bl _fe_err
 1:
@@ -1259,6 +1302,21 @@ Lfe_stmt_end:
     mov w0, #ERR_UNFINISHED_DEF
     bl _fe_fail
 2:
+    // END inside a SUB block: that block was never closed (UNFINISHED SUB
+    // at its SUB line)
+    // Note: _fe_curunit != 0 means this END line is compiled in the SUB unit,
+    // although LANGUAGE.md 7.27 makes the END line a line of the main
+    // program. That is unobservable: a program with an END line inside a
+    // SUB block always fails here with UNFINISHED SUB, so no code from this
+    // line ever reaches phase 3.
+    adrp x9, _fe_curunit@PAGE
+    ldr w0, [x9, _fe_curunit@PAGEOFF]
+    cbz w0, 4f
+    bl _fe_unit_subline
+    mov w1, w0                          // the SUB line number
+    mov w0, #ERR_UNFINISHED_SUB
+    bl _fe_fail
+4:
     bl _fe_expect_eol
     adrp x9, _fe_has_end@PAGE
     mov w10, #1
@@ -1617,6 +1675,8 @@ Lfe_stmt_if:
     ldr w9, [sp, #(48 + TOK_INDEX)]
     cmp w9, #BI_STR
     b.eq Lfe_stmt_if_string
+    cmp w9, #BI_SEG                     // SEG$( too (Sixth Edition)
+    b.eq Lfe_stmt_if_string
 6:
     cmp w20, #TK_BAD
     b.ne Lfe_stmt_if_number
@@ -1713,11 +1773,16 @@ Lfe_stmt_for:
     // at most LIM_FORS FOR statements
     adrp x9, _fe_nfors@PAGE
     ldr w23, [x9, _fe_nfors@PAGEOFF]
-    cmp w23, #LIM_FORS
+    // ... counted over the whole program, all units (LANGUAGE.md 7.8)
+    adrp x9, _fe_totalfors@PAGE
+    ldr w10, [x9, _fe_totalfors@PAGEOFF]
+    cmp w10, #LIM_FORS
     b.lo 1f
     mov w0, #ERR_TOO_MANY_LOOPS
     bl _fe_err
 1:
+    add w10, w10, #1
+    str w10, [x9, _fe_totalfors@PAGEOFF]
     bl Lfe_stmt_loopvar
     mov w19, w0
     mov w0, #TK_EQ
@@ -2010,6 +2075,9 @@ Lfe_stmt_dim_loop:
     bl _fe_advance
     add x20, x20, w19, uxtw #4
     ldr w9, [x20, #12]
+    // a parameter array of a SUB cannot be dimensioned (LANGUAGE.md 7.27)
+    tst w9, #IRA_FLAG_PARAM
+    b.ne Lfe_stmt_dim_var
     tst w9, #IRA_FLAG_DIMMED            // already set by a DIM?
     b.eq 1f
     mov w0, #ERR_DUPLICATE_DIMENSION
@@ -2152,6 +2220,9 @@ Lfe_stmt_keywords:
     FE_KW "FNEND", KW_FNEND
     FE_KW "FILES", KW_FILES
     FE_KW "SCRATCH", KW_SCRATCH
+    FE_KW "CALL", KW_CALL
+    FE_KW "SUBEND", KW_SUBEND           // before SUB, its prefix (LANGUAGE.md 3.1)
+    FE_KW "SUB", KW_SUB
     .byte 0, 0
     .space (FE_KW_ENTRY - 2)
 // one entry per keyword plus RANDOM (DESIGN.md 2.4)
@@ -2187,6 +2258,9 @@ Lfe_stmt_handlers:
     .quad _fe_fnend                     // fe_def.s
     .quad _fe_files                     // fe_files.s
     .quad _fe_scratch                   // fe_files.s
+    .quad _fe_callstmt                  // fe_sub.s
+    .quad _fe_subend                    // fe_sub.s
+    .quad _fe_sub                       // fe_sub.s
 Lfe_stmt_handlers_end:
 .if ((Lfe_stmt_handlers_end - Lfe_stmt_handlers) != (KW_COUNT * 8))
     .error "fe_stmt.s: the statement handler table does not have KW_COUNT entries"

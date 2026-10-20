@@ -837,7 +837,8 @@ internal error (exit 4). Checks:
      `NSLOTS`, arrays, sarrays, functions, `fnkinds` and `NSTEMPS`, and the main module's string
      table (`slit`, `prstr` ids `< NSTRINGS` of the main module). The main module: unit fields 0,
      each `IRM_SUBS[u]` non-null. Each unit: `PARENT` = the main module, `UNITIDX` = u, `NSUBS`,
-     `NSTRINGS`, `NDATA`, `NSDATA`, `NFILES` 0, `SUBNAMELEN ≥ 1`, `SUBLINE < SUBENDLINE`,
+     `NSTRINGS`, `NDATA`, `NSDATA`, `NFILES` 0 (a unit's `SUBS` and `CAPSUBS` are not checked,
+     only `NSUBS` = 0), `SUBNAMELEN ≥ 1`, `SUBLINE < SUBENDLINE`,
      `SUBNPARAMS ≤ LIM_SUB_PARAMS`, `SUBPKINDS[k] ≤ SUBP_SARR`; `SUBPARAMS[k]` `< 286` for
      `SUBP_NUM`/`SUBP_STR`, a letter `< 26` whose `arrays` (`SUBP_ARR`) or `sarrays`
      (`SUBP_SARR`) entry has `IRA_FLAG_PARAM`; no two parameters equal (same kind and number);
@@ -865,7 +866,9 @@ internal error (exit 4). Checks:
      saref exactly for `SUBP_NUM` / `SUBP_STR` / `SUBP_ARR` / `SUBP_SARR` of the callee, and an
      sref argument is never defined by `slit`; for an aref or saref argument whose callee
      parameter has `DIMS` 1 or 2 nothing more is checked (the runtime checks at entry, LANGUAGE.md
-     §7.27).
+     §7.27). These caller-side `callsub` checks run before the callee unit's own checks, so a
+     bad parameter record of the callee may be reported as a `callsub` mismatch; either way the
+     result is internal error 4.
    * Not checked (guaranteed by the frontend): that no cell is allocated by two instructions
      (`scell`, `sseg`), and that a `taddr` temp is not read after its `callsub`.
 

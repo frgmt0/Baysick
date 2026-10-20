@@ -18,7 +18,7 @@ of the **Fifth Edition** (1970: sequential files with `FILES`, `PRINT #`, `INPUT
 arguments and string values; two-dimensional string arrays), and by a scoped part of the **Sixth
 Edition** (1971: the string functions `SEG$` and `POS`, the concatenation operator `&`, and
 `CALL`/`SUB`/`SUBEND` subprograms with parameters by reference and no shared variables;
-"The Sixth Edition" below; **specified, being implemented**, DESIGN.md §2.5). Sections marked
+"The Sixth Edition" below; **implemented**, DESIGN.md §2.5). Sections marked
 **Baysick decision:** are places where the historical behaviour is unknown, impractical on a
 modern machine, or deliberately extended; each states the choice and why. §14 lists every place
 where a later edition *changed* the meaning of a program an earlier edition already accepted,
@@ -702,7 +702,9 @@ values (no conversion can wrap: `SEG$(A$, -1E30, 1E30)` is all of A$).
   range gives the empty string. `SEG$("HELLO", 2, 3)` = `"EL"`, `SEG$("HELLO", 0, 2)` = `"HE"`,
   `SEG$("HELLO", 4, 99)` = `"LO"`, `SEG$("HELLO", 3, 2)` = `""`, `SEG$("HELLO", 6, 9)` = `""`,
   `SEG$("HELLO", 2.5, 3.49)` = `"L"` (3 through 3), `SEG$("", 1, 1)` = `""`. Trailing blanks are
-  bytes like any other: `SEG$("AB  ", 3, 4)` is two blanks (`LEN` 2).
+  bytes like any other: `SEG$("AB  ", 3, 4)` is two blanks (`LEN` 2). A `SEG$` call is a value,
+  not a variable: as the target of LET or of CHANGE … TO it is `ILLEGAL VARIABLE`
+  (`LET SEG$(A$, 1, 2) = "X"`, `CHANGE L TO SEG$(A$, 1, 2)`).
 * **`POS(s, t, m)`**, with L and K the lengths of s and t and m' the rounded start: let
   `start = max(m', 1)`. The value is the smallest integer p with `start ≤ p ≤ L − K + 1` such that
   the K bytes of s at positions `p … p + K − 1` equal the bytes of t; **0** if there is none.
@@ -1902,7 +1904,10 @@ errors are reported later, in phase-2 order (§10.1); a **SUBEND line** is a lin
 starts with `SUBEND`, whatever follows it. A SUB line that is not inside a multi-line DEF body
 (§7.10) and not inside another SUB block starts a SUB block, which ends at the next SUBEND line
 (or, in an erroneous program, at the END line or after the last line, below). (Multi-line DEF
-bodies are found by the same pre-scan, from the DEF lines without `=` and the FNEND lines.) Each SUB block is a
+bodies are found by the same pre-scan, from the DEF lines without `=` and the FNEND lines.) An END
+line inside a SUB block ends the block in the pre-scan: the END line and the lines after it are
+main-program lines, so a later line makes that END `END IS NOT LAST` (§7.3). A SUBEND or END line
+inside a multi-line DEF body within a SUB block ends both the body and the block. Each SUB block is a
 **subprogram**; the lines outside every SUB block are the **main program**. The main program and
 the subprograms are the **program units**. A SUB block may stand anywhere in the line order; the
 customary place, and the one every example uses, is after the main program's `END` ([C74]).
@@ -1914,7 +1919,9 @@ runs only through CALL.
 not compacted) and compared byte for byte, so `"SUM"`, `"sum"` and `"S UM"` are three names. A
 name is not a string constant: it is neither a PRINT label nor counted for `TOO MANY LABELS`
 (§4.3). A second SUB with a name already used → `DUPLICATE SUBPROGRAM IN n` (n = the later SUB
-line). After the whole program is read, a CALL of a name that no SUB has →
+line), decided as soon as the name has been read, before the rest of the statement is checked
+(`SUB "A": 1` after another `SUB "A"` is `DUPLICATE SUBPROGRAM`). After the whole program is
+read, a CALL of a name that no SUB has →
 `UNDEFINED SUBPROGRAM IN n` (n = the CALL line).
 
 **SUB statement.** After `SUB` the name must follow (`"`), else `INCORRECT FORMAT`; an
@@ -1929,13 +1936,16 @@ a simple variable (`X`, `X1`), a string variable (`X$`), a numeric array `L()` o
 a seventeenth parameter starts, whatever it is (like the ninth DEF parameter, §7.10); after a
 parameter anything but `,` or end of line → `INCORRECT FORMAT`.
 
-**SUBEND statement.** `SUBEND` with nothing after it (text after it → `INCORRECT FORMAT`). A
-SUBEND outside every SUB block → `ILLEGAL INSTRUCTION IN n` (as FNEND outside a DEF body).
+**SUBEND statement.** `SUBEND` with nothing after it (text after it → `INCORRECT FORMAT`,
+checked before the `UNFINISHED DEF` and `UNFINISHED SUB` of a SUBEND line below, as text after
+FNEND is checked before a FOR open at FNEND). A SUBEND outside every SUB block →
+`ILLEGAL INSTRUCTION IN n` (as FNEND outside a DEF body).
 
 **Structure errors** (per statement, §10.1 phase 2, unless stated):
 
 * a SUB line inside a SUB block or inside a multi-line DEF body → `NESTED SUB IN n` (n = that SUB
-  line);
+  line), checked before anything after the keyword, so a nested `SUB 1` or a nested SUB with a
+  name already used is `NESTED SUB` too;
 * an END line while a SUB block is open → `UNFINISHED SUB IN n` (n = the SUB line of the open
   block; END belongs to the main program, §7.3);
 * a SUBEND line while a multi-line DEF of the same block is open → `UNFINISHED DEF IN n` (n = the
@@ -2031,6 +2041,10 @@ first gives `TOO MANY CALLS`:
   largest statement and its CALL arguments) and that of its longest chain of function calls. The
   sum of the costs of the active activations never exceeds **2 097 152** words
   (`LIM_CALL_WORDS`, 16 MiB).
+
+A subprogram whose single activation costs more than the whole call budget (more than
+`LIM_CALL_WORDS`) gives `TOO MANY CALLS` on its first CALL, wherever it is called from: for example
+`DIM A(999999), B(999999), C(99999)` inside a SUB, while the same DIM is fine in the main program.
 
 Both limits depend only on the program text, so the point where `TOO MANY CALLS` occurs is the
 same on every target and every machine. Every subprogram costs at least 858 words, so without

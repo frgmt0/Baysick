@@ -116,16 +116,8 @@ ASSERT ((SUBL_COST + 4) == SUBL_DESCS),                    "SUBL_DESCS"
 ASSERT (RT_PROGRAM_STACK_BYTES == ((8 * LIM_CALL_WORDS) + RT_STACK_RESERVE_BYTES)), "program stack holds the call budget plus the reserve"
 ASSERT ((RT_PROGRAM_STACK_BYTES % 65536) == 0),            "program stack is a multiple of every page size"
 ASSERT (RT_FRAME_EXTRA_WORDS == 6),                        "frame overhead words"
-.if BSK_ED6_CONTRACT
 ASSERT (OP_COUNT == (OP_SUBRET + 1)),                      "OP_COUNT"
 ASSERT (KW_COUNT == (KW_SUB + 1)),                         "KW_COUNT"
 ASSERT (TK_COUNT == (TK_AMP + 1)),                         "TK_COUNT"
 ASSERT (BI_COUNT == (BI_POS + 1)),                         "BI_COUNT"
 ASSERT ((IRM_SUBPKINDS + LIM_SUB_PARAMS) == IRM_SIZE),     "IRM layout (Sixth Edition)"
-.else
-ASSERT (OP_COUNT == (OP_FRESTORE + 1)),                    "OP_COUNT (Fifth Edition staging)"
-ASSERT (KW_COUNT == (KW_SCRATCH + 1)),                     "KW_COUNT (Fifth Edition staging)"
-ASSERT (TK_COUNT == (TK_SFN0 + 1)),                        "TK_COUNT (Fifth Edition staging)"
-ASSERT (BI_COUNT == (BI_STR + 1)),                         "BI_COUNT (Fifth Edition staging)"
-ASSERT ((IRM_FNKINDS + NUM_FUNCS*4 + 4) == IRM_SIZE),      "IRM layout (Fifth Edition staging)"
-.endif

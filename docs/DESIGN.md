@@ -191,6 +191,9 @@ directory):
 src/frontend/fe_sub.s       SUB, SUBEND, CALL (LANGUAGE.md 7.27): the program-unit partition
                             (pre-scan), per-unit symbol state, CALL arguments and their
                             lowering (IR.md 4.3), the phase-3 CALL checks
+                            (An END line met inside a SUB block is compiled in that unit, not
+                            in the main program; unobservable, as it always ends in
+                            UNFINISHED SUB, LANGUAGE.md 7.3.)
 src/runtime/rt_sub.s        _bsk_sub_enter _bsk_sub_leave, the call stack (§6.9)
 src/runtime/rt_ed6.s        _bsk_str_cat _bsk_seg _bsk_pos
 src/runtime_x86_64_linux/rt_sub.s     bsk_sub_enter bsk_sub_leave, the call stack
@@ -235,7 +238,7 @@ sizes, so each contract change was staged behind a temporary assembler switch wh
 were implemented, and the switch was removed at integration in one commit. The integrated
 values:
 
-| Constant | Second Edition (MAT) | Fourth Edition | Fifth Edition (current, switch 0) | Sixth Edition (switch 1) |
+| Constant | Second Edition (MAT) | Fourth Edition | Fifth Edition | Sixth Edition (current) |
 |----------|----------------------|----------------|-----------------------------------|--------------------------|
 | `OP_COUNT` | 55 | 85 (`OP_STFV + 1`) | 99 (`OP_FRESTORE + 1`) | 111 (`OP_SUBRET + 1`) |
 | `KW_COUNT` | 16 | 22 (`KW_FNEND + 1`) | 24 (`KW_SCRATCH + 1`) | 27 (`KW_SUB + 1`) |
@@ -272,41 +275,36 @@ the two Fourth Edition error tests whose text became legal were rewritten as LAN
 specifies (`tests/errors/c_ed4_string_table_dim`, `tests/errors/c_ed4_string_two_subscripts`:
 new `.bas` and `.err`, the same names).
 
-**How the Sixth Edition is staged** (current). Exactly as the Fifth Edition was: the switch
-`BSK_ED6_CONTRACT`, defined in `include/ir.inc` and `include/tokens.inc` with default 0, selects
-only the counts of the last column above and `IRM_SIZE`; the rest of the Sixth Edition contract
-(the opcode values 99–110, `TK_AMP`, `BI_SEG`, `BI_POS`, `KW_CALL`, `KW_SUBEND`, `KW_SUB`,
-`FUNC_KIND_SUB`, `SUBP_*`, `IRA_FLAG_PARAM`, `IRA_DIMS_ANY`, the `IRM_*` unit offsets, the error
-codes 56–61 with `ERR_END_RUNTIME` 57 and `ERR_TABLE_SIZE` 62, `LIM_SUB_PARAMS`,
-`LIM_CALL_DEPTH`, `LIM_CALL_WORDS`, the `SUBL_*`/`SUBD_*` layout, `RT_FRAME_EXTRA_WORDS`,
-`RT_STACK_RESERVE_BYTES`, `RT_PROGRAM_STACK_BYTES` and the runtime names in `runtime.inc`) is
-unconditional. `make BSK_ED6=1` assembles every compiler and runtime file with the switch 1;
-`make check-includes` assembles the include check with both values. While the packages (§2.5)
-are implemented, plain `make` / `make test` (switch 0) keeps passing every earlier test (329 on
-the Mac, 192 cross): each **compiler** module (F, D, B, BX) keeps its Sixth Edition code out of
-the switch-0 build with `.if BSK_ED6_CONTRACT` blocks. The **runtime** code (R, RX) is **not**
-under the switch: neither runtime has a table sized by a contract count, and `Makefile.linux`
-(which `tests/cross_run.sh` uses to build the x86_64 runtime) never sets the switch, so the new
-entry points, the call stack, the call budget and the runtime-owned program stack (§6.9) are
-in every runtime build, and switch-0 programs keep linking and behaving exactly as before
-(they never call the new entry points; the program stack only gives them a larger, fixed
-stack). The new error messages are in every build (the message table is unconditional) but no
-switch-0 compiler module produces them. Neither runtime references a symbol that only Sixth
-Edition programs define (`_bsk_sub_enter` is called *by* programs, the `SUBL` records are passed
-to it), so both runtimes link with the programs of either compiler and need no `.weak`
-declaration. The switch-1 compiler is cross-tested with `make clean; make BSK_ED6=1 cross` (the
-bundle carries the switch-1 compiler's assembly; the Linux runtime is built as always).
-`make check-includes` assembles both switch values; `make -f Makefile.linux check-includes`
-assembles only switch 0 (Makefile.linux has no switch), and switch 1 is checked with GNU `as`
-by hand: `as --64 --fatal-warnings -I include -I tests --defsym BSK_ED6_CONTRACT=1 -o
-/dev/null tests/include_check_x86_64.s`. The Sixth Edition corpus — exactly
-`tests/programs/ed6_*`, `tests/programs/manual6_*`, `tests/errors/c_ed6_*`,
-`tests/errors/r_ed6_*` and `tests/ir/ed6_*` — fails by design until its features are in (at the
-design commit: every one of these tests fails, and no other test does, with either switch value
-once step 0 is done; before step 0 the switch-1 build stops at the table asserts), and the design
-and implementation commits stay local until the integration commit, so CI on the pushed branch
-stays green. No earlier test's text becomes legal (LANGUAGE.md §14.1), so no earlier test is
-rewritten at integration.
+**How the Sixth Edition was staged** (history). Exactly as the Fifth Edition was: the switch,
+defined in `include/ir.inc` and `include/tokens.inc` with default 0, selected only the counts of
+the last column above and `IRM_SIZE`; the rest of the Sixth Edition contract (the opcode values
+99–110, `TK_AMP`, `BI_SEG`, `BI_POS`, `KW_CALL`, `KW_SUBEND`, `KW_SUB`, `FUNC_KIND_SUB`, `SUBP_*`,
+`IRA_FLAG_PARAM`, `IRA_DIMS_ANY`, the `IRM_*` unit offsets, the error codes 56–61 with
+`ERR_END_RUNTIME` 57 and `ERR_TABLE_SIZE` 62, `LIM_SUB_PARAMS`, `LIM_CALL_DEPTH`,
+`LIM_CALL_WORDS`, the `SUBL_*`/`SUBD_*` layout, `RT_FRAME_EXTRA_WORDS`, `RT_STACK_RESERVE_BYTES`,
+`RT_PROGRAM_STACK_BYTES` and the runtime names in `runtime.inc`) was unconditional from the
+design commit. A `make` variable assembled every compiler and runtime file with the switch 1, and
+`make check-includes` assembled the include check with both values. While the packages (§2.5)
+were implemented, plain `make test` (switch 0) kept passing every earlier test (329 on the Mac,
+192 cross): each **compiler** module (F, D, B, BX) kept its Sixth Edition code out of the
+switch-0 build with `.if` blocks. The **runtime** code (R, RX) was never under the switch:
+neither runtime has a table sized by a contract count, and `Makefile.linux` never set the
+switch, so the new entry points, the call stack, the call budget and the runtime-owned program
+stack (§6.9) were in every runtime build from the start, and switch-0 programs linked and behaved
+exactly as before (they never called the new entry points; the program stack only gave them a
+larger, fixed stack). Neither runtime references a symbol that only Sixth Edition programs
+define (`_bsk_sub_enter` is called *by* programs, the `SUBL` records are passed to it), so no
+`.weak` declaration was needed. The switch-1 compiler was cross-tested by building the bundle
+with the switch on (the Linux runtime built as always), and the switch-1 include check was run
+on Linux with GNU `as` by hand. The Sixth Edition corpus failed by design until its features
+were in, and the design and implementation commits stayed local until the integration commit,
+so CI on the pushed branch stayed green.
+
+Integration (§2.5 step 2) deleted the switch, its `.if` blocks and Makefile lines, and the code
+only the switch-0 build used (the switch-0 phase-3 sequence in `fe_compile.s` and the
+single-unit FN check `_fe_check_fns` it called, now done per unit by `_fe_sub_check_fns`);
+`tests/include_asserts.inc` kept the Sixth Edition assertions; `--version` changed (§4.1).
+No earlier test's text became legal (LANGUAGE.md §14.1), so no earlier test was rewritten.
 
 ### 2.3 Third and Fourth Edition work packages
 
@@ -375,11 +373,11 @@ The Fifth Edition tests are `tests/programs/ed5_*`, `tests/programs/manual5_*`,
 ### 2.5 Sixth Edition work packages
 
 LANGUAGE.md "The Sixth Edition", §3, §4.4–§4.6, §5, §6.2, §7.3, §7.6–§7.10, §7.27, §10–§14
-(`SEG$`, `POS`, `&`, `CALL`/`SUB`/`SUBEND`) touch every compiler and runtime module; each
-implementer changes only its own files, and everything is built and tested with the staging
-switch on until integration (§2.2). The contracts are complete in `include/*.inc`, IR.md §2.2,
+(`SEG$`, `POS`, `&`, `CALL`/`SUB`/`SUBEND`) touched every compiler and runtime module; each
+implementer changed only its own files, and everything was built and tested with the staging
+switch on until integration (§2.2). The contracts were complete in `include/*.inc`, IR.md §2.2,
 §3.4, §4, §5, §6 rule 9 and this document (§5.3, §5.3.1, §5.4, §5.4.6, §6.9), so the six packages
-need no other agreement.
+needed no other agreement.
 
 | Owner | Files | Work |
 |-------|-------|------|
@@ -387,38 +385,35 @@ need no other agreement.
 | D | `src/ir/`, `src/driver/` | builder: `_ir_new_sub`, `_ir_sub_set`, `_ir_set_param_array`, `IRM_SIZE` 3760 at switch 1 (ir.inc); dumper: the unit sections, `param` array lines, `func SUB`, every §3.4 text form (IR.md §5); verifier: rule 9 and the new kinds, groups and placement (IR.md §3, §6); driver: `--version` and the help line at integration (§4.1); pad the dumper's and verifier's opcode tables at switch 1 (step 0) |
 | B | `src/backend/arm64_macos/` | §5.3: frames with the argument vector, every new row, SUB units (§5.3.1: labels, block layout, `Lsubl_`/`Lsubt_` records, the unit cost `SUBL_COST`, SUB prologue, FN functions of a unit keep `x19`, parameter and block addressing in every variable/array/cell row); pad the dispatch table and adjust the Fifth Edition table assert in `a64_insn.s` at switch 1 (step 0) |
 | BX | `src/backend/x86_64_linux/` | §5.4: the same for x86_64 (§5.4.4 frames, §5.4.5 rows, §5.4.6 SUB units, the same `SUBL_COST` as B, computed by the §5.3.1 formula); pad the dispatch table at switch 1 (step 0) |
-| R | `src/runtime/` (new `rt_sub.s`, `rt_ed6.s`; changes in `rt_gosub.s`, `rt_main.s`, `rt_error.s`) | §6.9: `_bsk_str_cat`, `_bsk_seg`, `_bsk_pos`, `_bsk_sub_enter`, `_bsk_sub_leave`, the call stack, the call budget (`SUBL_COST` against `LIM_CALL_WORDS`), the GOSUB base, the program stack (mmap'd `RT_PROGRAM_STACK_BYTES` + guard page, `_bsk_program` run on it), `_bsk_err` accepting exactly 32…56. All of it unconditional (not under the switch, §2.2) |
+| R | `src/runtime/` (new `rt_sub.s`, `rt_ed6.s`; changes in `rt_gosub.s`, `rt_main.s`, `rt_error.s`) | §6.9: `_bsk_str_cat`, `_bsk_seg`, `_bsk_pos`, `_bsk_sub_enter`, `_bsk_sub_leave`, the call stack, the call budget (`SUBL_COST` against `LIM_CALL_WORDS`), the GOSUB base, the program stack (mmap'd `RT_PROGRAM_STACK_BYTES` + guard page, `_bsk_program` run on it), `_bsk_err` accepting exactly 32…56. All of it was unconditional (never under the switch, §2.2) |
 | RX | `src/runtime_x86_64_linux/` | the x86_64 counterparts (§6.4, §6.9), including the program stack in `main`; unconditional, like R |
 | T | — | nothing: the Sixth Edition corpus uses only existing harness features (`.in`, `.files/`, `.expect/`) |
 | BENCH | `bench/` | nothing |
 
-Order:
+Order (history; the packages are implemented and integrated, §2.2):
 
 0. **Step 0 — switch-1 build skeleton (F, D, B, BX, before any feature work).** With the switch
-   1 the build stops at nine table asserts (verified at the design commit): `fe_scan.s` (builtin
+   1 the build first stopped at nine table asserts (verified at the design commit): `fe_scan.s` (builtin
    names ≠ `BI_COUNT`), `fe_sexpr.s` (token classes ≠ `TK_COUNT`), `fe_stmt.s` (keyword table and
    handler table ≠ `KW_COUNT`), `ir_dump.s` and `ir_verify.s` (≠ `OP_COUNT`), `a64_insn.s`
    (dispatch table ≠ `OP_COUNT`, and its assert `OP_COUNT == OP_FRESTORE + 1`), `x64_insn.s`
-   (dispatch table ≠ `OP_COUNT`). Each owner first lands a minimal change that makes its module
+   (dispatch table ≠ `OP_COUNT`). Each owner first landed a minimal change that made its module
    assemble with the switch 1: tables extended to the counts, new opcodes 99–110 mapped to an
-   internal-error entry, the new keywords to a handler that reports `ILLEGAL INSTRUCTION`, the new
-   builtins and `TK_AMP` to entries that keep today's error behaviour, the `a64_insn.s` assert
-   rewritten to hold at both values. After step 0 the switch-1 build passes every test that the
-   switch-0 build passes.
-1. **Feature work.** D, R and RX start at once (their contracts are complete and independent).
-   F needs D's builder functions to link (it can start on scanning, parsing and the partition at
-   once). B and BX need D's records and, end to end, F's IR; `tests/ir/ed6_*` shows the expected
-   IR, so B and BX can work from real IR before the runtimes are complete. Before F is done,
-   the IR of IR.md §4.3 and `tests/ir/ed6_*.ir` serve only as a reference for what F will build:
-   there is no IR text reader, so B and BX test end to end once F lowers SUB, CALL and the
-   string operators (they may build IR records directly with D's builder functions in a scratch
-   driver of their own, outside the repository).
-2. **Integration commit** (done by the coordinator after every package has passed its tests with
-   the switch 1): the switch removed as for the Fifth Edition (§2.2: the `.if` blocks, the
-   Makefile lines and the switch-0 code deleted, `tests/include_asserts.inc` keeping the
-   Sixth Edition assertions), `--version` set (§4.1), and the docs updated (§2.2 and this section
-   become history, CLAUDE.md and README.md say "implemented", SEA_BOOTSTRAP.md marks the rows
-   covered). No earlier test changes.
+   internal-error entry, the new keywords to a handler that reported `ILLEGAL INSTRUCTION`, the
+   new builtins and `TK_AMP` to entries that kept the Fifth Edition error behaviour, the
+   `a64_insn.s` assert rewritten to hold at both values. After step 0 the switch-1 build passed
+   every test that the switch-0 build passed.
+1. **Feature work.** D, R and RX started at once (their contracts were complete and
+   independent). F needed D's builder functions to link (it started on scanning, parsing and the
+   partition at once). B and BX needed D's records and, end to end, F's IR; `tests/ir/ed6_*`
+   showed the expected IR. There is no IR text reader, so B and BX tested end to end once F
+   lowered SUB, CALL and the string operators.
+2. **Integration commit** (done by the coordinator after every package had passed its tests
+   with the switch 1): the switch removed as §2.2 describes (the `.if` blocks, the Makefile lines
+   and the switch-0 code deleted, `tests/include_asserts.inc` keeping the Sixth Edition
+   assertions), `--version` set (§4.1), and the docs updated (§2.2 and this section became
+   history, CLAUDE.md and README.md say "implemented", SEA_BOOTSTRAP.md marks the rows covered).
+   No earlier test changed (LANGUAGE.md §14.1).
 
 The Sixth Edition tests are `tests/programs/ed6_*`, `tests/programs/manual6_*`,
 `tests/errors/c_ed6_*`, `tests/errors/r_ed6_*` and `tests/ir/ed6_*`.
@@ -507,7 +502,7 @@ with GNU `as`. Both include `tests/include_asserts.inc`.
 ```
 baysick <file.bas> [-o <out>] [-S] [--emit-ir] [--target <name>] [--keep-temps]
 baysick --help | -h          usage text to stdout, exit 0
-baysick --version            "baysick 0.4.0 (Dartmouth BASIC, Fifth Edition 1970)" + LF, exit 0
+baysick --version            "baysick 0.5.0 (Dartmouth BASIC, Sixth Edition 1971)" + LF, exit 0
 ```
 
 * The Fourth Edition integration (§2.2) changed the version text from
@@ -517,11 +512,10 @@ baysick --version            "baysick 0.4.0 (Dartmouth BASIC, Fifth Edition 1970
   (its line "Compile a Dartmouth BASIC (…) program to a native executable.") from
   `Fourth Edition, 1968` to `Fifth Edition, 1970`. Nothing else in the usage or help text
   changed.
-* The Sixth Edition integration (§2.5) changes it from
+* The Sixth Edition integration (§2.2, §2.5) changed it from
   `baysick 0.4.0 (Dartmouth BASIC, Fifth Edition 1970)` to
   `baysick 0.5.0 (Dartmouth BASIC, Sixth Edition 1971)`, and the edition the help text names from
-  `Fifth Edition, 1970` to `Sixth Edition, 1971`. Nothing else in the usage or help text changes.
-  Until then (the staging switch, §2.2) both texts stay as above.
+  `Fifth Edition, 1970` to `Sixth Edition, 1971`. Nothing else in the usage or help text changed.
 * Options and the input file may appear in any order; exactly one input file is required.
   `-o` and `--target` take the next argument. If an option is repeated, the last one wins.
 * Default `--target` is `arm64-macos`. The other target is `x86_64-linux` (§5.4); its descriptor
@@ -765,7 +759,11 @@ value in a register.
 **argument-vector** slots of 8 bytes, slot k at `[sp, #8*(W+L+k)]`: V = the largest `SUBNPARAMS`
 of the units its `callsub` instructions call (V = 0 without `callsub`, which leaves every earlier
 frame unchanged). The `sub sp` amount becomes `align16(8*(W+L+V) + 8)`. A SUB body has the frame
-of `main` (L = 1, the cell unused) with its own W and V and its own prologue (§5.3.1).
+of `main` (L = 1, the cell unused) with its own W and V and its own prologue (§5.3.1). A
+`callsub` with arguments (A ≠ `IR_NONE`) in a function with V = 0 cannot occur in valid IR and is
+an internal error; a `callsub` without arguments may have V = 0, and then x0 (`%rdi` on x86_64)
+points at the frame's spare word at `8*(W+L)` (the `+ 8` of the `sub sp` amount), which the
+callee never reads.
 
 **Per-opcode translation** (`dN` loads from temp slots; `x19` = globals base):
 
@@ -849,7 +847,8 @@ of `main` (L = 1, the cell unused) with its own W and V and its own prologue (§
 | `subret` | `bl _bsk_sub_leave`, then the epilogue (`mov sp, x29` / `ldp x19, x20, [sp, #16]` / `ldp x29, x30, [sp], #32` / `ret`) |
 
 `line`, `label`, `jmp`, `jcmp`, `sjcmp`, `jfor` and `jeof` inside a multi-line function use its
-labels `Lfn_<L>_L<id>`; inside a SUB unit, the labels of §5.3.1.
+labels `Lfn_<L>_L<id>`; inside a SUB unit, these and `gosub` (its target and its return label)
+use the labels of §5.3.1 (`Lsub_<u>_L<id>` in the SUB body) instead of `Lbsk_L<id>`.
 
 The rows that pass `Lsdesc_<X>` (`sald1`, `smatredim`, `smatread`, `smatprint`, and the element
 forms) take the descriptor of whatever string array X names, so for `smatredim`, `smatread` and
@@ -894,7 +893,8 @@ Both backends compute the same layout from the unit's Module (all offsets in byt
 
 SIZE = align16(end). "Used" arrays are chosen exactly as for `main`'s `Ldesc_`/`Lsdesc_`.
 
-**Records** (in `__DATA,__const` after `_bsk_files_count`, `.p2align 3`):
+**Records** (in `__DATA,__const` after `_bsk_files_count`, each `Lsubl_<u>` preceded by its own
+`.p2align 3`):
 
 ```
 Lsubl_<u>:  .long SIZE, SUBNPARAMS, PARAMOFF, SDOFF, NSD, DESCOFF, NDESC, COST
@@ -903,6 +903,9 @@ Lsubl_<u>:  .long SIZE, SUBNPARAMS, PARAMOFF, SDOFF, NSD, DESCOFF, NDESC, COST
 Lsubt_<u>:  per descriptor, in d(L) order: .quad <block offset of its elements>,
             .long dims, b1, b2, rowlen, letter, cap      (as Ldesc_ / Lsdesc_)
 ```
+
+The `Lsubt_<u>:` label and its templates are emitted only when NDESC > 0 (otherwise nothing
+follows the PDIMS bytes and the record's template pointer is 0).
 
 `SUBL_PDIMS[k]`: `SUBD_SCALAR` for `SUBP_NUM`/`SUBP_STR`; for an array parameter `SUBD_LIST`,
 `SUBD_TABLE` or `SUBD_ANY` from its `DIMS` 1, 2 or `IRA_DIMS_ANY`.
@@ -1082,7 +1085,8 @@ bsk_files_count:
     .quad <NFILES>
     .p2align 3
 .Lsubl_<u>:             Sixth Edition: per SUB unit, the SUBL_* record and .Lsubt_<u> templates
-                        exactly as §5.3.1 ("    .long …" / "    .quad …" / "    .byte …" lines)
+                        exactly as §5.3.1 ("    .long …" / "    .quad …" / "    .byte …" lines);
+                        each unit's .Lsubl_<u> is preceded by its own "    .p2align 3"
     .data
     .p2align 3
 .Ldesc_<L>:             per used array, letter order:
@@ -1164,7 +1168,9 @@ generated function:
   register.
 * **Sixth Edition** (IR.md §3.4.1): after the L cells come the V argument-vector slots of §5.3,
   slot k at `<8*(W+L+k)>(%rsp)`, and F = align16(8*(W+L+V) + 8) − 8 (V = 0 leaves every earlier
-  frame unchanged).
+  frame unchanged). The backend rejects a function with W above `BK_X64_MAX_W` (0x0FFFFFE0,
+  `x64_insn.s`) with an internal error, so with L ≤ 10 and V ≤ 16 the largest frame offset
+  `8*(W+L+V) + 8` always fits a signed 32-bit displacement.
 
 #### 5.4.5 Per-opcode translation
 
@@ -1255,7 +1261,8 @@ generated function:
 | `subret` | `call bsk_sub_leave` / `movq -8(%rbp), %rbx` / `leave` / `ret` |
 
 Inside a multi-line function `line`, `label`, `jmp`, `jcmp`, `sjcmp`, `jfor` and `jeof` use its
-labels `.Lfn_<L>_L<id>`; inside a SUB unit, the labels of §5.4.6.
+labels `.Lfn_<L>_L<id>`; inside a SUB unit, these and `gosub` (its target and its return label)
+use the labels of §5.4.6 (`.Lsub_<u>_L<id>` in the SUB body) instead of `.Lbsk_L<id>`.
 
 As in §5.3, the `.Lsdesc_<X>` rows (`sald1`, `smatredim`, `smatread`, `smatprint`, the element
 forms) take the descriptor of whatever string array X names: for `smatredim`, `smatread` and
@@ -1392,7 +1399,7 @@ All AAPCS64. "Error" means `_bsk_err(code)` is called and the function does not 
 | `_bsk_gosub_push` | x0 code address | — | depth 1024 → error 39 |
 | `_bsk_gosub_pop` | — | x0 code address | empty → error 33. Sixth Edition: depth = the GOSUB base of the current activation (§6.9) → error 33 |
 | `_bsk_end` | — | noreturn | Fifth Edition: finish the files in write mode first (§6.8; a failure → `_bsk_err(ERR_CANT_WRITE_FILE)` after the remaining files are finished); pending-line newline, flush stdout, `exit(0)`; `exit(1)` instead if a stdout write failed earlier (`_bsk_rt_broken`) |
-| `_bsk_err` | w0 code | noreturn | precondition: code is a run-time error code (ERR_* 32..55; Sixth Edition: `ERR_FIRST_RUNTIME` … `ERR_END_RUNTIME` − 1 = 32..56); any other code exits 1 with no message. Fifth Edition: finish the files in write mode not yet finished (§6.8; a failure only forces exit status 1). Pending-line newline, flush stdout, write `<MESSAGE> IN <_bsk_curline>` + LF to fd 2, `exit(1)` (codes 34 OUT OF DATA and 43 END OF INPUT exit 0, unless a stdout write or a file write failed earlier, then 1; 51 END OF FILE exits 1) |
+| `_bsk_err` | w0 code | noreturn | precondition: code is a run-time error code, `ERR_FIRST_RUNTIME` … `ERR_END_RUNTIME` − 1 = 32..56; any other code exits 1 with no message. Fifth Edition: finish the files in write mode not yet finished (§6.8; a failure only forces exit status 1). Pending-line newline, flush stdout, write `<MESSAGE> IN <_bsk_curline>` + LF to fd 2, `exit(1)` (codes 34 OUT OF DATA and 43 END OF INPUT exit 0, unless a stdout write or a file write failed earlier, then 1; 51 END OF FILE exits 1) |
 
 The MAT entry points (`_bsk_mat_*`) are specified in §6.5, the matrix kernels and their dispatch
 (`_bsk_kern_*`) in §6.6, the string, input and other Third/Fourth Edition entry points in §6.7,
@@ -1525,6 +1532,7 @@ Only glibc and libm, always called through the PLT (`call write@PLT`):
 | RANDOMIZE, TAB, COT | `getentropy(buf, 8)` (glibc ≥ 2.25), `time(NULL)`; `fmod`; `tan` |
 | files (§6.8) | `open(path, flags, mode)` (variadic: `movl $0, %eax` before the call; `O_RDONLY` 0, `O_WRONLY` 01, `O_CREAT` 0100, `O_TRUNC` 01000), `close`, `fstat(fd, buf)` (`struct stat` 144 bytes, `st_mode` u32 at offset 24), `read`, `write` |
 | STR$ (§6.8) | the `rt_numfmt` field routine (no new libc call) |
+| program stack (§6.9) | `sysconf(30)` (`_SC_PAGESIZE`), `mmap(NULL, n, 3, 0x22, -1, 0)` (`PROT_READ\|PROT_WRITE`, `MAP_PRIVATE\|MAP_ANONYMOUS`), `mprotect(base, G, 0)`, `madvise(base, n, 15)` (`MADV_NOHUGEPAGE`, result ignored) |
 
 Integers below 10⁹ are converted with `cvttsd2si` (the `fcvtzu` analogue); everything else in
 `rt_numfmt` follows §6.2. Instruction set: the x86-64 baseline (SSE2) only — no SSE4.1
@@ -1999,8 +2007,8 @@ in `_bsk_aref1`, compared as a double (so huge or negative values never wrap).
 | Function | In | Out | Semantics (LANGUAGE.md) |
 |----------|----|-----|-------------------------|
 | `_bsk_str_cat` | x0 dst, x1 src | — | §4.6 `&`: Ld = dst LEN, Ls = src LEN (read before anything changes; src may be dst); n = Ld + Ls; n > `LIM_STRING_LEN` → error 44 STRING TOO LONG (dst unchanged); if n > dst CAP: cap' = max(n, 2·CAP) rounded up to a multiple of 16; CAP > 0: `realloc(PTR, cap')`; CAP = 0 (PTR not owned): `malloc(cap')` and copy the Ld bytes of the old PTR; NULL → error 47 OUT OF ROOM; CAP := cap'; then copy the Ls source bytes (from the new PTR when src = dst) to PTR + Ld; LEN := n |
-| `_bsk_seg` | x0 dst, x1 src, d0 m, d1 n | — | §6.2: m', n' = rounded m, n; L = src LEN; first = max(m', 1), last = min(n', L); first > last → dst := the empty string (LEN := 0); else dst := bytes first … last of src (1-based) with `_bsk_str_set` semantics (error 47). dst is a string temp cell, never src |
-| `_bsk_pos` | x0 a, x1 b, d0 start | d0 | §6.2: s' = rounded start, p0 = max(s', 1); L = a LEN, K = b LEN; the smallest p with p0 ≤ p ≤ L − K + 1 whose K bytes at p equal b's (byte for byte; K = 0 matches at every p) as a double, else 0. No error |
+| `_bsk_seg` | x0 dst, x1 src, d0 m, d1 n | — | §6.2: m', n' = rounded m, n; L = src LEN; first = max(m', 1), last = min(n', L); first > last → dst := the empty string (LEN := 0); else dst := bytes first … last of src (1-based) with `_bsk_str_set` semantics (error 47). dst is a string temp cell, never src. A NaN m or n means "no bound" (`fmaxnm`/`fminnm` semantics: first = 1, last = L; x86_64 handles it with explicit branches); no BASIC expression produces a NaN |
+| `_bsk_pos` | x0 a, x1 b, d0 start | d0 | §6.2: s' = rounded start, p0 = max(s', 1); L = a LEN, K = b LEN; the smallest p with p0 ≤ p ≤ L − K + 1 whose K bytes at p equal b's (byte for byte; K = 0 matches at every p) as a double, else 0. No error. A NaN start means "no bound" (p0 = 1, `fmaxnm` semantics; x86_64 handles it with an explicit branch); no BASIC expression produces a NaN |
 | `_bsk_sub_enter` | x0 SUBL record, x1 argument vector | x0 block | §7.27 step 2, in this order: call depth = `LIM_CALL_DEPTH` → error 56 TOO MANY CALLS; summed cost + `SUBL_COST` > `LIM_CALL_WORDS` → error 56; for k = 0 … NPARAMS−1 with `SUBL_PDIMS[k]` = `SUBD_LIST` / `SUBD_TABLE`: argument k's `RTA_DIMS` ≠ 1 / 2 → error 40 DIMENSION ERROR; `calloc(1, SUBL_BLOCKSIZE)` NULL → error 47; summed cost += `SUBL_COST`; copy the NPARAMS argument pointers to block + `SUBL_PARAMOFF`; copy the `SUBL_NDESC` templates to block + `SUBL_DESCOFF` and add the block address to each copy's `RTA_DATA`; push the call record {block, SUBL, GOSUB base, `_bsk_curline`}; GOSUB base := GOSUB depth; return the block. All errors report the CALL line (`_bsk_curline` is unchanged) |
 | `_bsk_sub_leave` | — | — | §7.27 step 5: pop the newest call record; summed cost −= its `SUBL_COST`; free the buffer of every SD record with `SD_CAP` > 0 among the `SUBL_NSD` records at block + `SUBL_SDOFF`; free the block; GOSUB depth := the current GOSUB base (the activation's pending GOSUBs are dropped); GOSUB base := the saved base; `_bsk_curline` := the saved line |
 
@@ -2012,7 +2020,12 @@ bytes inaccessible with `mprotect(base, G, PROT_NONE)`, sets the stack pointer t
 base + G + `RT_PROGRAM_STACK_BYTES` (16-byte aligned, as both ABIs require at a call) and calls
 `_bsk_program` there, then `_bsk_end` if it returns. A failure of `mmap` or `mprotect` →
 `_bsk_err(ERR_OUT_OF_ROOM)` before any line runs (`OUT OF ROOM IN 0`, exit 1; host-dependent, like
-every OUT OF ROOM). The stack is used for nothing else and never freed.
+every OUT OF ROOM). The x86_64 runtime also calls `madvise(base, size + G, MADV_NOHUGEPAGE)` right
+after the `mmap` (`MADV_NOHUGEPAGE` = 15): on a host whose transparent huge pages are set to
+`always` the 24 MiB mapping would otherwise get a 2 MiB huge page, about 2 MiB of resident memory
+and about 0.1 ms on every run. The call is advisory and its result is ignored (an old kernel may
+return `EINVAL`). macOS has no equivalent and needs none. The stack is used for nothing else and
+never freed.
 
 **Why 24 MiB is enough, on both targets, whatever `ulimit -s` is.** The stack holds (a) the
 activations: at most `8·LIM_CALL_WORDS` = 16 MiB (§5.3.1); (b) the main program's frames: `main`
@@ -2024,8 +2037,9 @@ string constant, `slit` + `scell` for the 3 bytes `"",`), so W ≤ 510 and (b) �
 ≈ 114 KiB; (c) the runtime routine active in the deepest frame and the libc it calls (`snprintf`,
 `malloc`/`realloc`/`calloc`/`free`, `write`, libm): a few KiB on both hosts. (b) + (c) are far below
 `RT_STACK_RESERVE_BYTES` (8 MiB), which is the margin for per-target frame differences and libc
-stack use. So the guard page can only be reached by a defect, never by a BASIC program, and
-`TOO MANY CALLS` (1024 activations or the budget, whichever comes first) is decided by the
+stack use. So the guard page can only be reached by a defect, never by a BASIC program (the
+call budget prevents it); such a defect ends the program with SIGBUS on macOS and SIGSEGV on
+Linux, not with a BASIC error message. `TOO MANY CALLS` (1024 activations or the budget, whichever comes first) is decided by the
 program text alone.
 
 **GOSUB base.** `_bsk_gosub_push` is unchanged (1024 pending GOSUBs over all activations, error

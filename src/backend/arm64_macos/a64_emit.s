@@ -3,7 +3,8 @@
 // the arm64-macos backend (docs/DESIGN.md section 5.3 "Output skeleton").
 //
 // Exports: _bk_arm64_emit  (BKD_EMIT of _bk_arm64_macos_desc)
-// Uses:    _bk_arm64_emit_func (a64_insn.s), _bk_arm64_fmt (a64_text.s),
+// Uses:    _bk_arm64_emit_func, _bk_arm64_emit_subl (a64_insn.s),
+//          _bk_arm64_fmt (a64_text.s),
 //          _ob_puts / _ob_putu / _ob_putc (driver)
 // =====================================================================
 .include "baysick.inc"
@@ -15,8 +16,10 @@
 // ---------------------------------------------------------------------
 // _bk_arm64_emit -- BKD_EMIT: append one complete assembly file for the
 // Module to the OutBuf, in the order of DESIGN.md 5.3: text (main, then
-// present FN functions in letter order), string literals and string DATA
-// bytes, DATA block, string descriptors and string DATA records, array and
+// present FN functions in letter order; Sixth Edition: then per SUB unit
+// its body and FN functions), string literals and string DATA
+// bytes, DATA block, string descriptors and string DATA records (and the
+// SUB unit records), array and
 // string-list descriptors, zero-filled globals, string variables and
 // array / string-list storage.
 // In:  x0 = const Module*, x1 = OutBuf*
@@ -25,7 +28,8 @@
 // Callee-saved used: x19 = Module*, x20 = OutBuf*, x21 = loop index,
 //                    x22 = pointer to the current table entry,
 //                    x23 = loop limit (also NSDATA for the count line),
-//                    x24, x25 = saved but unused
+//                    x24 = SUB unit index, x25 = unit Module* (Sixth
+//                    Edition; otherwise saved but unused)
 // Frame: 80 bytes
 // ---------------------------------------------------------------------
     .globl _bk_arm64_emit
@@ -78,6 +82,37 @@ Lbk_em_fn_next:
     add x21, x21, #1
     cmp x21, #NUM_FUNCS
     b.lo Lbk_em_fn_loop
+
+    // ---- SUB units: body Lsub_<u>, then its FN functions (DESIGN.md 5.3.1)
+    mov x24, #0                     // unit index u
+Lbk_em_unit_loop:
+    ldr w9, [x19, #IRM_NSUBS]
+    cmp x24, x9
+    b.hs Lbk_em_units_done
+    ldr x9, [x19, #IRM_SUBS]
+    ldr x25, [x9, x24, lsl #3]      // unit Module*
+    mov x21, #FUNC_MAIN
+Lbk_em_ufn_loop:
+    add x22, x25, #IRM_FUNCS
+    mov x9, #IRF_SIZE
+    madd x22, x21, x9, x22
+    ldr w10, [x22, #IRF_PRESENT]
+    cbnz w10, 1f
+    cbz x21, Lbk_em_no_body         // the SUB body must exist
+    b Lbk_em_ufn_next
+1:
+    mov x0, x20
+    mov x1, x25
+    mov x2, x21
+    bl _bk_arm64_emit_func
+    cbnz x0, Lbk_em_return
+Lbk_em_ufn_next:
+    add x21, x21, #1
+    cmp x21, #NUM_FUNCS
+    b.lo Lbk_em_ufn_loop
+    add x24, x24, #1
+    b Lbk_em_unit_loop
+Lbk_em_units_done:
 
     // ---- string literals: Lstr_<id> as decimal .byte lists ------------
     mov x0, x20
@@ -238,6 +273,12 @@ Lbk_em_files_done:
     add x1, x1, Lbk_em_files_count@PAGEOFF
     mov x2, x23
     bl _bk_arm64_fmt
+
+    // ---- Lsubl_<u> records and Lsubt_<u> templates (DESIGN.md 5.3.1) -----
+    mov x0, x20
+    mov x1, x19
+    bl _bk_arm64_emit_subl
+    cbnz x0, Lbk_em_return
 
     // ---- array descriptors (RTA_*) in __DATA,__data ---------------------
     mov x0, x20
@@ -413,6 +454,10 @@ Lbk_em_scells_done:
     mov x0, #0
     b Lbk_em_return
 
+Lbk_em_no_body:
+    adrp x0, Lbk_em_err_nobody@PAGE
+    add x0, x0, Lbk_em_err_nobody@PAGEOFF
+    b Lbk_em_return
 Lbk_em_bad_dims:
     adrp x0, Lbk_em_err_dims@PAGE
     add x0, x0, Lbk_em_err_dims@PAGEOFF
@@ -562,3 +607,5 @@ Lbk_em_err_nomain:
     .asciz "arm64-macos backend: module has no main function"
 Lbk_em_err_dims:
     .asciz "arm64-macos backend: array with more than 2 dimensions"
+Lbk_em_err_nobody:
+    .asciz "arm64-macos backend: SUB unit without a SUB body"

@@ -18,6 +18,11 @@
 //            of fe_def.s), then letters named only by MAT statements
 //            become 10 x 10 tables and the module's FOR count, array and
 //            string-list tables are filled in.
+//   Sixth Edition: the pre-scan also partitions the lines into program
+//            units (fe_sub.s); phase 2 switches the per-unit state when
+//            a line of another unit comes; phase 3 adds UNFINISHED SUB
+//            after UNFINISHED DEF, runs the function checks over every
+//            unit, then the CALL checks, and publishes every unit.
 //
 // Errors: every frontend function may call _fe_err / _fe_fail, which
 // record (code, line) and unwind straight back into _fe_compile by
@@ -85,6 +90,9 @@ _fe_compile:
     bl Lfe_compile_reset
     adrp x9, _fe_module@PAGE
     str x19, [x9, _fe_module@PAGEOFF]
+    // the main program is the current program unit (fe_sub.s)
+    adrp x9, _fe_unit@PAGE
+    str x19, [x9, _fe_unit@PAGEOFF]
 
     // ---- phase 1: reading -------------------------------------------
     // a file over the size limit is rejected before looking at any line
@@ -155,14 +163,18 @@ Lfe_compile_stmt_done:
 
     // ---- phase 3: whole-program checks, in LANGUAGE.md 10.1 order ---
     // UNFINISHED DEF: a multi-line DEF still open after the last line
-    adrp x9, _fe_ml_open@PAGE
-    ldr w9, [x9, _fe_ml_open@PAGEOFF]
-    cbz w9, 1f
-    sub w9, w9, #1                      // its letter
-    adrp x10, _fe_ml_defline@PAGE
-    add x10, x10, _fe_ml_defline@PAGEOFF
-    ldr w1, [x10, x9, lsl #2]           // reported at the DEF line
+    // (pre-scan: its DEF line), then UNFINISHED SUB: a SUB block still
+    // open after the last line (its SUB line)
+    adrp x9, _fe_eof_def_line@PAGE
+    ldr w1, [x9, _fe_eof_def_line@PAGEOFF]
+    cbz w1, 1f
     mov w0, #ERR_UNFINISHED_DEF
+    bl _fe_fail
+1:
+    adrp x9, _fe_eof_sub_line@PAGE
+    ldr w1, [x9, _fe_eof_sub_line@PAGEOFF]
+    cbz w1, 1f
+    mov w0, #ERR_UNFINISHED_SUB
     bl _fe_fail
 1:
     // FOR WITHOUT NEXT: an unclosed FOR remains on the stack
@@ -217,8 +229,16 @@ Lfe_compile_stmt_done:
     mov w0, #ERR_ILLEGAL_TRANSFER
     bl _fe_fail
 1:
-    // UNDEFINED FUNCTION, INCORRECT NUMBER OF ARGUMENTS, RECURSIVE FUNCTION
-    bl _fe_check_fns
+    // UNDEFINED FUNCTION, INCORRECT NUMBER OF ARGUMENTS, MISMATCHED STRING
+    // OPERATION, RECURSIVE FUNCTION over every program unit, then the
+    // CALL checks (fe_sub.s)
+    bl _fe_sub_check_fns
+    bl _fe_sub_check_calls
+    // every unit's default shapes, FOR count and array tables
+    bl _fe_sub_publish_all
+    mov x0, #ERR_NONE
+    mov x1, #0
+    b Lfe_compile_return
 
     // ---- letters named only by MAT statements are 10 x 10 tables -----
     bl _fe_mat_finish
@@ -516,6 +536,19 @@ Lfe_compile_state_tab:
     .quad _fe_calllog, 8
     .quad _fe_ncalls, 8
     .quad _fe_capcalls, 8
+    .quad _fe_unit, 8
+    .quad _fe_curunit, 8
+    .quad _fe_units, 8
+    .quad _fe_nunits, 8
+    .quad _fe_lineunit, 8
+    .quad _fe_mainsave, 8
+    .quad _fe_unitforbase, 8
+    .quad _fe_totalfors, 8
+    .quad _fe_eof_def_line, 8
+    .quad _fe_eof_sub_line, 8
+    .quad _fe_sublog, 8
+    .quad _fe_nsublog, 8
+    .quad _fe_capsublog, 8
     .quad _fe_err_code, 8
     .quad _fe_err_line, 8
 Lfe_compile_state_tab_end:
@@ -616,6 +649,30 @@ Lfe_compile_state_tab_end:
 .zerofill __DATA,__bss,_fe_calllog,8,3
 .zerofill __DATA,__bss,_fe_ncalls,8,3
 .zerofill __DATA,__bss,_fe_capcalls,8,3
+// Sixth Edition program units (fe_sub.s): the current unit's Module*
+// (swapped per unit), the current unit (0 main, 1 + u), the unit table
+// and its size, the line -> unit map, the main program's save area, the
+// FOR-stack depth at the start of the current unit (swapped), FOR
+// statements of the whole program (TOO MANY LOOPS), the DEF line of a
+// multi-line DEF and the SUB line of a SUB block still open after the
+// last line (0 = none), and the CALL log (pointer, count, capacity)
+    .globl _fe_unit, _fe_curunit, _fe_units, _fe_nunits, _fe_lineunit
+    .globl _fe_mainsave, _fe_unitforbase, _fe_totalfors
+    .globl _fe_eof_def_line, _fe_eof_sub_line
+    .globl _fe_sublog, _fe_nsublog, _fe_capsublog
+.zerofill __DATA,__bss,_fe_unit,8,3
+.zerofill __DATA,__bss,_fe_curunit,8,3
+.zerofill __DATA,__bss,_fe_units,8,3
+.zerofill __DATA,__bss,_fe_nunits,8,3
+.zerofill __DATA,__bss,_fe_lineunit,8,3
+.zerofill __DATA,__bss,_fe_mainsave,8,3
+.zerofill __DATA,__bss,_fe_unitforbase,8,3
+.zerofill __DATA,__bss,_fe_totalfors,8,3
+.zerofill __DATA,__bss,_fe_eof_def_line,8,3
+.zerofill __DATA,__bss,_fe_eof_sub_line,8,3
+.zerofill __DATA,__bss,_fe_sublog,8,3
+.zerofill __DATA,__bss,_fe_nsublog,8,3
+.zerofill __DATA,__bss,_fe_capsublog,8,3
 // error unwinding
 .zerofill __DATA,__bss,_fe_unwind_sp,8,3    // sp of _fe_compile's frame
 .zerofill __DATA,__bss,_fe_err_code,8,3     // u32 ERR_* being reported

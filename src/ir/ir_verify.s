@@ -20,7 +20,15 @@
 // the last instruction), `sparam` / `param` against the kind bits,
 // `callfn` / `scallfn` targets and argument kinds, `scallfn` B from a
 // `scell`, the `fsel` rule and the new X kinds (cells, string tables).
+// Sixth Edition: also IR.md 6 rule 9: the unit fields of the main module
+// (0) and its unit table, then every SUB unit with all the checks above
+// (string ids against the main module) plus its unit fields, parameters
+// and parameter arrays (IRA_FLAG_PARAM, IRA_DIMS_ANY), the SUB body
+// record (FUNC_KIND_SUB), placement (`subret`, `end`, `gosub`/`return`),
+// the reference kinds nref / aref / saref, the `subarg` rule and the
+// `callsub` target, count and argument kinds.
 // The reason names the function and instruction index when it has one.
+// In a unit it also names the unit index.
 // =====================================================================
 .include "baysick.inc"
 
@@ -51,6 +59,8 @@
 .equ Lirv_X_CELL,   11          // string temp cell < NSTEMPS (Fifth Edition)
 .equ Lirv_X_STAB,   12          // string table letter (sarray DIMS = 2)
 .equ Lirv_X_SARR,   13          // string list or table (sarray DIMS 1 or 2)
+.equ Lirv_X_UNIT,   14          // SUB unit index < NSUBS of the main module (callsub, Sixth Edition)
+.equ Lirv_X_VSLOT,  15          // numeric variable slot 0..285 (vaddr, Sixth Edition)
 // flags above the low nibble of byte 1 (the X kind), MAT field kinds, IR.md 3.1
 .equ Lirv_XF_AARR,  0x10        // IRI_A holds an array letter, not a temp
 .equ Lirv_XF_BARR,  0x20        // IRI_B holds an array letter, not a temp
@@ -74,8 +84,12 @@
 .equ Lirv_P_MAIN,   (1 << FUNC_KIND_MAIN)
 .equ Lirv_P_FN,     (1 << FUNC_KIND_FN) | (1 << FUNC_KIND_FNML)
 .equ Lirv_P_FNML,   (1 << FUNC_KIND_FNML)
-.equ Lirv_P_STMT,   (1 << FUNC_KIND_MAIN) | (1 << FUNC_KIND_FNML)
+// Sixth Edition: the body of a SUB unit (FUNC_KIND_SUB) takes the T
+// statements, gosub and return; subret only there
+.equ Lirv_P_SUB,    (1 << FUNC_KIND_SUB)
+.equ Lirv_P_STMT,   (1 << FUNC_KIND_MAIN) | (1 << FUNC_KIND_FNML) | Lirv_P_SUB
 .equ Lirv_P_ANY,    Lirv_P_STMT | Lirv_P_FN
+.equ Lirv_P_GOSUB,  Lirv_P_MAIN | Lirv_P_SUB  // gosub, return
 // byte 3 high bits (Fifth Edition): the function must / must not be a
 // string function (FNK_STRING in its kind word)
 .equ Lirv_P_STRFN,  0x40
@@ -92,9 +106,19 @@
 .equ Lirv_K_SREF,   2           // sref to a variable or list element (svar, sald1)
 .equ Lirv_K_SLIT,   3           // sref to a string constant (slit)
 .equ Lirv_K_SCELL,  4           // sref to a string temp cell (scell, Fifth Edition)
+// Sixth Edition reference kinds (IR.md 1, 3.4.1); sseg defines Lirv_K_SREF
+.equ Lirv_K_NREF,   5           // address of a double (vaddr aaddr1 aaddr2 taddr)
+.equ Lirv_K_AREF,   6           // numeric array descriptor (aref)
+.equ Lirv_K_SAREF,  7           // string array descriptor (saref)
 .equ Lirv_MSGBUF_SIZE, 192      // failure reason buffer
-// frame slot of the number of `fnarg` instructions waiting for their callfn
+// frame slots: the number of `fnarg` instructions waiting for their callfn;
+// the main module; the index of the next SUB unit to check; the number of
+// `subarg` instructions waiting for their callsub (Sixth Edition)
 .equ Lirv_FR_FNARGS, 96
+.equ Lirv_FR_MAIN,   104
+.equ Lirv_FR_UNIT,   112
+.equ Lirv_FR_SUBARGS, 120
+.equ Lirv_FRAME,     128
 
 .macro SPEC temps, x, imm, place
     .byte \temps, \x, \imm, \place
@@ -148,10 +172,17 @@
     cbz w10, Lirv_e_temp_undef
     cmp w10, #Lirv_K_NUM
 .if \sbit >= 0
-    // 1 if the temp is an sref (svar / sald1 / slit), 0 for a number
-    cset w10, ne
+    // an sref field takes the kinds Lirv_K_SREF..Lirv_K_SCELL (svar,
+    // sald1, sald2, sseg, slit, scell, ...), a number field Lirv_K_NUM;
+    // the Sixth Edition reference kinds fit neither
     ubfx w11, w26, #\sbit, #1
-    cmp w10, w11
+    cbz w11, Lirv_cu_num\@
+    sub w10, w10, #Lirv_K_SREF
+    cmp w10, #(Lirv_K_SCELL - Lirv_K_SREF)
+    b.hi Lirv_e_temp_kind
+    b 2f
+Lirv_cu_num\@:
+    cmp w10, #Lirv_K_NUM
 .endif
     b.ne Lirv_e_temp_kind
     b 2f
@@ -162,22 +193,27 @@
 .endm
 
 // ---------------------------------------------------------------------
-// _ir_verify -- check a module against docs/IR.md section 6.
-//   in:  x0 = Module*
+// _ir_verify -- check a module against docs/IR.md section 6 (Sixth
+// Edition: the main module, then each SUB unit, rule 9).
+//   in:  x0 = Module* (the main module)
 //   out: x0 = 0 if valid, else reason string
 //   clobbers: x0-x17
-//   callee-saved: x19 = Module*, x20 = function index, x21 = Function*,
+//   callee-saved: x19 = Module* being checked (main, then each unit),
+//                 x20 = function index, x21 = Function*,
 //                 x22 = temp-kind bytes, x23 = label-defined bytes,
 //                 x24 = instruction cursor, x25 = instruction index,
 //                 x26 = spec word of the current opcode,
 //                 x27 = current record, x28 = instruction count
-//   frame: 112 bytes (+32 while formatting a failure); [sp, #96] holds
-//          the number of pending `fnarg` instructions
+//   frame: Lirv_FRAME = 128 bytes (+32 while formatting a failure):
+//          [sp, #Lirv_FR_FNARGS] pending `fnarg` instructions,
+//          [sp, #Lirv_FR_MAIN] the main module, [sp, #Lirv_FR_UNIT] the
+//          index of the next unit, [sp, #Lirv_FR_SUBARGS] pending `subarg`
+//          instructions
 // ---------------------------------------------------------------------
     .globl _ir_verify
     .p2align 2
 _ir_verify:
-    stp x29, x30, [sp, #-112]!
+    stp x29, x30, [sp, #-Lirv_FRAME]!
     mov x29, sp
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
@@ -185,7 +221,42 @@ _ir_verify:
     stp x25, x26, [sp, #64]
     stp x27, x28, [sp, #80]
     mov x19, x0
-    // ---- module header ----
+    str x19, [sp, #Lirv_FR_MAIN]
+    str xzr, [sp, #Lirv_FR_UNIT]
+    // ---- main module: the unit fields are 0 (IR.md 6 rule 9) ----
+    ldr x9, [x19, #IRM_PARENT]
+    cbnz x9, Lirv_e_mainunit
+    ldr x9, [x19, #IRM_SUBNAME]
+    cbnz x9, Lirv_e_mainunit
+    // UNITIDX, SUBNPARAMS, SUBLINE, SUBENDLINE (four u32 at 3648..3663)
+    add x10, x19, #IRM_UNITIDX
+    ldp x9, x10, [x10]
+    orr x9, x9, x10
+    cbnz x9, Lirv_e_mainunit
+    // SUBNAMELEN and RESERVED6 (u32 at 3672 and 3676)
+    ldr x9, [x19, #IRM_SUBNAMELEN]
+    cbnz x9, Lirv_e_mainunit
+    // SUBPARAMS and SUBPKINDS: every byte 0 up to the end of the module
+    add x10, x19, #IRM_SUBPARAMS
+    mov x11, #((IRM_SIZE - IRM_SUBPARAMS) / 8)
+1:
+    ldr x9, [x10], #8
+    cbnz x9, Lirv_e_mainunit
+    subs x11, x11, #1
+    b.ne 1b
+    // the unit table: every IRM_SUBS[u] non-null
+    ldr w9, [x19, #IRM_NSUBS]
+    cbz w9, 3f
+    ldr x10, [x19, #IRM_SUBS]
+    cbz x10, Lirv_e_nosubs
+2:
+    ldr x11, [x10], #8
+    cbz x11, Lirv_e_nosubs
+    subs w9, w9, #1
+    b.ne 2b
+3:
+Lirv_module:
+    // ---- module header (x19: the main module or a unit) ----
     ldr w9, [x19, #IRM_NFORS]
     ldr w10, [x19, #IRM_NSLOTS]
     mov x11, #SLOT_FOR_BASE
@@ -242,6 +313,24 @@ Lirv_files_done:
     movk x14, #(LIM_ARRAY_ELEMS >> 16), lsl #16
 Lirv_array_loop:
     ldr w11, [x9, #IRA_DIMS]
+    // an array parameter of a SUB unit (IRA_FLAG_PARAM, IR.md 6 rule 9):
+    // only in a unit, no storage (B1 = B2 = 0), DIMS 1, 2 or IRA_DIMS_ANY;
+    // the storage limit does not apply
+    ldr w12, [x9, #IRA_FLAGS]
+    tst w12, #IRA_FLAG_PARAM
+    b.eq Lirv_arr_plain
+    ldr x13, [sp, #Lirv_FR_MAIN]
+    cmp x13, x19
+    b.eq Lirv_e_parammain
+    cbz w11, Lirv_e_pdims
+    cmp w11, #IRA_DIMS_ANY
+    b.hi Lirv_e_pdims
+    ldr w12, [x9, #IRA_B1]
+    cbnz w12, Lirv_e_pdims
+    ldr w12, [x9, #IRA_B2]
+    cbnz w12, Lirv_e_pdims
+    b Lirv_array_next
+Lirv_arr_plain:
     cbz w11, Lirv_array_next
     cmp w11, #2
     b.hi Lirv_e_dims
@@ -266,6 +355,24 @@ Lirv_array_next:
     mov x10, #NUM_LETTERS
 Lirv_sarray_loop:
     ldr w11, [x9, #IRA_DIMS]
+    // an array parameter of a SUB unit (IRA_FLAG_PARAM, IR.md 6 rule 9):
+    // only in a unit, no storage (B1 = B2 = 0), DIMS 1, 2 or IRA_DIMS_ANY;
+    // the storage limit does not apply
+    ldr w12, [x9, #IRA_FLAGS]
+    tst w12, #IRA_FLAG_PARAM
+    b.eq Lirv_sarr_plain
+    ldr x13, [sp, #Lirv_FR_MAIN]
+    cmp x13, x19
+    b.eq Lirv_e_parammain
+    cbz w11, Lirv_e_pdims
+    cmp w11, #IRA_DIMS_ANY
+    b.hi Lirv_e_pdims
+    ldr w12, [x9, #IRA_B1]
+    cbnz w12, Lirv_e_pdims
+    ldr w12, [x9, #IRA_B2]
+    cbnz w12, Lirv_e_pdims
+    b Lirv_sarray_next
+Lirv_sarr_plain:
     cbz w11, Lirv_sarray_next
     // a string table (Fifth Edition): (B1+1)*(B2+1) <= LIM_ARRAY_ELEMS
     cmp w11, #2
@@ -294,8 +401,13 @@ Lirv_sarray_next:
     add x9, x9, #IRA_SIZE
     subs x10, x10, #1
     b.ne Lirv_sarray_loop
-    // ---- main must exist ----
+    // ---- main (a unit: its SUB body) must exist ----
     ldr w9, [x19, #(IRM_FUNCS + IRF_PRESENT)]
+    ldr x10, [sp, #Lirv_FR_MAIN]
+    cmp x10, x19
+    b.eq Lirv_body_main
+    cbz w9, Lirv_e_nosubbody
+Lirv_body_main:
     cbz w9, Lirv_e_nomain
 
     // ====== function records (all first: callfn reads the callee's) ======
@@ -313,6 +425,9 @@ Lirv_rec_loop:
     ldr w10, [x21, #IRF_FNIDX]
     ldr w11, [x21, #IRF_PARAM]
     cbnz x20, 3f
+    ldr x12, [sp, #Lirv_FR_MAIN]
+    cmp x12, x19
+    b.ne Lirv_rec_sub
     // main: kind MAIN, letter 0, no parameter, no DEF / FNEND line
     cmp w9, #FUNC_KIND_MAIN
     b.ne Lirv_e_kind
@@ -325,6 +440,25 @@ Lirv_rec_loop:
     cbnz w12, Lirv_e_mainparam
     ldr w12, [x21, #IRF_ENDLINE]
     cbnz w12, Lirv_e_endline
+    b 4f
+Lirv_rec_sub:
+    // the body of a SUB unit (IR.md 6 rule 9): kind SUB, letter 0, no
+    // parameters, DEFLINE = SUBLINE, ENDLINE = SUBENDLINE
+    cmp w9, #FUNC_KIND_SUB
+    b.ne Lirv_e_kind
+    cbnz w10, Lirv_e_fnidx
+    cmn w11, #1
+    b.ne Lirv_e_subparam
+    ldr w12, [x21, #IRF_NPARAMS]
+    cbnz w12, Lirv_e_subparam
+    ldr w12, [x21, #IRF_DEFLINE]
+    ldr w13, [x19, #IRM_SUBLINE]
+    cmp w12, w13
+    b.ne Lirv_e_bodylines
+    ldr w12, [x21, #IRF_ENDLINE]
+    ldr w13, [x19, #IRM_SUBENDLINE]
+    cmp w12, w13
+    b.ne Lirv_e_bodylines
     b 4f
 3:
     // FN function at index 1+L: letter L
@@ -412,6 +546,11 @@ Lirv_func_loop:
     csel w11, w13, w11, ne
     cmp x20, #0
     csel w10, w10, w11, eq
+    // the body of a SUB unit ends with subret (its SUBEND)
+    ldr w12, [x21, #IRF_KIND]
+    mov w13, #OP_SUBRET
+    cmp w12, #FUNC_KIND_SUB
+    csel w10, w13, w10, eq
     cmp w9, w10
     b.ne Lirv_e_lastop
     ldr w9, [x21, #IRF_NLABELS]
@@ -477,6 +616,7 @@ Lirv_p1_done:
 
     // ---- pass 2: every instruction ----
     str xzr, [sp, #Lirv_FR_FNARGS]      // no fnarg pending
+    str xzr, [sp, #Lirv_FR_SUBARGS]     // no subarg pending
     mov x25, #0
 Lirv_p2_loop:
     cmp x25, x28
@@ -543,6 +683,25 @@ Lirv_strfn_done:
     lsr x11, x11, x10                   // shift by op mod 64
     tbz x11, #0, Lirv_e_fsel
 Lirv_fsel_done:
+    // subarg rule (IR.md 3.4.2): subarg 1, 2, ... immediately before a
+    // callsub (the count and kinds are checked with its X)
+    ldr x13, [sp, #Lirv_FR_SUBARGS]
+    cmp w9, #OP_SUBARG
+    b.eq Lirv_subarg
+    cmp w9, #OP_CALLSUB
+    b.eq Lirv_subarg_done
+    cbnz x13, Lirv_e_subarg_seq
+    b Lirv_subarg_done
+Lirv_subarg:
+    // IMM must be the next argument number, at most LIM_SUB_PARAMS - 1
+    ldr x10, [x27, #IRI_IMM]
+    add x13, x13, #1
+    cmp x10, x13
+    b.ne Lirv_e_subarg_num
+    cmp x13, #(LIM_SUB_PARAMS - 1)
+    b.hi Lirv_e_subarg_num
+    str x13, [sp, #Lirv_FR_SUBARGS]
+Lirv_subarg_done:
     // fnarg rule (IR.md 3.2): fnarg 1, 2, ... immediately before a callfn
     ldr x13, [sp, #Lirv_FR_FNARGS]
     cmp w9, #OP_FNARG
@@ -638,6 +797,22 @@ Lirv_a_typed:
     cmp w11, #OP_SCELL
     csel w10, w12, w10, eq
 36:
+    // the Sixth Edition reference kinds (IR.md 1): vaddr, aaddr1, aaddr2,
+    // taddr define an nref, aref an aref, saref a saref
+    ldrh w11, [x27, #IRI_OP]
+    sub w12, w11, #OP_VADDR
+    cmp w12, #(OP_TADDR - OP_VADDR)
+    b.hi Lirv_dk_arefs
+    mov w10, #Lirv_K_NREF
+    b Lirv_dk_done
+Lirv_dk_arefs:
+    mov w12, #Lirv_K_AREF
+    cmp w11, #OP_AREF
+    csel w10, w12, w10, eq
+    mov w12, #Lirv_K_SAREF
+    cmp w11, #OP_SAREF
+    csel w10, w12, w10, eq
+Lirv_dk_done:
     strb w10, [x22, x9]
     b 13f
 12:
@@ -820,6 +995,9 @@ Lirv_imm_done:
     mov x10, #0
 Lirv_arg_loop:
     ldrb w14, [x22, x14]
+    // a number or an sref only: never a Sixth Edition reference
+    cmp w14, #Lirv_K_NREF
+    b.hs Lirv_e_argkind
     cmp w14, #Lirv_K_NUM
     cset w14, ne                        // 1 if the argument is an sref
     lsr w15, w12, w10
@@ -896,8 +1074,77 @@ Lirv_arg_loop:
     b.ne Lirv_e_slist
     b Lirv_p2_next
 39:
-    // Lirv_X_STR: string id < NSTRINGS
-    ldr w11, [x19, #IRM_NSTRINGS]
+    cmp w10, #Lirv_X_VSLOT
+    b.ne Lirv_x_unit
+    // vaddr: a numeric variable 0..285 (never a FOR slot)
+    cmp w9, #NUM_SCALAR_SLOTS
+    b.hs Lirv_e_slot
+    b Lirv_p2_next
+Lirv_x_unit:
+    cmp w10, #Lirv_X_UNIT
+    b.ne Lirv_x_str
+    // callsub target: unit X < NSUBS of the main module (IR.md 6 rule 9)
+    ldr x10, [sp, #Lirv_FR_MAIN]
+    ldr w11, [x10, #IRM_NSUBS]
+    cmp w9, w11
+    b.hs Lirv_e_callsub
+    ldr x11, [x10, #IRM_SUBS]
+    ldr x11, [x11, x9, lsl #3]          // x11 = callee unit
+    // arguments: none if A = IR_NONE (then no subarg), else 1 + subargs
+    ldr x13, [sp, #Lirv_FR_SUBARGS]
+    str xzr, [sp, #Lirv_FR_SUBARGS]
+    ldr w12, [x27, #IRI_A]
+    cmn w12, #1
+    b.ne 1f
+    cbnz x13, Lirv_e_subargcount
+    b 2f
+1:
+    add x13, x13, #1
+2:
+    ldr w12, [x11, #IRM_SUBNPARAMS]
+    cmp x13, x12
+    b.ne Lirv_e_subargcount
+    // argument k (A for k = 0, subarg k at index x25 - n + k) has the
+    // reference kind of the callee's parameter k; x13 = n
+    cbz x13, Lirv_p2_next
+    ldr w14, [x27, #IRI_A]
+    mov x10, #0
+Lirv_subarg_loop:
+    ldrb w14, [x22, x14]                // kind of the argument temp
+    add x15, x11, x10
+    ldrb w15, [x15, #IRM_SUBPKINDS]     // SUBP_* of parameter k
+    cmp w15, #SUBP_STR
+    b.ne 3f
+    // a string parameter: an sref that is not a string constant
+    cmp w14, #Lirv_K_SLIT
+    b.eq Lirv_e_slitarg
+    sub w14, w14, #Lirv_K_SREF
+    cmp w14, #(Lirv_K_SCELL - Lirv_K_SREF)
+    b.hi Lirv_e_subargkind
+    b 4f
+3:
+    // SUBP_NUM -> nref, SUBP_ARR -> aref, SUBP_SARR -> saref
+    cmp w15, #SUBP_SARR
+    b.hi Lirv_e_subargkind              // (the unit check reports it too)
+    IRV_ADR x16, Lirv_subp_kinds
+    ldrb w15, [x16, x15]
+    cmp w14, w15
+    b.ne Lirv_e_subargkind
+4:
+    add x10, x10, #1
+    cmp x10, x13
+    b.hs Lirv_p2_next
+    // the temp of subarg k = x10
+    sub x14, x25, x13
+    add x14, x14, x10
+    add x14, x24, x14, lsl #IRI_SHIFT
+    ldr w14, [x14, #IRI_A]
+    b Lirv_subarg_loop
+Lirv_x_str:
+    // Lirv_X_STR: string id < NSTRINGS of the main module (the program-wide
+    // string table, IR.md 2.2)
+    ldr x11, [sp, #Lirv_FR_MAIN]
+    ldr w11, [x11, #IRM_NSTRINGS]
     cmp w9, w11
     b.hs Lirv_e_string
 Lirv_p2_next:
@@ -908,6 +1155,148 @@ Lirv_func_next:
     add x20, x20, #1
     cmp x20, #NUM_FUNCS
     b.lo Lirv_func_loop
+    // ================= next SUB unit (IR.md 6 rule 9) =================
+    ldr x10, [sp, #Lirv_FR_MAIN]
+    ldr x9, [sp, #Lirv_FR_UNIT]         // u = index of the next unit
+    ldr w11, [x10, #IRM_NSUBS]
+    cmp x9, x11
+    b.hs Lirv_valid
+    ldr x12, [x10, #IRM_SUBS]
+    ldr x19, [x12, x9, lsl #3]          // x19 = unit u (non-null: checked)
+    add x11, x9, #1
+    str x11, [sp, #Lirv_FR_UNIT]
+    // unit fields: PARENT = main, UNITIDX = u
+    ldr x11, [x19, #IRM_PARENT]
+    cmp x11, x10
+    b.ne Lirv_e_parent
+    ldr w11, [x19, #IRM_UNITIDX]
+    cmp x11, x9
+    b.ne Lirv_e_unitidx
+    // no program-wide pools of its own: NSUBS, NSTRINGS, NDATA, NSDATA,
+    // NFILES are 0
+    ldr w11, [x19, #IRM_NSUBS]
+    ldr w12, [x19, #IRM_NSTRINGS]
+    orr w11, w11, w12
+    ldr w12, [x19, #IRM_NDATA]
+    orr w11, w11, w12
+    ldr w12, [x19, #IRM_NSDATA]
+    orr w11, w11, w12
+    ldr w12, [x19, #IRM_NFILES]
+    orr w11, w11, w12
+    cbnz w11, Lirv_e_unitpools
+    // a name of at least one byte; SUBLINE < SUBENDLINE
+    ldr w11, [x19, #IRM_SUBNAMELEN]
+    cbz w11, Lirv_e_subname
+    ldr x11, [x19, #IRM_SUBNAME]
+    cbz x11, Lirv_e_subname
+    ldr w11, [x19, #IRM_SUBLINE]
+    ldr w12, [x19, #IRM_SUBENDLINE]
+    cmp w11, w12
+    b.hs Lirv_e_sublines
+    ldr w11, [x19, #IRM_RESERVED6]
+    cbnz w11, Lirv_e_mreserved
+    // parameters: x13 = SUBNPARAMS <= LIM_SUB_PARAMS; for k < n a kind
+    // <= SUBP_SARR and a slot < 286 or a flagged array letter < 26, no two
+    // equal; for k >= n SUBPARAMS IR_NONE and SUBPKINDS 0
+    ldr w13, [x19, #IRM_SUBNPARAMS]
+    cmp w13, #LIM_SUB_PARAMS
+    b.hi Lirv_e_subnparams
+    mov x14, #0                         // k
+Lirv_sp_loop:
+    add x9, x19, x14, lsl #2
+    ldr w9, [x9, #IRM_SUBPARAMS]        // w9 = SUBPARAMS[k]
+    add x10, x19, x14
+    ldrb w10, [x10, #IRM_SUBPKINDS]     // w10 = SUBPKINDS[k]
+    cmp x14, x13
+    b.lo 1f
+    // unused entry
+    cmn w9, #1
+    b.ne Lirv_e_subparam_k
+    cbnz w10, Lirv_e_subparam_k
+    b Lirv_sp_next
+1:
+    cmp w10, #SUBP_SARR
+    b.hi Lirv_e_subparam_k
+    cmp w10, #SUBP_STR
+    b.hi 2f
+    // a numeric or string variable: slot < 286
+    cmp w9, #NUM_SCALAR_SLOTS
+    b.hs Lirv_e_subparam_k
+    b 3f
+2:
+    // an array: letter < 26 whose arrays / sarrays entry has IRA_FLAG_PARAM
+    cmp w9, #NUM_LETTERS
+    b.hs Lirv_e_subparam_k
+    mov w11, #IRA_SIZE
+    umaddl x11, w9, w11, x19
+    add x12, x11, #IRM_SARRAYS
+    add x11, x11, #IRM_ARRAYS
+    cmp w10, #SUBP_SARR
+    csel x11, x12, x11, eq
+    ldr w11, [x11, #IRA_FLAGS]
+    tst w11, #IRA_FLAG_PARAM
+    b.eq Lirv_e_subparam_k
+3:
+    // no earlier parameter j < k with the same kind and number
+    mov x15, #0
+4:
+    cmp x15, x14
+    b.hs Lirv_sp_next
+    add x11, x19, x15, lsl #2
+    ldr w11, [x11, #IRM_SUBPARAMS]
+    add x12, x19, x15
+    ldrb w12, [x12, #IRM_SUBPKINDS]
+    add x15, x15, #1
+    cmp w11, w9
+    b.ne 4b
+    cmp w12, w10
+    b.ne 4b
+    b Lirv_e_subparam_dup
+Lirv_sp_next:
+    add x14, x14, #1
+    cmp x14, #LIM_SUB_PARAMS
+    b.lo Lirv_sp_loop
+    // every entry with IRA_FLAG_PARAM is a parameter: letter L of the
+    // arrays (sarrays) table is SUBPARAMS[k] of a SUBP_ARR (SUBP_SARR) k
+    mov x14, #0                         // entry 0..51: arrays, then sarrays
+Lirv_pa_loop:
+    cmp x14, #NUM_LETTERS
+    b.lo 5f
+    sub x9, x14, #NUM_LETTERS           // letter in the string table
+    add x12, x19, #IRM_SARRAYS
+    mov w10, #SUBP_SARR
+    b 6f
+5:
+    mov x9, x14                         // letter in the numeric table
+    add x12, x19, #IRM_ARRAYS
+    mov w10, #SUBP_ARR
+6:
+    mov w11, #IRA_SIZE
+    umaddl x11, w9, w11, x12            // the entry of letter w9
+    ldr w11, [x11, #IRA_FLAGS]
+    tst w11, #IRA_FLAG_PARAM
+    b.eq Lirv_pa_next
+    // search the parameters for (kind w10, letter w9)
+    mov x15, #0
+7:
+    cmp x15, x13
+    b.hs Lirv_e_paramarr
+    add x11, x19, x15, lsl #2
+    ldr w11, [x11, #IRM_SUBPARAMS]
+    add x12, x19, x15
+    ldrb w12, [x12, #IRM_SUBPKINDS]
+    add x15, x15, #1
+    cmp w11, w9
+    b.ne 7b
+    cmp w12, w10
+    b.ne 7b
+Lirv_pa_next:
+    add x14, x14, #1
+    cmp x14, #(2 * NUM_LETTERS)
+    b.lo Lirv_pa_loop
+    // then every check of the main module, on the unit
+    b Lirv_module
+Lirv_valid:
     mov x0, #0                          // valid
     b Lirv_return
 
@@ -978,29 +1367,80 @@ Lirv_e_nomain:      FAIL_M Lirv_m_nomain
 Lirv_e_nosdata:     FAIL_M Lirv_m_nosdata
 Lirv_e_sdims:       FAIL_M Lirv_m_sdims
 Lirv_e_sarrsize:    FAIL_M Lirv_m_sarrsize
+// ---- Sixth Edition (IR.md 6 rule 9) ----
+Lirv_e_subarg_seq:  FAIL_I Lirv_m_subarg_seq
+Lirv_e_subarg_num:  FAIL_I Lirv_m_subarg_num
+Lirv_e_callsub:     FAIL_I Lirv_m_callsub
+Lirv_e_subargcount: FAIL_I Lirv_m_subargcount
+Lirv_e_subargkind:  FAIL_I Lirv_m_subargkind
+Lirv_e_slitarg:     FAIL_I Lirv_m_slitarg
+Lirv_e_subparam:    FAIL_F Lirv_m_subparam
+Lirv_e_bodylines:   FAIL_F Lirv_m_bodylines
+Lirv_e_mainunit:    FAIL_M Lirv_m_mainunit
+Lirv_e_nosubs:      FAIL_M Lirv_m_nosubs
+Lirv_e_parammain:   FAIL_M Lirv_m_parammain
+Lirv_e_pdims:       FAIL_M Lirv_m_pdims
+Lirv_e_nosubbody:   FAIL_M Lirv_m_nosubbody
+Lirv_e_parent:      FAIL_M Lirv_m_parent
+Lirv_e_unitidx:     FAIL_M Lirv_m_unitidx
+Lirv_e_unitpools:   FAIL_M Lirv_m_unitpools
+Lirv_e_subname:     FAIL_M Lirv_m_subname
+Lirv_e_sublines:    FAIL_M Lirv_m_sublines
+Lirv_e_subnparams:  FAIL_M Lirv_m_subnparams
+Lirv_e_subparam_k:  FAIL_M Lirv_m_subparam_k
+Lirv_e_subparam_dup: FAIL_M Lirv_m_subparam_dup
+Lirv_e_paramarr:    FAIL_M Lirv_m_paramarr
 
 Lirv_fail_insn:
-    // "<reason> (in <func>, instruction <n>)"
+    // "<reason> (in <func>, instruction <n>)"; in a SUB unit
+    // "<reason> (in unit <u> <func>, instruction <n>)"
     mov x9, x0
     bl Lirv_funcname
     sub sp, sp, #32
+    ldr x10, [sp, #(32 + Lirv_FR_MAIN)]
+    cmp x10, x19
+    b.ne 1f
     stp x9, x0, [sp]                    // variadic: reason, function name
     str x25, [sp, #16]                  // instruction index
     IRV_ADR x2, Lirv_fmt_insn
     b Lirv_fail_format
+1:
+    ldr x10, [sp, #(32 + Lirv_FR_UNIT)]
+    sub x10, x10, #1                    // the unit being checked
+    stp x9, x10, [sp]                   // variadic: reason, unit,
+    stp x0, x25, [sp, #16]              // function name, instruction index
+    IRV_ADR x2, Lirv_fmt_uinsn
+    b Lirv_fail_format
 Lirv_fail_func:
-    // "<reason> (in <func>)"
+    // "<reason> (in <func>)"; in a SUB unit "<reason> (in unit <u> <func>)"
     mov x9, x0
     bl Lirv_funcname
     sub sp, sp, #32
+    ldr x10, [sp, #(32 + Lirv_FR_MAIN)]
+    cmp x10, x19
+    b.ne 1f
     stp x9, x0, [sp]
     IRV_ADR x2, Lirv_fmt_func
     b Lirv_fail_format
+1:
+    ldr x10, [sp, #(32 + Lirv_FR_UNIT)]
+    sub x10, x10, #1
+    stp x9, x10, [sp]
+    str x0, [sp, #16]
+    IRV_ADR x2, Lirv_fmt_ufunc
+    b Lirv_fail_format
 Lirv_fail_module:
-    // "<reason>"
+    // "<reason>"; in a SUB unit "<reason> (in unit <u>)"
     sub sp, sp, #32
     str x0, [sp]
     IRV_ADR x2, Lirv_fmt_module
+    ldr x10, [sp, #(32 + Lirv_FR_MAIN)]
+    cmp x10, x19
+    b.eq Lirv_fail_format
+    ldr x10, [sp, #(32 + Lirv_FR_UNIT)]
+    sub x10, x10, #1
+    str x10, [sp, #8]
+    IRV_ADR x2, Lirv_fmt_umodule
 Lirv_fail_format:
     IRV_ADR x0, Lirv_msgbuf
     mov x1, #Lirv_MSGBUF_SIZE
@@ -1013,17 +1453,24 @@ Lirv_return:
     ldp x23, x24, [sp, #48]
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #112
+    ldp x29, x30, [sp], #Lirv_FRAME
     ret
 
 // ---------------------------------------------------------------------
-// Lirv_funcname -- name of function index x20 ("main" or "FN<L>").
+// Lirv_funcname -- name of function index x20 ("main" or "FN<L>");
+// "SUB" for index 0 of a SUB unit.
 //   Private convention: in x20 = function index; out x0 = name (static);
 //   clobbers x0, x10, x11 only (x9 is preserved for the caller). Leaf.
 // ---------------------------------------------------------------------
     .p2align 2
 Lirv_funcname:
     cbnz x20, 1f
+    ldr x10, [sp, #Lirv_FR_MAIN]        // (the caller has not moved sp)
+    cmp x10, x19
+    b.eq 2f
+    IRV_ADR x0, Lirv_s_sub
+    ret
+2:
     IRV_ADR x0, Lirv_s_main
     ret
 1:
@@ -1040,9 +1487,10 @@ Lirv_funcname:
 
     .section __TEXT,__const
 // field usage per opcode, docs/IR.md section 3 (temps, X, IMM|REL, placement):
-// E opcodes Lirv_P_ANY, S and T opcodes Lirv_P_STMT (main and multi-line
-// FN), gosub / return / end Lirv_P_MAIN, param / ret Lirv_P_FN,
-// stparam / ldfv / stfv Lirv_P_FNML
+// E opcodes Lirv_P_ANY, S and T opcodes Lirv_P_STMT (main, multi-line FN
+// and, Sixth Edition, the SUB body), gosub / return Lirv_P_GOSUB (main and
+// SUB body), end Lirv_P_MAIN, param / ret Lirv_P_FN, stparam / ldfv / stfv
+// Lirv_P_FNML, subret Lirv_P_SUB
     .p2align 2
 Lirv_spec:
     SPEC 0, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_ANY                       // nop
@@ -1077,8 +1525,8 @@ Lirv_spec:
     SPEC 0, Lirv_X_LREF, Lirv_I_ZERO, Lirv_P_STMT                      // jmp
     SPEC Lirv_T_A|Lirv_T_B, Lirv_X_LREF, Lirv_I_ZERO|Lirv_I_REL, Lirv_P_STMT  // jcmp
     SPEC Lirv_T_A|Lirv_T_B|Lirv_T_C, Lirv_X_LREF, Lirv_I_ZERO, Lirv_P_STMT    // jfor
-    SPEC 0, Lirv_X_LREF, Lirv_I_LREF, Lirv_P_MAIN                      // gosub
-    SPEC 0, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_MAIN                      // return
+    SPEC 0, Lirv_X_LREF, Lirv_I_LREF, Lirv_P_GOSUB                      // gosub
+    SPEC 0, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_GOSUB                      // return
     SPEC Lirv_T_D, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT               // read
     SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT               // prnum
     SPEC 0, Lirv_X_STR, Lirv_I_ZERO, Lirv_P_STMT                       // prstr
@@ -1146,6 +1594,19 @@ Lirv_spec:
     SPEC Lirv_T_A, Lirv_X_LREF, Lirv_I_ZERO, Lirv_P_STMT               // jeof
     SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT               // scratch
     SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT               // frestore
+    // Sixth Edition opcodes (IR.md 3.4)
+    SPEC Lirv_T_A|Lirv_S_A|Lirv_T_B|Lirv_S_B, Lirv_X_NONE, Lirv_I_ZERO|Lirv_I_ADEST, Lirv_P_SGRP  // scat
+    SPEC Lirv_T_D|Lirv_S_D|Lirv_T_A|Lirv_S_A|Lirv_T_B|Lirv_T_C, Lirv_X_CELL, Lirv_I_ZERO, Lirv_P_SGRP  // sseg
+    SPEC Lirv_T_D|Lirv_T_A|Lirv_S_A|Lirv_T_B|Lirv_S_B|Lirv_T_C, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_ANY  // pos
+    SPEC Lirv_T_D, Lirv_X_VSLOT, Lirv_I_ZERO, Lirv_P_STMT              // vaddr
+    SPEC Lirv_T_D|Lirv_T_A, Lirv_X_ARR1, Lirv_I_ZERO, Lirv_P_STMT      // aaddr1
+    SPEC Lirv_T_D|Lirv_T_A|Lirv_T_B, Lirv_X_ARR2, Lirv_I_ZERO, Lirv_P_STMT  // aaddr2
+    SPEC Lirv_T_D|Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT      // taddr
+    SPEC Lirv_T_D, Lirv_X_ARRM, Lirv_I_ZERO, Lirv_P_STMT               // aref
+    SPEC Lirv_T_D, Lirv_X_SARR, Lirv_I_ZERO, Lirv_P_STMT               // saref
+    SPEC Lirv_T_A, Lirv_X_NONE|Lirv_XF_AANY, Lirv_I_ANY, Lirv_P_STMT   // subarg
+    SPEC Lirv_T_A|Lirv_T_AOPT, Lirv_X_UNIT|Lirv_XF_AANY, Lirv_I_ZERO, Lirv_P_STMT  // callsub
+    SPEC 0, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_SUB                       // subret
 Lirv_spec_end:
 // element forms (A = IR_NONE, IR.md 3.2): B = subscript (a number)
 Lirv_spec_el_s:
@@ -1158,6 +1619,9 @@ Lirv_spec_el_c:
 Lirv_fsel_ops:
     .quad (1 << OP_PRNUM) | (1 << OP_PRSTR) | (1 << OP_PRCOMMA) | (1 << OP_PRSEMI) | (1 << OP_PRNL) | (1 << OP_PRSV) | (1 << OP_PRTAB) | (1 << OP_INBEG)
     .quad (1 << (OP_INNUM - 64)) | (1 << (OP_INSV - 64)) | (1 << (OP_INEND - 64))
+// the temp kind a CALL argument needs per SUBP_* (SUBP_STR: checked apart)
+Lirv_subp_kinds:
+    .byte Lirv_K_NREF, 0, Lirv_K_AREF, Lirv_K_SAREF
 
 .if (Lirv_spec_end - Lirv_spec) != (4 * OP_COUNT)
 .error "ir_verify: spec table does not match OP_COUNT"
@@ -1167,6 +1631,10 @@ Lirv_fsel_ops:
 Lirv_fmt_insn:      .asciz "ir verify: %s (in %s, instruction %lu)"
 Lirv_fmt_func:      .asciz "ir verify: %s (in %s)"
 Lirv_fmt_module:    .asciz "ir verify: %s"
+Lirv_fmt_uinsn:     .asciz "ir verify: %s (in unit %lu %s, instruction %lu)"
+Lirv_fmt_ufunc:     .asciz "ir verify: %s (in unit %lu %s)"
+Lirv_fmt_umodule:   .asciz "ir verify: %s (in unit %lu)"
+Lirv_s_sub:         .asciz "SUB"
 Lirv_s_main:        .asciz "main"
 Lirv_m_temp_range:  .asciz "temp operand out of range"
 Lirv_m_temp_undef:  .asciz "temp used before its definition"
@@ -1193,7 +1661,7 @@ Lirv_m_mainparam:   .asciz "main has a parameter"
 Lirv_m_maindef:     .asciz "main has a DEF line"
 Lirv_m_param:       .asciz "FN parameter is not a scalar slot"
 Lirv_m_empty:       .asciz "function has no instructions"
-Lirv_m_lastop:      .asciz "main must end with end, FN functions with ret, string functions with sret"
+Lirv_m_lastop:      .asciz "main must end with end, FN functions with ret, string functions with sret, SUB bodies with subret"
 Lirv_m_nolabels:    .asciz "label table missing"
 Lirv_m_label_undef: .asciz "label never defined"
 Lirv_m_nslots:      .asciz "NSLOTS != 286 + 2*NFORS"
@@ -1232,6 +1700,28 @@ Lirv_m_nfiles:      .asciz "more than 8 FILES names"
 Lirv_m_nofiles:     .asciz "FILES table missing"
 Lirv_m_filename:    .asciz "FILES name empty, too long or containing byte 0"
 Lirv_m_stabsize:    .asciz "string table larger than 1000000 elements"
+Lirv_m_subarg_seq:  .asciz "subarg not immediately followed by its callsub"
+Lirv_m_subarg_num:  .asciz "subarg index is not the next argument number 1..15"
+Lirv_m_callsub:     .asciz "callsub target is not a SUB unit"
+Lirv_m_subargcount: .asciz "callsub argument count differs from the callee's SUBNPARAMS"
+Lirv_m_subargkind:  .asciz "CALL argument kind differs from the callee's parameter kind"
+Lirv_m_slitarg:     .asciz "string constant passed as a CALL argument"
+Lirv_m_subparam:    .asciz "SUB body has a parameter"
+Lirv_m_bodylines:   .asciz "SUB body DEF / FNEND lines differ from SUBLINE / SUBENDLINE"
+Lirv_m_mainunit:    .asciz "main module has a SUB unit field set"
+Lirv_m_nosubs:      .asciz "SUB unit table missing or with a null entry"
+Lirv_m_parammain:   .asciz "array parameter outside a SUB unit"
+Lirv_m_pdims:       .asciz "array parameter with storage or invalid DIMS"
+Lirv_m_nosubbody:   .asciz "SUB body missing"
+Lirv_m_parent:      .asciz "unit PARENT is not the main module"
+Lirv_m_unitidx:     .asciz "unit UNITIDX is not its index"
+Lirv_m_unitpools:   .asciz "unit has strings, data, string data, FILES names or units of its own"
+Lirv_m_subname:     .asciz "SUB name missing"
+Lirv_m_sublines:    .asciz "SUBLINE not below SUBENDLINE"
+Lirv_m_subnparams:  .asciz "more than 16 SUB parameters"
+Lirv_m_subparam_k:  .asciz "invalid SUB parameter entry"
+Lirv_m_subparam_dup: .asciz "two equal SUB parameters"
+Lirv_m_paramarr:    .asciz "array parameter that is not a SUB parameter"
 
     .section __DATA,__data
 Lirv_msgbuf:

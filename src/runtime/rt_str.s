@@ -17,7 +17,9 @@
 // variable) and is never written. Owned buffers grow with realloc to a
 // multiple of 16 bytes and are never shrunk or freed, so a program's
 // string storage only ever grows to the largest value each variable or
-// element has held; realloc failure is OUT OF ROOM.
+// element has held; realloc failure is OUT OF ROOM. The one exception is
+// the SD records of a SUB activation block: _bsk_sub_leave frees their
+// buffers when the activation ends (DESIGN.md 6.9).
 // =====================================================================
 .include "baysick.inc"
 

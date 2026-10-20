@@ -2,11 +2,12 @@
 
 # Baysick
 
-Baysick is a faithful re-implementation of **Dartmouth BASIC through the Fifth Edition (1970)** —
+Baysick is a faithful re-implementation of **Dartmouth BASIC through the Sixth Edition (1971)** —
 the fifteen statements of Kemeny and Kurtz's 1964 language, the Second Edition's `MAT` matrix
 statements, the Third and Fourth Editions' strings, `INPUT`, `ON … GO TO`, `TAB`, `CHANGE`,
-multi-line `DEF`, `MAT INPUT`, …, and the Fifth Edition's sequential files, `LEN ASC STR$ VAL`,
-string `DEF` functions and string tables — as a native compiler written in modern **arm64
+multi-line `DEF`, `MAT INPUT`, …, the Fifth Edition's sequential files, `LEN ASC STR$ VAL`,
+string `DEF` functions and string tables, and the Sixth Edition's `SEG$`, `POS`, `&` and
+`CALL`/`SUB`/`SUBEND` subprograms — as a native compiler written in modern **arm64
 assembly** for macOS, much as the original compiler was hand-written in GE-225 assembly.
 
 ```
@@ -63,17 +64,19 @@ two-dimensional string arrays. Specified in `docs/LANGUAGE.md` ("The Fifth Editi
 §6.8, §8.5). Its tests are `tests/programs/ed5_*`, `manual5_*`, `tests/errors/c_ed5_*`,
 `r_ed5_*` and `tests/ir/ed5_*`.
 
-Sixth Edition (1971): specified, being implemented — `SEG$`, `POS`, `&` and `CALL`/`SUB`/`SUBEND`
-subprograms (`docs/LANGUAGE.md` "The Sixth Edition", §6.2, §7.27; work packages `docs/DESIGN.md`
-§2.5; tests `ed6_*`, `manual6_*`, `c_ed6_*`, `r_ed6_*`, `tests/ir/ed6_*`, expected to fail until
-then).
+Sixth Edition (1971): implemented on both targets — `SEG$`, `POS`, the concatenation operator
+`&` and `CALL`/`SUB`/`SUBEND` subprograms with parameters by reference, private variables and
+recursion. Specified in `docs/LANGUAGE.md` ("The Sixth Edition", §4.6, §6.2, §7.27), `docs/IR.md`
+§3.4 and `docs/DESIGN.md` (§2.2, §2.5, §5.3–§5.4, §6.9). Its tests are `tests/programs/ed6_*`,
+`manual6_*`, `tests/errors/c_ed6_*`, `r_ed6_*` and `tests/ir/ed6_*`.
 
 ## Documents
 
 * `docs/LANGUAGE.md` — normative language spec (statements, MAT, number format, errors,
   limits), based on the October 1964 Dartmouth manual, the 1968 (Fourth Edition) manual and
   (for the Fifth Edition, the Dartmouth manual being unavailable) the 1970 GE MARK II BASIC
-  manual, with every deviation marked "Baysick decision".
+  manual; the Sixth Edition, whose manual is also unavailable, rests on the designers' histories
+  and programs of the period. Every deviation is marked "Baysick decision".
 * `docs/DESIGN.md` — modules and file ownership, conventions, CLI, backend interface, runtime ABI
   for both targets, the Linux build and the cross-test setup.
 * `docs/IR.md` — the IR: opcodes, layouts, canonical lowering, `--emit-ir` text format, and how
@@ -144,5 +147,5 @@ CI runs `make test` on macOS, packs the bundle, and runs it on an `ubuntu-latest
   C/Rust-like syntax). MAT is the stepping stone: the matrix runtime, the IR matrix operations and
   the SIMD kernels with CPU-feature dispatch exist on both targets. `docs/SEA_BOOTSTRAP.md`
   analyses what a compiler written in BASIC needs: the Fourth Edition's strings and INPUT are
-  not enough on their own; the Fifth Edition (files, string functions), now implemented, covers
-  the rows it marks.
+  not enough on their own; the Fifth Edition (files, string functions) and the Sixth Edition
+  (`SEG$`, `POS`, `&`, subprograms), both implemented, cover the rows it marks.

@@ -15,6 +15,14 @@
 
 .equ BK_X64_BYTES_PER_LINE, 16      // string literal bytes per ".byte" line
 
+// Label key of %B (x64_insn.s builds it the same way): function index in
+// the low 5 bits (0..26), SUB unit index + 1 above them (0 = main module).
+.equ BK_X64_KEY_UNIT_SHIFT, 5
+.equ BK_X64_KEY_FUNC_MASK,  31
+.if NUM_FUNCS > BK_X64_KEY_FUNC_MASK + 1
+    .error "x64_text.s label key: function index does not fit 5 bits"
+.endif
+
     .section __TEXT,__text,regular,pure_instructions
 
 // ---------------------------------------------------------------------
@@ -22,9 +30,11 @@
 //   Directives (each consumes the next argument from x2, x3, ... x7):
 //     %u  u64 in unsigned decimal         %s  NUL-terminated string
 //     %L  letter: 'A' + argument (0..25)  %x  "0x" + 16 uppercase hex digits
-//     %B  label base of a function (argument = function index): index 0
-//         (main) gives ".Lbsk_L", index 1+L gives ".Lfn_<L>_L"; the label
-//         id follows as a separate %u
+//     %B  label base of a function (argument = label key: function index
+//         + 32 * (SUB unit + 1), the unit part 0 in the main module): main
+//         gives ".Lbsk_L", FN L ".Lfn_<L>_L", the SUB body of unit u
+//         ".Lsub_<u>_L", FN L of unit u ".Lsub_<u>_fn_<L>_L"; the label id
+//         follows as a separate %u
 //     %%  a literal '%' (AT&T register names are written "%%rax")
 //   Any other character after '%' is emitted literally (with the '%').
 // In:  x0 = OutBuf*, x1 = NUL-terminated format, x2..x7 = arguments
@@ -121,18 +131,44 @@ Lbk_x64_fmt_hex:
     bl _ob_puthex16
     b Lbk_x64_fmt_run
 Lbk_x64_fmt_base:
-    // label base: main -> ".Lbsk_L"; FN letter L -> ".Lfn_<L>_L"
+    // label base from a label key (BK_X64_KEY_*): bits 0-4 = function index,
+    // the bits above = SUB unit index + 1 (0 = the main module).
+    // Main module: index 0 -> ".Lbsk_L", index 1+L -> ".Lfn_<L>_L".
+    // Unit u: index 0 -> ".Lsub_<u>_L", index 1+L -> ".Lsub_<u>_fn_<L>_L".
     // (x22, the literal-run start, is dead until Lbk_x64_fmt_run resets it)
     ldr x22, [x21], #8
+    lsr x9, x22, #BK_X64_KEY_UNIT_SHIFT
+    cbz x9, Lbk_x64_fmt_base_module
+    // ".Lsub_<u>" with u = unit field - 1
+    mov x0, x19
+    adrp x1, Lbk_x64_fmt_s_sub@PAGE
+    add x1, x1, Lbk_x64_fmt_s_sub@PAGEOFF
+    bl _ob_puts
+    lsr x1, x22, #BK_X64_KEY_UNIT_SHIFT
+    sub x1, x1, #1
+    mov x0, x19
+    bl _ob_putu
+    and x22, x22, #BK_X64_KEY_FUNC_MASK
+    cbz x22, Lbk_x64_fmt_base_sfx   // the SUB body: ".Lsub_<u>_L"
+    // a function of the unit: "_fn_<L>_L"
+    mov x0, x19
+    adrp x1, Lbk_x64_fmt_s_unitfn@PAGE
+    add x1, x1, Lbk_x64_fmt_s_unitfn@PAGEOFF
+    bl _ob_puts
+    b Lbk_x64_fmt_base_letter
+Lbk_x64_fmt_base_module:
     mov x0, x19
     cbz x22, Lbk_x64_fmt_base_main
     adrp x1, Lbk_x64_fmt_s_fn@PAGE
     add x1, x1, Lbk_x64_fmt_s_fn@PAGEOFF
     bl _ob_puts
+Lbk_x64_fmt_base_letter:
+    // the function letter, then "_L"
     sub w1, w22, #1
     add w1, w1, #'A'
     mov x0, x19
     bl _ob_putc
+Lbk_x64_fmt_base_sfx:
     mov x0, x19
     adrp x1, Lbk_x64_fmt_s_sfx@PAGE
     add x1, x1, Lbk_x64_fmt_s_sfx@PAGEOFF
@@ -232,6 +268,10 @@ Lbk_x64_fmt_s_fn:
     .asciz ".Lfn_"
 Lbk_x64_fmt_s_sfx:
     .asciz "_L"
+Lbk_x64_fmt_s_sub:
+    .asciz ".Lsub_"
+Lbk_x64_fmt_s_unitfn:
+    .asciz "_fn_"
 
 Lbk_x64_bytes_kw:
     .asciz "    .byte "

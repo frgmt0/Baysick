@@ -206,6 +206,8 @@ Lfe_change_n2s:
     ldr w9, [sp, #(48 + TOK_INDEX)]
     cmp w9, #BI_STR
     b.eq Lfe_change_var
+    cmp w9, #BI_SEG                     // SEG$( likewise (Sixth Edition)
+    b.eq Lfe_change_var
 3:
     cmp w0, #TK_STRING
     b.eq Lfe_change_var

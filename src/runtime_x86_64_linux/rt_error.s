@@ -30,9 +30,10 @@
 #             those two if writing stdout or a file failed (LANGUAGE.md
 #             section 10).
 #   Inputs  : %edi = ERR_* code; must be a run-time code
-#             (ERR_FIRST_RUNTIME..ERR_TABLE_SIZE-1). Any other code (a
-#             caller bug) prints nothing and exits with status 1
-#             (DESIGN.md 6.2).
+#             (exactly ERR_FIRST_RUNTIME..ERR_END_RUNTIME-1, 32..56).
+#             Any other code (a caller bug, or a compile-time code such
+#             as 57..61) prints nothing and exits with status 1
+#             (DESIGN.md 6.2, 6.9).
 #   Outputs : never returns
 #   Clobbers: everything
 #   Callee-saved used (not restored: the function never returns):
@@ -66,8 +67,8 @@ bsk_err:
     # nothing.
     cmpl $ERR_FIRST_RUNTIME, %ebx
     jb .Lrt_err_exit
-    cmpl $ERR_TABLE_SIZE, %ebx
-    jae .Lrt_err_exit
+    cmpl $ERR_END_RUNTIME, %ebx
+    jae .Lrt_err_exit               # 57.. are compile-time codes
     leaq .Lrt_errmsg(%rip), %rax
     movq (%rax,%rbx,8), %rsi        # message pointer or 0
     testq %rsi, %rsi

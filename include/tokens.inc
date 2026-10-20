@@ -26,12 +26,6 @@
 .ifndef BSK_TOKENS_INC
 .equ BSK_TOKENS_INC, 1
 
-// Contract staging switch of the Sixth Edition (DESIGN.md 2.2): selects
-// TK_COUNT, BI_COUNT and KW_COUNT below. Defined identically in ir.inc.
-.ifndef BSK_ED6_CONTRACT
-.equ BSK_ED6_CONTRACT, 0
-.endif
-
 // ---- Scanner modes ----------------------------------------------------
 .equ SCAN_OPERAND,      0
 .equ SCAN_OPERATOR,     1
@@ -74,11 +68,7 @@
 
 .equ TK_AMP,            32  /* Sixth Edition: '&' (operator mode, after a string operand only; LANGUAGE.md 4.6) */
 
-.if BSK_ED6_CONTRACT
 .equ TK_COUNT,          33
-.else
-.equ TK_COUNT,          32
-.endif
 
 // ---- Token record (filled by the scanner), 40 bytes --------------------
 .equ TOK_KIND,          0   /* u32 TK_* */
@@ -111,11 +101,7 @@
 .equ BI_STR,            17  /* Fifth Edition: STR$(expression), STRING value; the scanner consumes "STR$(" */
 .equ BI_SEG,            18  /* Sixth Edition: SEG$(string, first, last), STRING value; the scanner consumes "SEG$(" */
 .equ BI_POS,            19  /* Sixth Edition: POS(string, string [, start]), numeric value */
-.if BSK_ED6_CONTRACT
 .equ BI_COUNT,          20
-.else
-.equ BI_COUNT,          18
-.endif
 
 // ---- Statement keyword ids (matched as prefixes of the compacted text
 //      after the line number, in exactly this order) --------------------
@@ -148,11 +134,7 @@
 .equ KW_SUBEND,         25  /* Sixth Edition (7.27); tested before SUB, which is a prefix of it */
 .equ KW_SUB,            26  /* Sixth Edition (7.27) */
 
-.if BSK_ED6_CONTRACT
 .equ KW_COUNT,          27
-.else
-.equ KW_COUNT,          24
-.endif
 
 // ---- MAT sub-keywords (after "MAT", in this order) and MAT function ids --
 // "MAT" is followed by READ, PRINT, INPUT (Fourth Edition), or an

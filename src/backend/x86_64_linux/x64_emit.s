@@ -4,7 +4,8 @@
 // skeleton"). Emits GNU as AT&T x86_64 ELF text.
 //
 // Exports: _bk_x64_emit  (BKD_EMIT of _bk_x86_64_linux_desc)
-// Uses:    _bk_x64_emit_func (x64_insn.s), _bk_x64_fmt, _bk_x64_bytes
+// Uses:    _bk_x64_emit_func (x64_insn.s), _bk_x64_emit_subl (x64_sub.s),
+//          _bk_x64_fmt, _bk_x64_bytes
 //          (x64_text.s), _ob_puts (driver)
 // =====================================================================
 .include "baysick.inc"
@@ -14,10 +15,12 @@
 // ---------------------------------------------------------------------
 // _bk_x64_emit -- BKD_EMIT: append one complete GNU as file for the
 // Module to the OutBuf, in the order of DESIGN.md 5.4.3: .text (main as
-// bsk_program, then present FN functions in letter order), .rodata
+// bsk_program, then present FN functions in letter order, then per SUB
+// unit its SUB body and FN functions, Sixth Edition), .rodata
 // (string literals, DATA block and count, string DATA bytes),
 // .data.rel.ro (SD_* records of the string constants, bsk_sdata and its
-// count), .data (array and string list descriptors), .bss (globals, string
+// count, bsk_files and its count, the SUBL_* records of the SUB units),
+// .data (array and string list descriptors), .bss (globals, string
 // variables, array and string list storage), and the .note.GNU-stack
 // marker. A module without string DATA gets an empty bsk_sdata (count 0).
 // In:  x0 = const Module*, x1 = OutBuf*
@@ -25,17 +28,18 @@
 // Clobbers: x0-x17, d0-d7, d16-d31
 // Callee-saved used: x19 = Module*, x20 = OutBuf*, x21 = loop index,
 //                    x22 = pointer to the current table entry,
-//                    x23 = loop limit (or the DATA count)
-// Frame: 48 bytes
+//                    x23 = loop limit (or the DATA count),
+//                    x24 = SUB unit index (Sixth Edition)
+// Frame: 64 bytes
 // ---------------------------------------------------------------------
     .globl _bk_x64_emit
     .p2align 2
 _bk_x64_emit:
-    stp x29, x30, [sp, #-48]!
+    stp x29, x30, [sp, #-64]!
     mov x29, sp
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
-    str x23, [sp, #40]
+    stp x23, x24, [sp, #48]
     mov x19, x0
     mov x20, x1
 
@@ -56,6 +60,7 @@ _bk_x64_emit:
     mov x0, x20
     mov x1, x19
     mov x2, #FUNC_MAIN
+    mov x3, x19                     // the main module
     bl _bk_x64_emit_func
     cbnz x0, Lbk_x64_em_return
 
@@ -71,12 +76,45 @@ Lbk_x64_em_fn_loop:
     mov x0, x20
     mov x1, x19
     mov x2, x21
+    mov x3, x19
     bl _bk_x64_emit_func
     cbnz x0, Lbk_x64_em_return
 Lbk_x64_em_fn_next:
     add x21, x21, #1
     cmp x21, #NUM_FUNCS
     b.lo Lbk_x64_em_fn_loop
+
+    // ---- SUB units u = 0 ... NSUBS-1: the SUB body, then its FN functions -
+    mov x24, #0
+Lbk_x64_em_unit_loop:
+    ldr w9, [x19, #IRM_NSUBS]
+    cmp x24, x9
+    b.hs Lbk_x64_em_unit_done
+    bl Lbk_x64_em_unit_at           // x22 = unit Module*
+    mov x21, #FUNC_MAIN
+Lbk_x64_em_ufn_loop:
+    // the SUB body (index 0, always present), then each present FN
+    add x9, x22, #IRM_FUNCS
+    mov x10, #IRF_SIZE
+    madd x9, x21, x10, x9
+    ldr w10, [x9, #IRF_PRESENT]
+    cbnz w10, 1f
+    cbz x21, Lbk_x64_em_bad_unit    // a unit without its SUB body
+    b Lbk_x64_em_ufn_next
+1:
+    mov x0, x20
+    mov x1, x22
+    mov x2, x21
+    mov x3, x19
+    bl _bk_x64_emit_func
+    cbnz x0, Lbk_x64_em_return
+Lbk_x64_em_ufn_next:
+    add x21, x21, #1
+    cmp x21, #NUM_FUNCS
+    b.lo Lbk_x64_em_ufn_loop
+    add x24, x24, #1
+    b Lbk_x64_em_unit_loop
+Lbk_x64_em_unit_done:
 
     // ---- .rodata: string literals .Lstr_<id> as decimal .byte lists ---
     mov x0, x20
@@ -256,6 +294,22 @@ Lbk_x64_em_files_done:
     mov x2, x23
     bl _bk_x64_fmt
 
+    // ---- SUB units: .Lsubl_<u> records and .Lsubt_<u> templates ----------
+    mov x24, #0
+Lbk_x64_em_subl_loop:
+    ldr w9, [x19, #IRM_NSUBS]
+    cmp x24, x9
+    b.hs Lbk_x64_em_subl_done
+    bl Lbk_x64_em_unit_at           // x22 = unit Module*
+    mov x0, x20
+    mov x1, x22
+    mov x2, x19
+    bl _bk_x64_emit_subl
+    cbnz x0, Lbk_x64_em_return
+    add x24, x24, #1
+    b Lbk_x64_em_subl_loop
+Lbk_x64_em_subl_done:
+
     // ---- .data: array descriptors (RTA_*), letter order ----------------
     mov x0, x20
     adrp x1, Lbk_x64_em_sec_data@PAGE
@@ -429,10 +483,35 @@ Lbk_x64_em_bad_dims:
     adrp x0, Lbk_x64_em_err_dims@PAGE
     add x0, x0, Lbk_x64_em_err_dims@PAGEOFF
 Lbk_x64_em_return:
-    ldr x23, [sp, #40]
+    ldp x23, x24, [sp, #48]
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #48
+    ldp x29, x30, [sp], #64
+    ret
+
+Lbk_x64_em_bad_unit:
+    adrp x0, Lbk_x64_em_err_unit@PAGE
+    add x0, x0, Lbk_x64_em_err_unit@PAGEOFF
+    b Lbk_x64_em_return
+
+// ---------------------------------------------------------------------
+// Lbk_x64_em_unit_at -- file-local: x22 = SUB unit x24 of the main module
+// (x19), checked to be a unit of this module with index x24; otherwise a
+// non-local exit through Lbk_x64_em_bad_unit (only from _bk_x64_emit's
+// own frame level, so sp is _bk_x64_emit's).
+// Clobbers: x9, x10.  Leaf, no frame.
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_em_unit_at:
+    ldr x22, [x19, #IRM_SUBS]
+    ldr x22, [x22, x24, lsl #3]
+    cbz x22, Lbk_x64_em_bad_unit
+    ldr x9, [x22, #IRM_PARENT]
+    cmp x9, x19
+    b.ne Lbk_x64_em_bad_unit
+    ldr w10, [x22, #IRM_UNITIDX]
+    cmp x10, x24
+    b.ne Lbk_x64_em_bad_unit
     ret
 
 // ---------------------------------------------------------------------
@@ -570,6 +649,8 @@ Lbk_x64_em_err_nomain:
     .asciz "x86_64-linux backend: module has no main function"
 Lbk_x64_em_err_dims:
     .asciz "x86_64-linux backend: array with more than 2 dimensions"
+Lbk_x64_em_err_unit:
+    .asciz "x86_64-linux backend: bad SUB unit record"
 
 // The emitted SD_* records ("    .quad <bytes>" / "    .long <len>, 0") and
 // string variable block are written out by layout; keep them tied to

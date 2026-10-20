@@ -11,7 +11,7 @@
 //   _fe_sparam_index(w0=string slot) -> w0 k or -1   a string parameter?
 //   _fe_new_scell() -> w0 sref temp                  `tC = scell %sK`
 //   _fe_record_kind(w0=letter, w1=FNK_* signature)   log a call
-//   _fe_check_kinds()                                phase-3 kind check
+//   _fe_kinds_line() -> w0 line or 0                 phase-3 kind check
 //
 // A string expression is a string reference ("..." -> `slit`, V$ ->
 // `svar` or `sparam k`, L$(i) -> `sald1`, T$(i, j) -> `sald2`), STR$(e)
@@ -23,6 +23,11 @@
 // (IR.md 4.2). Every FN call is logged with its kind signature (FNK_STRING
 // for a call of FNx$, bit k for a string argument k) for the phase-3
 // MISMATCHED STRING OPERATION check of LANGUAGE.md 7.10.1 / 10.1.
+// Sixth Edition (LANGUAGE.md 4.6, 6.2; IR.md 4.2): SEG$(s, m, n) is a
+// string primary (a new cell: `sseg`), and a string expression is a chain
+// of primaries joined by '&': the first primary's cell (a result
+// expression) or a new cell holding its copy, then `scat` per operand.
+// Cells are allocated in the current program unit (_fe_unit).
 // =====================================================================
 .include "baysick.inc"
 
@@ -50,6 +55,13 @@
     add \reg, \reg, \sym@PAGEOFF
 .endm
 
+// FE_UNITMOD reg: reg = the Module* of the current program unit (Sixth
+// Edition: _fe_unit, the main module or a SUB unit; else _fe_module).
+.macro FE_UNITMOD reg
+    adrp \reg, _fe_unit@PAGE
+    ldr \reg, [\reg, _fe_unit@PAGEOFF]
+.endm
+
     .section __TEXT,__text,regular,pure_instructions
 
 // ---------------------------------------------------------------------
@@ -68,6 +80,95 @@
     .globl _fe_sexpr_try
     .p2align 2
 _fe_sexpr_try:
+// Sixth Edition: string-expression := string-primary { "&" string-primary }
+//   (LANGUAGE.md 4.6, IR.md 4.2). The first primary's reference is the
+//   result cell if it is a private cell (a result expression), else it is
+//   copied into a new cell (`tC = scell %sK`, `sset tC, t1`); every
+//   further primary is appended with `scat tC, ti`. After '&' a primary
+//   is required (Lfe_sexpr_primary_need).
+//   in/out/clobbers: as above
+//   callee-saved: w19 = result reference, w20 = 1 if it is a private cell,
+//        x21 = position before the operator token, w22 = primary temp
+//   frame: 48 bytes
+    stp x29, x30, [sp, #-48]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]
+    stp x21, x22, [sp, #32]
+    bl Lfe_sexpr_primary
+    tbnz w0, #31, Lfe_sexpr_cat_ret     // no string expression here
+    mov w19, w0
+    mov w20, w1
+Lfe_sexpr_cat_loop:
+    // operator position after a string primary: '&' continues it
+    bl _fe_getpos
+    mov x21, x0
+    bl _fe_next_op
+    cmp w0, #TK_AMP
+    b.ne Lfe_sexpr_cat_done
+    cbnz w20, 1f
+    // a shared first operand: its value goes into a new result cell
+    bl _fe_new_scell
+    mov w22, w0
+    FE_NONE
+    mov w1, w22
+    mov w2, w19
+    mov w0, #OP_SSET
+    bl _fe_emit
+    mov w19, w22
+    mov w20, #1
+1:
+    // the next primary, appended to the result cell
+    bl Lfe_sexpr_primary_need
+    mov w22, w0
+    FE_NONE
+    mov w1, w19
+    mov w2, w22
+    mov w0, #OP_SCAT
+    bl _fe_emit
+    b Lfe_sexpr_cat_loop
+Lfe_sexpr_cat_done:
+    // not '&': hand the token back
+    mov x0, x21
+    bl _fe_setpos
+    mov w0, w19
+    mov w1, w20
+Lfe_sexpr_cat_ret:
+    ldp x21, x22, [sp, #32]
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #48
+    ret
+
+// ---------------------------------------------------------------------
+// Lfe_sexpr_primary_need -- a string primary is required after '&'
+//   (LANGUAGE.md 4.5): a numeric operand there is MISMATCHED STRING
+//   OPERATION, anything else ILLEGAL FORMULA (Lfe_sexpr_classify).
+//   in:  scanner at operand position
+//   out: w0 = sref temp of the primary
+//   clobbers: x0-x17, d0-d7
+//   callee-saved: none used
+//   frame: 16 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lfe_sexpr_primary_need:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    bl Lfe_sexpr_primary
+    tbz w0, #31, 1f
+    bl Lfe_sexpr_classify               // does not return
+1:
+    ldp x29, x30, [sp], #16
+    ret
+
+// ---------------------------------------------------------------------
+// Lfe_sexpr_primary -- one string primary (the Fifth Edition string
+//   expression, plus SEG$): see _fe_sexpr_try above for in/out.
+//   clobbers: x0-x17, d0-d7
+//   callee-saved: x19 = start position, w20 = letter / slot, w21 = temp,
+//        w22 = second temp
+//   frame: 96 bytes (frame record, x19-x22, 40-byte token at sp+48)
+// ---------------------------------------------------------------------
+    .p2align 2
+Lfe_sexpr_primary:
     stp x29, x30, [sp, #-96]!
     mov x29, sp
     stp x19, x20, [sp, #16]
@@ -159,6 +260,11 @@ Lfe_sexpr_try_builtin:
     // only STR$( is a string expression (LEN, ASC, VAL ... are numbers)
     ldr w9, [sp, #(48 + TOK_INDEX)]
     cmp w9, #BI_STR
+    b.eq 1f
+    cmp w9, #BI_SEG                     // Sixth Edition: SEG$(
+    b.eq Lfe_sexpr_try_seg
+    b Lfe_sexpr_try_none
+1:
     b.ne Lfe_sexpr_try_none
     ldr w9, [sp, #(48 + TOK_LEN)]
     cmp w9, #5
@@ -176,6 +282,39 @@ Lfe_sexpr_try_builtin:
     mov w0, #OP_SSTR
     bl _fe_emit
     mov w0, w22
+    b Lfe_sexpr_try_private
+
+Lfe_sexpr_try_seg:
+    // SEG$(s, m, n) (LANGUAGE.md 6.2, IR.md 4.2): s's string reference, m,
+    // n, then `tC = sseg %sK, tS, tm, tn` (a new cell). A number for s or
+    // an arithmetic operator after it is MISMATCHED STRING OPERATION; a
+    // missing ',' or ')' ILLEGAL FORMULA.
+    bl _fe_paren_open
+    bl _fe_sexpr_need
+    mov w21, w0                         // tS
+    bl _fe_sref_end
+    mov w0, #TK_COMMA
+    mov w1, #ERR_ILLEGAL_FORMULA
+    bl _fe_expect_op
+    bl _fe_expr
+    mov w22, w0                         // tm
+    mov w0, #TK_COMMA
+    mov w1, #ERR_ILLEGAL_FORMULA
+    bl _fe_expect_op
+    bl _fe_expr
+    mov w20, w0                         // tn
+    bl _fe_paren_close
+    // a new cell of the current program unit
+    FE_UNITMOD x0
+    bl _ir_new_stemp
+    mov w9, w0
+    FE_NONE
+    mov w4, w9                          // X = the new cell
+    mov w1, w21
+    mov w2, w22
+    mov w3, w20
+    mov w0, #OP_SSEG
+    bl _fe_emit_new
     b Lfe_sexpr_try_private
 
 Lfe_sexpr_try_sfn0:
@@ -245,16 +384,34 @@ Lfe_sexpr_try_ret:
 //   out: w0 = sref temp
 //   clobbers: x0-x17, d0-d7
 //   callee-saved: none used
-//   frame: 64 bytes (frame record, 40-byte token at sp+16)
+//   frame: 16 bytes
 // ---------------------------------------------------------------------
     .globl _fe_sexpr_need
     .p2align 2
 _fe_sexpr_need:
-    stp x29, x30, [sp, #-64]!
+    stp x29, x30, [sp, #-16]!
     mov x29, sp
     bl _fe_sexpr_try
-    tbz w0, #31, Lfe_sexpr_need_ret
-    // classify what is there instead (the error ends compilation)
+    tbz w0, #31, 1f
+    bl Lfe_sexpr_classify               // does not return
+1:
+    ldp x29, x30, [sp], #16
+    ret
+
+// ---------------------------------------------------------------------
+// Lfe_sexpr_classify -- no string expression where one is required:
+//   report what is there instead (LANGUAGE.md 5.2): MISMATCHED STRING
+//   OPERATION if it starts a numeric operand, ILLEGAL VARIABLE for a
+//   letter+digit+"$(" name, else ILLEGAL FORMULA.
+//   in:  scanner at operand position   out: does not return
+//   clobbers: x0-x17, d0-d7
+//   callee-saved: none used
+//   frame: 64 bytes (frame record, 40-byte token at sp+16)
+// ---------------------------------------------------------------------
+    .p2align 2
+Lfe_sexpr_classify:
+    stp x29, x30, [sp, #-64]!
+    mov x29, sp
     mov w0, #SCAN_OPERAND
     add x1, sp, #16
     bl _fe_scan
@@ -291,9 +448,6 @@ _fe_sexpr_need:
     b.ls 1b
     mov w0, #ERR_ILLEGAL_FORMULA
     b 1b
-Lfe_sexpr_need_ret:
-    ldp x29, x30, [sp], #64
-    ret
 
 // ---------------------------------------------------------------------
 // _fe_sexpr_starts -- does a string expression start at the scanner
@@ -334,6 +488,9 @@ _fe_sexpr_starts:
     // STR$( only
     ldr w9, [sp, #(24 + TOK_INDEX)]
     cmp w9, #BI_STR
+    b.eq 4f
+    cmp w9, #BI_SEG                     // Sixth Edition: SEG$( too
+4:
     cset w0, eq
     b 1f
 3:
@@ -635,8 +792,7 @@ Lfe_sparam_index_none:
 _fe_new_scell:
     stp x29, x30, [sp, #-16]!
     mov x29, sp
-    adrp x9, _fe_module@PAGE
-    ldr x0, [x9, _fe_module@PAGEOFF]
+    FE_UNITMOD x0                       // the current program unit's cells
     bl _ir_new_stemp
     mov w9, w0
     FE_NONE
@@ -718,21 +874,18 @@ Lfe_record_kind_store:
     ret
 
 // ---------------------------------------------------------------------
-// _fe_check_kinds -- phase-3 kind check (LANGUAGE.md 7.10.1, 10.1), run
+// _fe_kinds_line -- the phase-3 kind check (LANGUAGE.md 7.10.1, 10.1), run
 //   after INCORRECT NUMBER OF ARGUMENTS (so every logged call has its
-//   DEF's argument count): the first logged call (ascending lines, a
-//   line's calls in parse order) whose signature differs from its DEF's
-//   FNK_* word is MISMATCHED STRING OPERATION at the call's line.
-//   in: none   out: returns only if every call matches
-//   clobbers: x0-x17
-//   callee-saved: none used
-//   frame: 16 bytes
+//   DEF's argument count): the first logged call of the current program
+//   unit (ascending lines, a line's calls in parse order) whose signature
+//   differs from its DEF's FNK_* word is MISMATCHED STRING OPERATION at
+//   the call's line.
+//   in: none   out: w0 = that line, or 0 if every call matches
+//   clobbers: x0, x9-x17   leaf, no frame
 // ---------------------------------------------------------------------
-    .globl _fe_check_kinds
+    .globl _fe_kinds_line
     .p2align 2
-_fe_check_kinds:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
+_fe_kinds_line:
     adrp x9, _fe_calllog@PAGE
     ldr x12, [x9, _fe_calllog@PAGEOFF]
     adrp x9, _fe_ncalls@PAGE
@@ -751,14 +904,13 @@ _fe_check_kinds:
     ldr w9, [x13, x16, lsl #2]          // the DEF's kind word
     cmp w9, w17
     b.eq 2f
-    mov w0, #ERR_MISMATCHED_STRING
-    ldr w1, [x15]                       // at the call's line
-    bl _fe_fail
+    ldr w0, [x15]                       // the call's line
+    ret
 2:
     add x11, x11, #1
     b 1b
 3:
-    ldp x29, x30, [sp], #16
+    mov w0, #0
     ret
 
 // ---------------------------------------------------------------------
@@ -800,6 +952,7 @@ Lfe_sexpr_tkclass:
     .byte FE_TKC_NUMERIC                // TK_FN0
     .byte FE_TKC_STRING                 // TK_SFN
     .byte FE_TKC_STRING                 // TK_SFN0
+    .byte FE_TKC_OTHER                  // TK_AMP
 Lfe_sexpr_tkclass_end:
 // the table must have exactly TK_COUNT entries (DESIGN.md 2.4)
 .if ((Lfe_sexpr_tkclass_end - Lfe_sexpr_tkclass) != TK_COUNT)

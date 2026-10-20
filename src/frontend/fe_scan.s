@@ -25,6 +25,10 @@
 // letter+digit+'$('), ILLEGAL FORMULA (NUM( / DET(, or an unexpected
 // byte), INCORRECT FORMAT (unterminated string). Operator mode TK_BAD is
 // always INCORRECT FORMAT.
+// Sixth Edition: SEG$( is TK_BUILTIN BI_SEG with TOK_LEN = 5 (like STR$(),
+// POS( is TK_BUILTIN BI_POS with TOK_LEN = 4; in operator mode '&' is
+// TK_AMP (the string-expression parser continues with it; anywhere else it
+// is text the statement grammar does not expect).
 // =====================================================================
 .include "baysick.inc"
 
@@ -134,6 +138,13 @@ Lfe_scan_punct:
     mov w0, #TK_EQ
     cmp w10, #'='
     b.eq Lfe_scan_finish
+    // Sixth Edition: '&' in operator position (LANGUAGE.md 4.5, 5.3)
+    cmp w10, #'&'
+    b.ne 1f
+    mov w0, #TK_AMP
+    cmp w22, #SCAN_OPERATOR
+    b.eq Lfe_scan_finish
+1:
     cmp w10, #'<'
     b.eq Lfe_scan_less
     cmp w10, #'>'
@@ -350,13 +361,17 @@ Lfe_scan_bi_loop:
     // STR$( (LANGUAGE.md 5.2 rule 3.1): "STR" must be followed by '$' and
     // '('; otherwise the text is the variable S followed by more text
     cmp w15, #BI_STR
+    // Sixth Edition: SEG$( likewise (LANGUAGE.md 5.2 rule 3.1)
+    b.eq 9f
+    cmp w15, #BI_SEG
+9:
     b.ne 2f
     FE_PEEK w16, 4
     cmp w13, #'$'
     b.ne 3f
     cmp w16, #'('
     b.ne 3f
-    add x23, x20, #5                    // "STR$(" consumed
+    add x23, x20, #5                    // "STR$(" / "SEG$(" consumed
     b Lfe_scan_finish
 3:
     str wzr, [x19, #TOK_INDEX]
@@ -737,6 +752,8 @@ Lfe_scan_builtins:
     .ascii "ASC", "\0"
     .ascii "VAL", "\0"
     .ascii "STR", "\0"                 // STR$( : the '$' is checked by the scanner
+    .ascii "SEG", "\0"                 // Sixth Edition: SEG$( : the '$' is checked by the scanner
+    .ascii "POS", "\0"                 // POS( : string arguments, a numeric value
 Lfe_scan_builtins_end:
 // the table must have exactly BI_COUNT names (DESIGN.md 2.4)
 .if ((Lfe_scan_builtins_end - Lfe_scan_builtins) != (BI_COUNT * 4))

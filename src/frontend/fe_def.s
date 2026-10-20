@@ -10,8 +10,11 @@
 //   _fe_def(), _fe_fnend()        DEF / FNEND statement handlers
 //   _fe_param_index(w0=slot) -> w0 parameter index k or -1
 //   _fe_record_call(w0=letter, w1=argument count)
-//   _fe_check_fns()               UNDEFINED FUNCTION, INCORRECT NUMBER OF
-//                                 ARGUMENTS, RECURSIVE FUNCTION
+//   _fe_fn_undef_line, _fe_fn_args_line, _fe_fn_rec_line -> w0 line or 0
+//                                 the offending line of one check (current
+//                                 unit; _fe_sub_check_fns, fe_sub.s, runs
+//                                 them over every unit)
+//   _fe_prescan_mlfuncs()         create the current unit's multi-line functions
 //
 // The pre-scan decides, before any line is lowered, which lines belong to
 // a multi-line body: a DEF line in main whose header parses as a
@@ -24,6 +27,16 @@
 //
 // Owners (_fe_linefn[i]): 0 = main, 1 + letter = the multi-line function
 // FN letter. _fe_linelab[i] = the line's label id inside its owner.
+//
+// Sixth Edition (LANGUAGE.md 7.27): the same pass partitions the lines into
+// program units. A SUB line outside every body and SUB block opens a block
+// (_fe_unit_new, fe_sub.s), which its next SUBEND line closes -- or, in an
+// erroneous program, an END line or the end of the program; a DEF body
+// open there stays unfinished. Each unit has its own multi-line functions
+// (the per-unit state is switched, fe_sub.s); owners are then relative to
+// the line's unit (_fe_lineunit[i]: 0 = main, 1 + u = block u), main gets
+// the labels of its own lines only, and the units are created after main's
+// functions (_fe_sub_create_units).
 //
 // DEF context (_fe_ctx_*, fe_compile.s): FE_CTX_NONE in main, FE_CTX_SL
 // while a single-line DEF expression is lowered, FE_CTX_ML for every line
@@ -66,20 +79,31 @@
     add \reg, \reg, \sym@PAGEOFF
 .endm
 
+// FE_UNITMOD reg: reg = the Module* of the current program unit (Sixth
+// Edition: _fe_unit, the main module or a SUB unit; else _fe_module).
+.macro FE_UNITMOD reg
+    adrp \reg, _fe_unit@PAGE
+    ldr \reg, [\reg, _fe_unit@PAGEOFF]
+.endm
+
     .section __TEXT,__text,regular,pure_instructions
 
 // ---------------------------------------------------------------------
 // _fe_prescan -- classify the program lines (main or a multi-line body),
 //   allocate the line labels of main (ascending), then create every
 //   multi-line function in ascending DEF-line order (_ir_func_begin,
-//   _ir_func_set) with the line labels of its body (IR.md 4.1).
+//   _ir_func_set) with the line labels of its body (IR.md 4.1); Sixth
+//   Edition: the program units too (see the file header).
 //   in:  _fe_lines / _fe_nlines (phase 1), _fe_module, _fe_main
-//   out: _fe_linefn, _fe_linelab, _fe_ml_*, _fe_pre_seen filled
+//   out: _fe_linefn, _fe_linelab, _fe_ml_*, _fe_pre_seen filled (Sixth
+//        Edition: also _fe_lineunit, the unit table, every unit's state;
+//        the main program's state is current)
 //   clobbers: x0-x17
 //   callee-saved: x19 = line table, w20 = line count, w21 = line index,
 //        x22 = owner array, x23 = label array, w24 = 1 + letter of the
-//        open body (0 = in main), w25 = letter / order index,
-//        x26 = Function* being labelled, w27 = last body line index
+//        open body (0 = none), w25 = letter, w26 = parameter count (Sixth
+//        Edition: also the SUBEND flag), w27 = open SUB block (1 + u, 0 =
+//        none; Sixth Edition), x28 = line -> unit map (Sixth Edition)
 //   frame: 128 bytes (frame record, x19-x28, 32-byte parameter buffer at
 //        sp+96)
 // ---------------------------------------------------------------------
@@ -114,6 +138,12 @@ _fe_prescan:
     // ---- pass A: which lines are multi-line bodies ---------------------
     mov w21, #0
     mov w24, #0
+    // program units (fe_sub.s): x28 = line -> unit map, w27 = current
+    // unit (0 = the main program, 1 + u = SUB block u)
+    bl _fe_unit_init
+    adrp x9, _fe_lineunit@PAGE
+    ldr x28, [x9, _fe_lineunit@PAGEOFF]
+    mov w27, #0
 Lfe_prescan_a_loop:
     cmp w21, w20
     b.hs Lfe_prescan_a_done
@@ -131,16 +161,53 @@ Lfe_prescan_a_loop:
     str x12, [x9, _fe_end@PAGEOFF]
     bl _fe_keyword                      // w0 = KW_* or -1, w1 = its length
     str w24, [x22, x21, lsl #2]         // owner: the open body, or main
+    str w27, [x28, x21, lsl #2]         // unit: the open SUB block, or main
     cbz w24, Lfe_prescan_a_main
     // inside a body: FNEND closes it (FNEND belongs to the body)
     cmp w0, #KW_FNEND
+    b.eq 9f
+    // in a SUB block, SUBEND or END ends the block, and with it this
+    // body, which stays unfinished (UNFINISHED DEF at that line, 7.27)
+    cbz w27, Lfe_prescan_a_next
+    cmp w0, #KW_SUBEND
+    cset w26, eq
+    b.eq 8f
+    cmp w0, #KW_END
     b.ne Lfe_prescan_a_next
+8:
+    adrp x9, _fe_ml_open@PAGE
+    str w24, [x9, _fe_ml_open@PAGEOFF]
+    sub w9, w24, #1
+    FE_ADR x10, _fe_ml_endidx
+    str w21, [x10, x9, lsl #2]
+    mov w24, #0
+    b Lfe_prescan_a_close
+9:
     sub w9, w24, #1
     FE_ADR x10, _fe_ml_endidx
     str w21, [x10, x9, lsl #2]
     mov w24, #0
     b Lfe_prescan_a_next
 Lfe_prescan_a_main:
+    // a SUB line outside every body and block opens a block; SUBEND (or,
+    // in an erroneous program, END) closes the open block (LANGUAGE.md 7.27)
+    cmp w0, #KW_SUB
+    b.ne 1f
+    cbnz w27, Lfe_prescan_a_next        // inside a block: NESTED SUB later
+    mov w0, w21
+    bl _fe_unit_new
+    mov w27, w0
+    bl _fe_unit_switch                  // a fresh state for the new unit
+    str w27, [x28, x21, lsl #2]         // the SUB line belongs to its block
+    b Lfe_prescan_a_next
+1:
+    cbz w27, 3f
+    cmp w0, #KW_SUBEND
+    cset w26, eq
+    b.eq Lfe_prescan_a_close
+    cmp w0, #KW_END
+    b.eq Lfe_prescan_a_close
+3:
     cmp w0, #KW_DEF
     b.ne Lfe_prescan_a_next
     // a DEF in main: parse its header without reporting errors
@@ -188,6 +255,13 @@ Lfe_prescan_a_main:
     add w11, w11, #1
     str w11, [x9, _fe_ml_count@PAGEOFF]
     add w24, w25, #1                    // the following lines are its body
+    b Lfe_prescan_a_next
+Lfe_prescan_a_close:
+    // the open block ends at this line (w26 = 1: its SUBEND line)
+    mov w0, w21
+    mov w1, w26
+    bl _fe_unit_close
+    mov w27, #0
 Lfe_prescan_a_next:
     add w21, w21, #1
     b Lfe_prescan_a_loop
@@ -202,6 +276,20 @@ Lfe_prescan_a_done:
     FE_ADR x11, _fe_ml_endidx
     str w10, [x11, x9, lsl #2]
 1:
+    // remember it for phase 3 (UNFINISHED DEF at its DEF line), and a
+    // block still open (UNFINISHED SUB at its SUB line), which ends here
+    cbz w24, 2f
+    sub w9, w24, #1
+    FE_ADR x10, _fe_ml_defline
+    ldr w11, [x10, x9, lsl #2]
+    adrp x10, _fe_eof_def_line@PAGE
+    str w11, [x10, _fe_eof_def_line@PAGEOFF]
+2:
+    cbz w27, 3f
+    sub w0, w20, #1
+    bl _fe_unit_eof
+    mov w27, #0
+3:
 
     // ---- pass B: line labels of main, ascending ------------------------
     mov w21, #0
@@ -210,6 +298,8 @@ Lfe_prescan_b_loop:
     b.hs Lfe_prescan_b_done
     ldr w9, [x22, x21, lsl #2]
     cbnz w9, 1f                         // a body line
+    ldr w9, [x28, x21, lsl #2]
+    cbnz w9, 1f                         // a line of a SUB block
     adrp x9, _fe_main@PAGE
     ldr x0, [x9, _fe_main@PAGEOFF]
     add x10, x19, x21, lsl #4
@@ -221,7 +311,45 @@ Lfe_prescan_b_loop:
     b Lfe_prescan_b_loop
 Lfe_prescan_b_done:
 
-    // ---- pass C: the multi-line functions, in DEF line order ----------
+    // ---- pass C: the multi-line functions of main, in DEF line order --
+    bl _fe_prescan_mlfuncs
+    // ---- pass D: the SUB units and their functions (fe_sub.s) ---------
+    bl _fe_sub_create_units
+    ldp x27, x28, [sp, #80]
+    ldp x25, x26, [sp, #64]
+    ldp x23, x24, [sp, #48]
+    ldp x21, x22, [sp, #32]
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #128
+    ret
+
+// ---------------------------------------------------------------------
+// _fe_prescan_mlfuncs -- create the multi-line functions of the current
+//   program unit, in ascending DEF-line order (_ir_func_begin,
+//   _ir_func_set, _ir_set_fnkind on the unit's Module), each with the line
+//   labels of its body (IR.md 4.1).
+//   in:  the unit's _fe_ml_* state (pre-scan), _fe_lines, _fe_linelab
+//   out: _fe_ml_fn filled, body labels in _fe_linelab
+//   clobbers: x0-x17
+//   callee-saved: x19 = line table, x23 = label array, w21 = line index,
+//        w25 = letter, x26 = Function*, w27 = FNEND line index,
+//        w28 = order index
+//   frame: 96 bytes (frame record, x19-x28)
+// ---------------------------------------------------------------------
+    .globl _fe_prescan_mlfuncs
+    .p2align 2
+_fe_prescan_mlfuncs:
+    stp x29, x30, [sp, #-96]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]
+    stp x21, x22, [sp, #32]
+    stp x23, x24, [sp, #48]
+    stp x25, x26, [sp, #64]
+    stp x27, x28, [sp, #80]
+    adrp x9, _fe_lines@PAGE
+    ldr x19, [x9, _fe_lines@PAGEOFF]
+    adrp x9, _fe_linelab@PAGE
+    ldr x23, [x9, _fe_linelab@PAGEOFF]
     mov w28, #0                         // order index
 Lfe_prescan_c_loop:
     adrp x9, _fe_ml_count@PAGE
@@ -231,8 +359,7 @@ Lfe_prescan_c_loop:
     FE_ADR x10, _fe_ml_order
     ldr w25, [x10, x28, lsl #2]         // letter
     // _ir_func_begin(module, 1+letter, first parameter or IR_NONE, DEF line)
-    adrp x9, _fe_module@PAGE
-    ldr x0, [x9, _fe_module@PAGEOFF]
+    FE_UNITMOD x0                       // the current program unit
     add w1, w25, #FUNC_FN_BASE
     FE_ADR x10, _fe_ml_params
     add x10, x10, x25, lsl #5
@@ -266,8 +393,7 @@ Lfe_prescan_c_loop:
     FE_ADR x10, _fe_ml_kinds
     ldr w2, [x10, x25, lsl #2]
     cbz w2, 2f
-    adrp x9, _fe_module@PAGE
-    ldr x0, [x9, _fe_module@PAGEOFF]
+    FE_UNITMOD x0                       // the current program unit
     add w1, w25, #FUNC_FN_BASE
     bl _ir_set_fnkind
 2:
@@ -296,7 +422,7 @@ Lfe_prescan_c_done:
     ldp x23, x24, [sp, #48]
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #128
+    ldp x29, x30, [sp], #96
     ret
 
 // ---------------------------------------------------------------------
@@ -307,11 +433,50 @@ Lfe_prescan_c_done:
 //   stack again.
 //   in:  w0 = line index i
 //   out: w0 = the line's label id in its function
-//   clobbers: x0, x9-x15   leaf, no frame
+//   Sixth Edition: a line of another program unit first makes that unit's
+//   state current (_fe_unit_switch, fe_sub.s); entering a SUB block starts
+//   its FOR region at the current stack depth (_fe_unitforbase), and the
+//   unit's body lines (owner 0) use that region instead of the whole stack.
+//   clobbers: x0, x9-x15 (Sixth Edition: x0-x17)
+//   callee-saved: (Sixth Edition) w19 = line index
+//   frame: none (Sixth Edition: 32 bytes)
 // ---------------------------------------------------------------------
     .globl _fe_enter_line
     .p2align 2
 _fe_enter_line:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    str x19, [sp, #16]
+    mov w19, w0
+    adrp x9, _fe_lineunit@PAGE
+    ldr x9, [x9, _fe_lineunit@PAGEOFF]
+    ldr w0, [x9, w19, uxtw #2]          // the line's unit
+    adrp x9, _fe_curunit@PAGE
+    ldr w10, [x9, _fe_curunit@PAGEOFF]
+    cmp w0, w10
+    b.eq 2f
+    bl _fe_unit_switch
+    // no owner yet in this unit; a SUB block's FOR region starts here
+    adrp x9, _fe_curowner@PAGE
+    mov w10, #-1
+    str w10, [x9, _fe_curowner@PAGEOFF]
+    adrp x9, _fe_curunit@PAGE
+    ldr w10, [x9, _fe_curunit@PAGEOFF]
+    cbz w10, 2f
+    adrp x9, _fe_forsp@PAGE
+    ldr w10, [x9, _fe_forsp@PAGEOFF]
+    adrp x9, _fe_unitforbase@PAGE
+    str w10, [x9, _fe_unitforbase@PAGEOFF]
+2:
+    mov w0, w19
+    bl Lfe_enter_line_core
+    ldr x19, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret
+
+// Lfe_enter_line_core -- _fe_enter_line within the current unit (leaf).
+    .p2align 2
+Lfe_enter_line_core:
     adrp x9, _fe_linefn@PAGE
     ldr x9, [x9, _fe_linefn@PAGEOFF]
     ldr w10, [x9, w0, uxtw #2]          // owner
@@ -332,7 +497,9 @@ _fe_enter_line:
     adrp x9, _fe_ctx_skinds@PAGE
     str wzr, [x9, _fe_ctx_skinds@PAGEOFF]
     adrp x9, _fe_forbase@PAGE
-    str wzr, [x9, _fe_forbase@PAGEOFF]
+    adrp x13, _fe_unitforbase@PAGE
+    ldr w13, [x13, _fe_unitforbase@PAGEOFF]
+    str w13, [x9, _fe_forbase@PAGEOFF]
     ret
 Lfe_enter_line_body:
     sub w13, w10, #1                    // letter
@@ -638,8 +805,7 @@ _fe_def:
     cbz w21, 3f
     ldr w9, [sp, #48]                   // first parameter slot
 3:
-    adrp x10, _fe_module@PAGE
-    ldr x0, [x10, _fe_module@PAGEOFF]
+    FE_UNITMOD x0                       // the current program unit
     add w1, w19, #FUNC_FN_BASE
     mov w2, w9
     adrp x10, _fe_line@PAGE
@@ -655,8 +821,7 @@ _fe_def:
     adrp x9, _fe_curfn@PAGE
     str x22, [x9, _fe_curfn@PAGEOFF]
     cbz w23, 5f
-    adrp x9, _fe_module@PAGE
-    ldr x0, [x9, _fe_module@PAGEOFF]
+    FE_UNITMOD x0                       // the current program unit
     add w1, w19, #FUNC_FN_BASE
     mov w2, w23
     bl _ir_set_fnkind
@@ -724,6 +889,20 @@ Lfe_def_multi:
     add w22, w22, #1                    // the first line after its FNEND
     adrp x9, _fe_nlines@PAGE
     ldr w9, [x9, _fe_nlines@PAGEOFF]
+    // ... of the same program unit (a SUB block may come between)
+    adrp x10, _fe_lineunit@PAGE
+    ldr x10, [x10, _fe_lineunit@PAGEOFF]
+    adrp x11, _fe_curunit@PAGE
+    ldr w11, [x11, _fe_curunit@PAGEOFF]
+5:
+    cmp w22, w9
+    b.hs Lfe_def_ret                    // none: an error follows
+    ldr w12, [x10, x22, lsl #2]
+    cmp w12, w11
+    b.eq 6f
+    add w22, w22, #1
+    b 5b
+6:
     cmp w22, w9
     b.hs Lfe_def_ret                    // never closed: UNFINISHED DEF follows
     adrp x9, _fe_linelab@PAGE
@@ -879,132 +1058,128 @@ _fe_record_call:
     ret
 
 // ---------------------------------------------------------------------
-// _fe_check_fns -- phase-3 function checks (LANGUAGE.md 10.1).
-//   UNDEFINED FUNCTION: among letters referenced but never DEFined, the
-//   one whose first reference has the lowest line (references are
+// _fe_fn_undef_line -- UNDEFINED FUNCTION: among the letters referenced
+//   but never DEFined, the smallest first-reference line (references are
 //   recorded in ascending line order, so the first one is the minimum).
-//   INCORRECT NUMBER OF ARGUMENTS: the lowest line of a call whose
-//   argument count differs from its DEF's parameter count.
-//   MISMATCHED STRING OPERATION (Fifth Edition): _fe_check_kinds.
-//   RECURSIVE FUNCTION: lowest letter A..Z that can reach itself through
-//   the call graph (bit masks in _fe_fn_calls), reported at its DEF line.
-//   in: none   out: returns only if all checks pass
-//   clobbers: x0-x17
-//   callee-saved: x19 = &_fe_fn_defline, x20 = &_fe_fn_ref,
-//        x21 = &_fe_fn_calls, x22 = letter
-//   frame: 48 bytes
+//   in: none   out: w0 = that line, or 0 if every referenced letter is
+//        DEFined
+//   clobbers: x0, x9-x13   leaf, no frame
 // ---------------------------------------------------------------------
-    .globl _fe_check_fns
+    .globl _fe_fn_undef_line
     .p2align 2
-_fe_check_fns:
-    stp x29, x30, [sp, #-48]!
-    mov x29, sp
-    stp x19, x20, [sp, #16]
-    stp x21, x22, [sp, #32]
-    FE_ADR x19, _fe_fn_defline
-    FE_ADR x20, _fe_fn_ref
-    FE_ADR x21, _fe_fn_calls
-    // --- undefined functions: minimum first-reference line -----------
-    mov w1, #0                          // best line so far (0 = none)
-    mov w22, #0
-Lfe_check_fns_undef_loop:
-    cmp w22, #NUM_LETTERS
-    b.hs Lfe_check_fns_undef_done
-    ldr w9, [x19, x22, lsl #2]          // DEF line (0 = never defined)
-    cbnz w9, 1f
-    ldr w10, [x20, x22, lsl #2]         // first reference line (0 = none)
-    cbz w10, 1f
-    // keep the smallest reference line
-    cbz w1, 2f
-    cmp w10, w1
-    b.hs 1f
-2:
-    mov w1, w10
+_fe_fn_undef_line:
+    FE_ADR x11, _fe_fn_defline
+    FE_ADR x12, _fe_fn_ref
+    mov w0, #0                          // best line so far (0 = none)
+    mov x13, #0                         // letter
 1:
-    add w22, w22, #1
-    b Lfe_check_fns_undef_loop
-Lfe_check_fns_undef_done:
-    cbz w1, Lfe_check_fns_args
-    mov w0, #ERR_UNDEFINED_FUNCTION
-    bl _fe_fail
-Lfe_check_fns_args:
-    // --- argument counts: minimum line of a mismatching call ---------
-    mov w1, #0
+    cmp x13, #NUM_LETTERS
+    b.hs 3f
+    ldr w9, [x11, x13, lsl #2]          // DEF line (0 = never defined)
+    cbnz w9, 2f
+    ldr w10, [x12, x13, lsl #2]         // first reference line (0 = none)
+    cbz w10, 2f
+    // keep the smallest reference line
+    cbz w0, 4f
+    cmp w10, w0
+    b.hs 2f
+4:
+    mov w0, w10
+2:
+    add x13, x13, #1
+    b 1b
+3:
+    ret
+
+// ---------------------------------------------------------------------
+// _fe_fn_args_line -- INCORRECT NUMBER OF ARGUMENTS: the smallest line
+//   of a call of a DEFined letter whose argument count differs from the
+//   DEF's parameter count (_fe_fn_argline records per count).
+//   in: none   out: w0 = that line, or 0 if every call matches
+//   clobbers: x0, x9-x17   leaf, no frame
+// ---------------------------------------------------------------------
+    .globl _fe_fn_args_line
+    .p2align 2
+_fe_fn_args_line:
+    mov w0, #0
     FE_ADR x11, _fe_fn_nparams
     FE_ADR x12, _fe_fn_argline
-    mov w22, #0
-Lfe_check_fns_args_letter:
-    cmp w22, #NUM_LETTERS
-    b.hs Lfe_check_fns_args_done
-    ldr w9, [x19, x22, lsl #2]
-    cbz w9, Lfe_check_fns_args_next     // not defined: never called (checked above)
-    ldr w13, [x11, x22, lsl #2]         // its parameter count
+    FE_ADR x17, _fe_fn_defline
+    mov x16, #0                         // letter
+Lfe_fn_args_letter:
+    cmp x16, #NUM_LETTERS
+    b.hs Lfe_fn_args_done
+    ldr w9, [x17, x16, lsl #2]
+    cbz w9, Lfe_fn_args_next            // not defined: never called (checked above)
+    ldr w13, [x11, x16, lsl #2]         // its parameter count
     mov w14, #FE_ARGC_SLOTS
-    mul w14, w22, w14                   // first record of this letter
+    mul w14, w16, w14                   // first record of this letter
     mov w15, #0                         // argument count slot
-Lfe_check_fns_args_slot:
+Lfe_fn_args_slot:
     cmp w15, w13
     b.eq 3f                             // the right count
-    add w16, w14, w15
-    ldr w10, [x12, x16, lsl #2]
+    add w9, w14, w15
+    ldr w10, [x12, x9, lsl #2]
     cbz w10, 3f                         // no such call
-    cbz w1, 4f
-    cmp w10, w1
+    cbz w0, 4f
+    cmp w10, w0
     b.hs 3f
 4:
-    mov w1, w10
+    mov w0, w10
 3:
     add w15, w15, #1
     cmp w15, #FE_ARGC_SLOTS
-    b.lo Lfe_check_fns_args_slot
-Lfe_check_fns_args_next:
-    add w22, w22, #1
-    b Lfe_check_fns_args_letter
-Lfe_check_fns_args_done:
-    cbz w1, Lfe_check_fns_kinds
-    mov w0, #ERR_WRONG_NUM_ARGS
-    bl _fe_fail
-Lfe_check_fns_kinds:
-    // MISMATCHED STRING OPERATION: a call of the wrong kind (fe_sexpr.s)
-    bl _fe_check_kinds
-Lfe_check_fns_rec_start:
-    // --- recursion: transitive closure of each letter's callee set ---
-    mov w22, #0
-Lfe_check_fns_rec_loop:
-    cmp w22, #NUM_LETTERS
-    b.hs Lfe_check_fns_rec_done
-    ldr w9, [x19, x22, lsl #2]
-    cbz w9, Lfe_check_fns_rec_next      // not defined: nothing to check
-    ldr w10, [x21, x22, lsl #2]         // reach set = direct callees
-Lfe_check_fns_rec_grow:
+    b.lo Lfe_fn_args_slot
+Lfe_fn_args_next:
+    add x16, x16, #1
+    b Lfe_fn_args_letter
+Lfe_fn_args_done:
+    ret
+
+// ---------------------------------------------------------------------
+// _fe_fn_rec_line -- RECURSIVE FUNCTION: the lowest letter A..Z that can
+//   reach itself through the call graph (bit masks in _fe_fn_calls).
+//   in: none   out: w0 = its DEF line, or 0 if no function is recursive
+//   clobbers: x0, x9-x17   leaf, no frame
+// ---------------------------------------------------------------------
+    .globl _fe_fn_rec_line
+    .p2align 2
+_fe_fn_rec_line:
+    FE_ADR x15, _fe_fn_defline
+    FE_ADR x16, _fe_fn_calls
+    mov x17, #0                         // letter
+Lfe_fn_rec_loop:
+    cmp x17, #NUM_LETTERS
+    b.hs Lfe_fn_rec_none
+    ldr w9, [x15, x17, lsl #2]
+    cbz w9, Lfe_fn_rec_next             // not defined: nothing to check
+    ldr w10, [x16, x17, lsl #2]         // reach set = direct callees
+Lfe_fn_rec_grow:
     // one expansion step: union of callees of every letter in the set
     mov w11, w10
-    mov w12, #0                         // letter b
-Lfe_check_fns_rec_union:
-    lsr w13, w10, w12
-    tbz w13, #0, 1f
-    ldr w14, [x21, x12, lsl #2]
-    orr w11, w11, w14
+    mov x12, #0                         // letter b
 1:
-    add w12, w12, #1
-    cmp w12, #NUM_LETTERS
-    b.lo Lfe_check_fns_rec_union
+    lsr w13, w10, w12
+    tbz w13, #0, 2f
+    ldr w14, [x16, x12, lsl #2]
+    orr w11, w11, w14
+2:
+    add x12, x12, #1
+    cmp x12, #NUM_LETTERS
+    b.lo 1b
     cmp w11, w10
     mov w10, w11
-    b.ne Lfe_check_fns_rec_grow         // repeat until the set is stable
+    b.ne Lfe_fn_rec_grow                // repeat until the set is stable
     // can the letter reach itself?
-    lsr w13, w10, w22
-    tbz w13, #0, Lfe_check_fns_rec_next
-    mov w0, #ERR_RECURSIVE_FUNCTION
-    ldr w1, [x19, x22, lsl #2]          // reported at its DEF line
-    bl _fe_fail
-Lfe_check_fns_rec_next:
-    add w22, w22, #1
-    b Lfe_check_fns_rec_loop
-Lfe_check_fns_rec_done:
-    ldp x21, x22, [sp, #32]
-    ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #48
+    lsr w13, w10, w17
+    tbz w13, #0, Lfe_fn_rec_next
+    ldr w0, [x15, x17, lsl #2]          // reported at its DEF line
+    ret
+Lfe_fn_rec_next:
+    add x17, x17, #1
+    b Lfe_fn_rec_loop
+Lfe_fn_rec_none:
+    mov w0, #0
     ret
 
     .section __TEXT,__cstring,cstring_literals

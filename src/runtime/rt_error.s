@@ -25,10 +25,11 @@
 //             ERR_END_OF_INPUT, else EXIT_RUN_ERROR (1); those two
 //             also exit 1 if writing stdout or a file failed
 //             (LANGUAGE.md 10).
-//   Inputs  : w0 = ERR_* code; must be a run-time code
-//             (ERR_FIRST_RUNTIME..ERR_TABLE_SIZE-1). Any other code (a
-//             caller bug) prints nothing and exits with status 1
-//             (DESIGN.md 6.2).
+//   Inputs  : w0 = ERR_* code; must be a run-time code, exactly
+//             ERR_FIRST_RUNTIME..ERR_END_RUNTIME-1 (32..56). Any other
+//             code (a caller bug, including the Sixth Edition
+//             compile-time codes 57..61) prints nothing and exits with
+//             status 1 (DESIGN.md 6.2, 6.9).
 //   Outputs : never returns
 //   Clobbers: everything
 //   Callee-saved used: x19 = error code, x20 = write cursor in the
@@ -64,8 +65,8 @@ _bsk_err:
     // nothing.
     cmp w19, #ERR_FIRST_RUNTIME
     b.lo Lrt_err_exit
-    cmp w19, #ERR_TABLE_SIZE
-    b.hs Lrt_err_exit
+    cmp w19, #ERR_END_RUNTIME
+    b.hs Lrt_err_exit               // a compile-time code: nothing printed
     adrp x9, Lrt_errmsg@PAGE
     add x9, x9, Lrt_errmsg@PAGEOFF
     ldr x10, [x9, w19, uxtw #3]     // x10 = message pointer or 0

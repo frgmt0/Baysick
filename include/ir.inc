@@ -162,21 +162,7 @@
 .equ OP_CALLSUB,    109 /*  X=SUB unit index, A=argument 0 reference or IR_NONE */
 .equ OP_SUBRET,     110 /*  - (SUBEND: return from the current SUB) */
 
-// Contract staging switch of the Sixth Edition (DESIGN.md 2.2). 0: the
-// counts and layouts the current (Fifth Edition) modules are built with.
-// 1: the Sixth Edition contract. Build with `make BSK_ED6=1` during the
-// implementation phase; the integration step deletes the switch and keeps
-// only the BSK_ED6_CONTRACT=1 values. Every other constant is
-// unconditional. (Also defined, identically guarded, in tokens.inc.)
-.ifndef BSK_ED6_CONTRACT
-.equ BSK_ED6_CONTRACT, 0
-.endif
-
-.if BSK_ED6_CONTRACT
 .equ OP_COUNT,      111
-.else
-.equ OP_COUNT,      99
-.endif
 
 // ---- Relation codes (u16 IRI_REL, OP_JCMP only; 0 otherwise) ------------
 .equ REL_NONE,      0
@@ -282,7 +268,7 @@
 .equ IRF_PARAMS,    64  /* u32[LIM_FN_PARAMS] parameter slots in order; unused entries IR_NONE */
 .equ IRF_SIZE,      96
 
-// ---- Module record (IRM_*), 3624 bytes (3760 with BSK_ED6_CONTRACT) -------
+// ---- Module record (IRM_*), 3760 bytes ------------------------------------
 .equ IRM_NFORS,     0   /* u32 number of FOR statements */
 .equ IRM_NSLOTS,    4   /* u32 = SLOT_FOR_BASE + 2*nfors */
 .equ IRM_NSTRINGS,  8   /* u32 */
@@ -305,10 +291,7 @@
 .equ IRM_CAPFILES,  3504 /* u32 (builder private) */
 .equ IRM_RESERVED5, 3508 /* u32 must be 0 */
 .equ IRM_FNKINDS,   3512 /* 27 x u32, inline: FNK_* bits per function index (0 for main) */
-// Sixth Edition additions (IR.md 2.2). The names are defined at both switch
-// values, but the fields exist only in a 3760-byte module
-// (BSK_ED6_CONTRACT=1). With BSK_ED6_CONTRACT=0 a module is 3624 bytes and
-// no module may read or write these offsets (they lie past its end).
+// Sixth Edition additions (IR.md 2.2).
 // A SUB unit is itself a Module record: its own NFORS/NSLOTS, arrays,
 // sarrays, funcs (index 0 = the SUB body, 1+L = FN letter L of the unit),
 // NSTEMPS and FNKINDS; its strings/data/sdata/files fields are 0 (every
@@ -324,13 +307,9 @@
 .equ IRM_SUBNAME,   3664 /* ptr unit: the name's bytes (arena copy, no NUL); main: 0 */
 .equ IRM_SUBNAMELEN,3672 /* u32 unit: name length 1..; main: 0 */
 .equ IRM_RESERVED6, 3676 /* u32 must be 0 */
-.equ IRM_SUBPARAMS, 3680 /* u32[LIM_SUB_PARAMS]: per parameter a scalar slot, string slot or array letter; unused IR_NONE */
+.equ IRM_SUBPARAMS, 3680 /* u32[LIM_SUB_PARAMS]: per parameter a scalar slot, string slot or array letter; unit: unused entries IR_NONE; main module: 0 */
 .equ IRM_SUBPKINDS, 3744 /* u8[LIM_SUB_PARAMS]: SUBP_* per parameter; unused 0 */
-.if BSK_ED6_CONTRACT
 .equ IRM_SIZE,      3760 /* 3744 + 16 */
-.else
-.equ IRM_SIZE,      3624 /* 3512 + 27*4 = 3620, rounded up to a multiple of 8 */
-.endif
 
 // ---------------------------------------------------------------------------
 // IR builder API (implemented in src/ir/ir_build.s). AAPCS64. All memory
@@ -371,7 +350,7 @@
 //  _ir_set_fnkind(x0=Module*, w1=func index 1..26, w2=FNK_* bits)
 //                                          IRM_FNKINDS[index] := bits
 //
-// Sixth Edition additions (BSK_ED6_CONTRACT layouts; IR.md 2.2, 4.4):
+// Sixth Edition additions (IR.md 2.2, 4.4):
 //  _ir_new_sub(x0=main Module*, x1=name bytes, w2=name length, w3=SUB line)
 //                                        -> x0 = new SUB unit Module*
 //                                          (a zeroed module with NSLOTS=286,

@@ -752,6 +752,8 @@ Lfe_mat_emit:
 //   IR.md 3.1). Called once, after the phase-3 checks. Fifth Edition: a
 //   string array named only bare by MAT READ / MAT PRINT becomes a list
 //   with bound LIM_DEFAULT_BOUND (LANGUAGE.md 4.4).
+//   Sixth Edition: it runs once per program unit; array parameters of a
+//   SUB (IRA_FLAG_PARAM) keep an unknown shape (IRA_DIMS_ANY, fe_sub.s).
 //   in:  none
 //   out: none (_fe_arrays, _fe_sarrays updated)
 //   clobbers: x9-x15   leaf, no frame
@@ -772,6 +774,8 @@ Lfe_mat_finish_loop:
     add x14, x11, x12, lsl #FE_ARR_SHIFT
     ldr w15, [x14]                      // dims (0 = still unknown)
     cbnz w15, Lfe_mat_finish_next
+    ldr w15, [x14, #12]
+    tbnz w15, #1, Lfe_mat_finish_next   // IRA_FLAG_PARAM: an array parameter
     // a table with the default bounds, not set by a DIM
     mov w15, #2
     str w15, [x14]
@@ -796,6 +800,8 @@ Lfe_mat_finish_done:
     add x14, x11, x12, lsl #FE_ARR_SHIFT
     ldr w15, [x14]
     cbnz w15, 2f                        // a list or a table already
+    ldr w15, [x14, #12]
+    tbnz w15, #1, 2f                    // IRA_FLAG_PARAM: an array parameter
     mov w15, #1                         // a list, bound 10, not DIMmed
     str w15, [x14]
     mov w15, #LIM_DEFAULT_BOUND
