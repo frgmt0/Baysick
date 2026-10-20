@@ -29,6 +29,14 @@
 //   list element, the `svar` sref temp of a string variable), +12 u32
 //   second subscript temp (or IR_NONE). A string target has +4 = the
 //   list letter, or IR_NONE for a string variable.
+//
+// Fifth Edition: a string target may also be a string
+// table element T$(i, j) (+4 = letter, +8 = i, +12 = j), a string
+// parameter P$ of the enclosing DEF (+8 = its `sparam` sref) or, in LET
+// only, the value variable FNx$ of the enclosing multi-line string
+// function (+8 = its `sfv` sref). PRINT # and INPUT # (fe_files.s,
+// fe_input.s) emit `fsel` through _fe_fsel before every print / input
+// opcode; IF END # is recognised after IF before any comparison.
 // =====================================================================
 .include "baysick.inc"
 
@@ -53,6 +61,7 @@
 .equ FE_RAW_SVAR,       2           // w1 = string slot
 .equ FE_RAW_SARRAY,     3           // w1 = letter, '(' consumed
 .equ FE_RAW_FN,         4           // w1 = letter
+.equ FE_RAW_SFN,        5           // w1 = letter (FNx$, Fifth Edition)
 
 // FE_NONE: set the optional _fe_emit / _fe_emit_new operands to "unused".
 .macro FE_NONE
@@ -160,6 +169,9 @@ Lfe_stmt_none:
 // Lfe_stmt_name -- the name of a LET/READ/INPUT target or a FOR/NEXT
 //   variable, consumed:
 //     "FN" letter            (only if allowed: LET)       FE_RAW_FN
+//     "FN" letter "$"        (only if allowed: LET)       FE_RAW_SFN
+//   Fifth Edition: "STR$(" (a function, never a target) and, where FN is
+//   not allowed, "FN" letter "$" are ILLEGAL VARIABLE.
 //     letter [digit]                                       FE_RAW_SCALAR
 //     letter "("             ('(' consumed)                FE_RAW_ARRAY
 //     letter [digit] "$"                                   FE_RAW_SVAR
@@ -190,6 +202,37 @@ Lfe_stmt_name:
     mov w0, #2
     bl _fe_peek
     mov w21, w0
+    // STR$( is a function call, never a target (LANGUAGE.md 4.6)
+    cmp w19, #('S' - 'A')
+    b.ne 5f
+    cmp w20, #'T'
+    b.ne 5f
+    cmp w21, #'R'
+    b.ne 5f
+    mov w0, #3
+    bl _fe_peek
+    cmp w0, #'$'
+    b.ne 5f
+    mov w0, #4
+    bl _fe_peek
+    cmp w0, #'('
+    b.eq Lfe_stmt_name_bad
+5:
+    // FN letter '$' where FN is not allowed (READ FNx$, INPUT FNx$): only
+    // LET assigns a value variable (LANGUAGE.md 7.10.1)
+    cbnz w22, 6f
+    cmp w19, #('F' - 'A')
+    b.ne 6f
+    cmp w20, #'N'
+    b.ne 6f
+    sub w9, w21, #'A'
+    cmp w9, #25
+    b.hi 6f
+    mov w0, #3
+    bl _fe_peek
+    cmp w0, #'$'
+    b.eq Lfe_stmt_name_bad
+6:
     // FN letter (the value variable of a multi-line function)
     cbz w22, Lfe_stmt_name_var
     cmp w19, #('F' - 'A')
@@ -200,6 +243,17 @@ Lfe_stmt_name:
     cmp w9, #25
     b.hi Lfe_stmt_name_var
     mov w19, w9
+    // FN letter '$': the value variable of a string function
+    mov w0, #3
+    bl _fe_peek
+    cmp w0, #'$'
+    b.ne 7f
+    mov w0, #4
+    bl _fe_advance
+    mov w1, w19
+    mov w0, #FE_RAW_SFN
+    b Lfe_stmt_name_ret
+7:
     mov w0, #3
     bl _fe_advance
     mov w1, w19
@@ -311,6 +365,8 @@ _fe_target:
     b.eq Lfe_target_sarray
     cmp w20, #FE_RAW_FN
     b.eq Lfe_target_fn
+    cmp w20, #FE_RAW_SFN
+    b.eq Lfe_target_sfn
     // simple variable
     mov w9, #FE_TGT_SCALAR
     str w9, [x19]
@@ -324,26 +380,40 @@ Lfe_target_array:
     str w2, [x19]
     b Lfe_target_ret
 Lfe_target_svar:
+    // a string parameter of the enclosing DEF: tN = sparam k
+    mov w0, w21
+    bl _fe_sparam_index
+    tbnz w0, #31, 1f
+    mov w9, w0
+    FE_NONE
+    mov x5, x9                          // IMM = parameter index k
+    mov w0, #OP_SPARAM
+    bl _fe_emit_new
+    b 2f
+1:
     // tN = svar V$ (+4 = IR_NONE: no list element)
     FE_NONE
     mov w4, w21
     mov w0, #OP_SVAR
     bl _fe_emit_new
+2:
     mov w9, #IR_NONE
     str w9, [x19, #4]
     b Lfe_target_string
 Lfe_target_sarray:
-    // only i here; the subscript is checked at the store (`sald1` right
-    // before `sset`, or the element form of sread / insv; LANGUAGE.md 7.1)
+    // only i (and j) here; the subscripts are checked at the store
+    // (`sald1`/`sald2` right before `sset`, the element form of sread /
+    // insv, or a temp cell; LANGUAGE.md 7.1)
     mov w0, w21
-    bl _fe_ssubscript
+    bl _fe_sarr_subscripts
+    str w1, [x19, #12]                  // j, or IR_NONE for a list
 Lfe_target_string:
     str w0, [x19, #8]
     mov w9, #FE_TGT_STRING
     str w9, [x19]
     b Lfe_target_ret
 Lfe_target_fn:
-    // LET FNx = ... only in the multi-line body of FNx
+    // LET FNx = ... only in the multi-line body of the numeric FNx
     adrp x9, _fe_ctx_kind@PAGE
     ldr w9, [x9, _fe_ctx_kind@PAGEOFF]
     cmp w9, #FE_CTX_ML
@@ -351,6 +421,10 @@ Lfe_target_fn:
     adrp x9, _fe_ctx_letter@PAGE
     ldr w9, [x9, _fe_ctx_letter@PAGEOFF]
     cmp w9, w21
+    b.ne 1f
+    adrp x9, _fe_ctx_skinds@PAGE
+    ldr w9, [x9, _fe_ctx_skinds@PAGEOFF]
+    tst w9, #FNK_STRING
     b.eq 2f
 1:
     mov w0, #ERR_ILLEGAL_VARIABLE
@@ -358,6 +432,28 @@ Lfe_target_fn:
 2:
     mov w9, #FE_TGT_FN
     str w9, [x19]
+    b Lfe_target_ret
+Lfe_target_sfn:
+    // LET FNx$ = ... only in the multi-line body of the string FNx$:
+    // target phase `tv = sfv` (IR.md 4.3)
+    adrp x9, _fe_ctx_kind@PAGE
+    ldr w9, [x9, _fe_ctx_kind@PAGEOFF]
+    cmp w9, #FE_CTX_ML
+    b.ne 1b
+    adrp x9, _fe_ctx_letter@PAGE
+    ldr w9, [x9, _fe_ctx_letter@PAGEOFF]
+    cmp w9, w21
+    b.ne 1b
+    adrp x9, _fe_ctx_skinds@PAGE
+    ldr w9, [x9, _fe_ctx_skinds@PAGEOFF]
+    tst w9, #FNK_STRING
+    b.eq 1b
+    FE_NONE
+    mov w0, #OP_SFV
+    bl _fe_emit_new
+    mov w9, #IR_NONE
+    str w9, [x19, #4]
+    b Lfe_target_string
 Lfe_target_ret:
     ldr x21, [sp, #32]
     ldp x19, x20, [sp, #16]
@@ -383,15 +479,21 @@ _fe_starget_ref:
     mov x29, sp
     ldr w9, [x0, #4]                    // list letter, or IR_NONE
     ldr w10, [x0, #8]                   // subscript temp / sref temp
+    ldr w12, [x0, #12]                  // table: second subscript temp
     mov w0, w10
     mov w11, #IR_NONE
     cmp w9, w11                         // IR_NONE: a string variable
     b.eq 1f
-    // tN = sald1 L$, ti
+    // tN = sald1 L$, ti  (a table element: tN = sald2 T$, ti, tj)
     FE_NONE
     mov w1, w10
     mov w4, w9
     mov w0, #OP_SALD1
+    cmp w12, w11
+    b.eq 2f
+    mov w2, w12
+    mov w0, #OP_SALD2
+2:
     bl _fe_emit_new
 1:
     ldp x29, x30, [sp], #16
@@ -404,21 +506,58 @@ _fe_starget_ref:
 //   IR_NONE, B = the subscript temp, X = the letter), whose runtime call
 //   takes the value first and checks the subscript at the store
 //   (LANGUAGE.md 7.1, 7.4, 7.15).
+//   A string table element T$(i, j) (Fifth Edition) takes the value
+//   into a new temp cell first: `tC = scell %sK`, `op tC`, `te = sald2
+//   T$, ti, tj`, `sset te, tC` (IR.md 4.3). Inside INPUT # the op is
+//   preceded by `fsel` (_fe_fsel).
 //   in:  x0 = string target descriptor (kind FE_TGT_STRING),
 //        w1 = OP_SREAD or OP_INSV
 //   out: none
 //   clobbers: x0-x17
-//   callee-saved: none used
-//   frame: 16 bytes
+//   callee-saved: x19 = descriptor, w20 = opcode, w21 = temp cell
+//   frame: 48 bytes
 // ---------------------------------------------------------------------
     .globl _fe_sstore
     .p2align 2
 _fe_sstore:
-    stp x29, x30, [sp, #-16]!
+    stp x29, x30, [sp, #-48]!
     mov x29, sp
-    mov w7, w1                          // opcode
-    ldr w9, [x0, #4]                    // list letter, or IR_NONE
-    ldr w10, [x0, #8]                   // subscript temp / sref temp
+    stp x19, x20, [sp, #16]
+    str x21, [sp, #32]
+    mov x19, x0
+    mov w20, w1                         // opcode
+    ldr w9, [x19, #12]
+    mov w11, #IR_NONE
+    cmp w9, w11
+    b.eq 3f
+    // a table element: the value goes to a temp cell, then to the element
+    bl _fe_new_scell
+    mov w21, w0                         // tC
+    bl _fe_fsel
+    FE_NONE
+    mov w1, w21
+    mov w0, w20
+    bl _fe_emit
+    FE_NONE
+    ldr w1, [x19, #8]
+    ldr w2, [x19, #12]
+    ldr w4, [x19, #4]
+    mov w0, #OP_SALD2
+    bl _fe_emit_new
+    mov w1, w0
+    mov w2, #IR_NONE
+    mov w3, #IR_NONE
+    mov w4, #IR_NONE
+    mov x5, #0
+    mov w6, #REL_NONE
+    mov w2, w21
+    mov w0, #OP_SSET
+    bl _fe_emit
+    b 4f
+3:
+    bl _fe_fsel                         // INPUT #: select the file first
+    ldr w9, [x19, #4]                   // list letter, or IR_NONE
+    ldr w10, [x19, #8]                  // subscript temp / sref temp
     FE_NONE
     mov w11, #IR_NONE
     cmp w9, w11                         // IR_NONE: a string variable
@@ -429,9 +568,12 @@ _fe_sstore:
 1:
     mov w1, w10                         // plain form: A = the svar sref
 2:
-    mov w0, w7
+    mov w0, w20
     bl _fe_emit
-    ldp x29, x30, [sp], #16
+4:
+    ldr x21, [sp, #32]
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #48
     ret
 
 // ---------------------------------------------------------------------
@@ -827,6 +969,15 @@ Lfe_stmt_let_is_target:
     ldrb w13, [x10, #3]
     cmp w13, #'='
     b.eq Lfe_let_is_yes
+    // "FN" letter "$" "=" (the value variable of a string function)
+    cmp w13, #'$'
+    b.ne 1f
+    add x14, x10, #4
+    cmp x14, x11
+    b.hs 1f
+    ldrb w13, [x10, #4]
+    cmp w13, #'='
+    b.eq Lfe_let_is_yes
 1:
     add x10, x10, #1
     // optional digit
@@ -894,6 +1045,9 @@ Lfe_let_is_no:
 //   (prsemi only right after an expression). An expression must be
 //   followed by ',', ';' or the end of the line; a string or TAB item may
 //   be followed directly by another item.
+//   Fifth Edition: any string expression is a string item (`prsv`), and
+//   "PRINT #e" [ "," items ] selects file e (_fe_print_file, fe_files.s):
+//   every print opcode is then preceded by `fsel tF` (_fe_fsel).
 //   in: scanner after "PRINT"   out: none
 //   clobbers: x0-x17, d0-d7
 //   callee-saved: w19 = previous element (FE_PR_*), x20 = saved
@@ -911,6 +1065,12 @@ Lfe_stmt_print:
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
     mov w19, #FE_PR_NONE
+    // PRINT #e: the designator, then ',' or the end of the line
+    mov w0, #0
+    bl _fe_peek
+    cmp w0, #'#'
+    b.ne Lfe_stmt_print_loop
+    bl _fe_print_file
 Lfe_stmt_print_loop:
     bl _fe_getpos
     mov x20, x0
@@ -937,6 +1097,17 @@ Lfe_stmt_print_loop:
     b.eq Lfe_stmt_print_sref
     cmp w0, #TK_SARRAY
     b.eq Lfe_stmt_print_sref
+    // FNx$ and STR$( are string items too
+    cmp w0, #TK_SFN
+    b.eq Lfe_stmt_print_sref
+    cmp w0, #TK_SFN0
+    b.eq Lfe_stmt_print_sref
+    cmp w0, #TK_BUILTIN
+    b.ne 2f
+    ldr w9, [sp, #(48 + TOK_INDEX)]
+    cmp w9, #BI_STR
+    b.eq Lfe_stmt_print_sref
+2:
     cmp w0, #TK_COMMA
     b.eq Lfe_stmt_print_comma
     cmp w0, #TK_SEMI
@@ -956,9 +1127,10 @@ Lfe_stmt_print_string:
     ldr x0, [sp, #(48 + TOK_PTR)]
     ldr w1, [sp, #(48 + TOK_LEN)]
     bl _fe_add_label
-    mov w9, w0
+    mov w21, w0
+    bl _fe_fsel
     FE_NONE
-    mov w4, w9
+    mov w4, w21
     mov w0, #OP_PRSTR
     bl _fe_emit
     mov w19, #FE_PR_STRING
@@ -969,9 +1141,10 @@ Lfe_stmt_print_sref:
     mov x0, x20
     bl _fe_setpos
     bl _fe_sref_need
-    mov w9, w0
+    mov w21, w0
+    bl _fe_fsel
     FE_NONE
-    mov w1, w9
+    mov w1, w21
     mov w0, #OP_PRSV
     bl _fe_emit
     mov w19, #FE_PR_STRING
@@ -985,6 +1158,7 @@ Lfe_stmt_print_tab:
     bl _fe_expr
     mov w21, w0
     bl _fe_paren_close
+    bl _fe_fsel
     FE_NONE
     mov w1, w21
     mov w0, #OP_PRTAB
@@ -993,6 +1167,7 @@ Lfe_stmt_print_tab:
     b Lfe_stmt_print_loop
 
 Lfe_stmt_print_comma:
+    bl _fe_fsel
     FE_EMIT0 OP_PRCOMMA
     mov w19, #FE_PR_SEP
     b Lfe_stmt_print_loop
@@ -1001,6 +1176,7 @@ Lfe_stmt_print_semi:
     // ';' only moves after a number
     cmp w19, #FE_PR_EXPR
     b.ne 1f
+    bl _fe_fsel
     FE_EMIT0 OP_PRSEMI
 1:
     mov w19, #FE_PR_SEP
@@ -1011,9 +1187,10 @@ Lfe_stmt_print_expr:
     mov x0, x20
     bl _fe_setpos
     bl _fe_expr
-    mov w9, w0
+    mov w21, w0
+    bl _fe_fsel
     FE_NONE
-    mov w1, w9
+    mov w1, w21
     mov w0, #OP_PRNUM
     bl _fe_emit
     mov w19, #FE_PR_EXPR
@@ -1038,8 +1215,10 @@ Lfe_stmt_print_end:
     // newline unless the list ended with ',' or ';'
     cmp w19, #FE_PR_SEP
     b.eq 1f
+    bl _fe_fsel
     FE_EMIT0 OP_PRNL
 1:
+    bl _fe_clear_file                   // the PRINT # selection ends here
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
     ldp x29, x30, [sp], #96
@@ -1377,6 +1556,9 @@ Lfe_stmt_goto:
 // Lfe_stmt_if -- IF a REL b (THEN | GOTO) n (LANGUAGE.md 7.7). A string
 //   comparison when the text after IF starts with a string reference:
 //   r1; r2; `sjcmp REL, tr1, tr2, @n`; else a; b; `jcmp REL, ta, tb, @n`.
+//   Fifth Edition: text starting with END# is IF END # (_fe_if_end,
+//   fe_files.s), tested before any comparison; any string expression
+//   (STR$(, FNx$) starts a string comparison.
 //   in: scanner after "IF"   out: none
 //   clobbers: x0-x17, d0-d7
 //   callee-saved: w19 = left temp, w20 = REL, w21 = right temp,
@@ -1389,6 +1571,28 @@ Lfe_stmt_if:
     mov x29, sp
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
+    // IF END # (LANGUAGE.md 7.7, 7.26): "END#" after IF
+    mov w0, #0
+    bl _fe_peek
+    cmp w0, #'E'
+    b.ne 5f
+    mov w0, #1
+    bl _fe_peek
+    cmp w0, #'N'
+    b.ne 5f
+    mov w0, #2
+    bl _fe_peek
+    cmp w0, #'D'
+    b.ne 5f
+    mov w0, #3
+    bl _fe_peek
+    cmp w0, #'#'
+    b.ne 5f
+    mov w0, #3
+    bl _fe_advance
+    bl _fe_if_end
+    b Lfe_stmt_if_ret
+5:
     // which kind of comparison? (peek at the first operand token)
     bl _fe_getpos
     mov x19, x0
@@ -1404,6 +1608,16 @@ Lfe_stmt_if:
     b.eq Lfe_stmt_if_string
     cmp w20, #TK_SARRAY
     b.eq Lfe_stmt_if_string
+    cmp w20, #TK_SFN
+    b.eq Lfe_stmt_if_string
+    cmp w20, #TK_SFN0
+    b.eq Lfe_stmt_if_string
+    cmp w20, #TK_BUILTIN
+    b.ne 6f
+    ldr w9, [sp, #(48 + TOK_INDEX)]
+    cmp w9, #BI_STR
+    b.eq Lfe_stmt_if_string
+6:
     cmp w20, #TK_BAD
     b.ne Lfe_stmt_if_number
     ldr x9, [sp, #(48 + TOK_PTR)]
@@ -1469,6 +1683,7 @@ Lfe_stmt_if_then:
     mov w0, w22
     bl _fe_emit
 4:
+Lfe_stmt_if_ret:
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
     ldp x29, x30, [sp], #96
@@ -1749,6 +1964,7 @@ Lfe_stmt_gosub:
 // ---------------------------------------------------------------------
 // Lfe_stmt_dim -- DIM decl {, decl} (LANGUAGE.md 7.11):
 //   decl := letter ( int [, int] ) | letter $ ( int )
+//         | letter $ ( int , int )      (a string table, Fifth Edition)
 //   Bounds go to the array / string-list tables; no code.
 //   in: scanner after "DIM"   out: none
 //   clobbers: x0-x17
@@ -1808,11 +2024,7 @@ Lfe_stmt_dim_loop:
     bl _fe_peek
     cmp w0, #','
     b.ne 2f
-    // second bound: a table (never a string list)
-    cbz w24, 3f
-    mov w0, #ERR_ILLEGAL_VARIABLE
-    bl _fe_err
-3:
+    // second bound: a table (a string table only in the Fifth Edition)
     mov w0, #1
     bl _fe_advance
     bl Lfe_stmt_dim_bound
@@ -1902,7 +2114,10 @@ Lfe_stmt_dim_bound:
 // the letters, FE_KW_ENTRY bytes per entry; RANDOM (the short spelling
 // of RANDOMIZE) right after RANDOMIZE; a zero length ends the table.
 // ---------------------------------------------------------------------
+// FE_KW_N counts the entries (checked against KW_COUNT below).
+.set FE_KW_N, 0
 .macro FE_KW name, id
+    .set FE_KW_N, FE_KW_N + 1
     .byte (9f - 8f), \id
 8:
     .ascii "\name"
@@ -1935,8 +2150,14 @@ Lfe_stmt_keywords:
     FE_KW "RANDOM", KW_RANDOMIZE
     FE_KW "CHANGE", KW_CHANGE
     FE_KW "FNEND", KW_FNEND
+    FE_KW "FILES", KW_FILES
+    FE_KW "SCRATCH", KW_SCRATCH
     .byte 0, 0
     .space (FE_KW_ENTRY - 2)
+// one entry per keyword plus RANDOM (DESIGN.md 2.4)
+.if (FE_KW_N != (KW_COUNT + 1))
+    .error "fe_stmt.s: the keyword table does not have KW_COUNT entries"
+.endif
 
 // Statement handlers in KW_* order.
     .section __DATA,__const
@@ -1964,3 +2185,9 @@ Lfe_stmt_handlers:
     .quad _fe_randomize                 // fe_input.s
     .quad _fe_change                    // fe_str.s
     .quad _fe_fnend                     // fe_def.s
+    .quad _fe_files                     // fe_files.s
+    .quad _fe_scratch                   // fe_files.s
+Lfe_stmt_handlers_end:
+.if ((Lfe_stmt_handlers_end - Lfe_stmt_handlers) != (KW_COUNT * 8))
+    .error "fe_stmt.s: the statement handler table does not have KW_COUNT entries"
+.endif

@@ -17,11 +17,14 @@
 
 // ---------------------------------------------------------------------
 // _bsk_err -- report a run-time error and terminate.
-//   Purpose : pending-line newline + flush of stdout, then write
+//   Purpose : Fifth Edition: first finish the files in write mode not
+//             yet finished (_bsk_rt_files_finish, DESIGN.md 6.8). Then
+//             pending-line newline + flush of stdout, then write
 //             "<MESSAGE> IN <_bsk_curline>" + LF to fd 2 and exit.
 //             Exit status EXIT_RUN_OK (0) for ERR_OUT_OF_DATA and
 //             ERR_END_OF_INPUT, else EXIT_RUN_ERROR (1); those two
-//             also exit 1 if writing stdout failed (LANGUAGE.md 10).
+//             also exit 1 if writing stdout or a file failed
+//             (LANGUAGE.md 10).
 //   Inputs  : w0 = ERR_* code; must be a run-time code
 //             (ERR_FIRST_RUNTIME..ERR_TABLE_SIZE-1). Any other code (a
 //             caller bug) prints nothing and exits with status 1
@@ -30,22 +33,32 @@
 //   Clobbers: everything
 //   Callee-saved used: x19 = error code, x20 = write cursor in the
 //             message buffer, x21 = start of the message buffer,
-//             x22 = 1 if stdout broke (output lost), else 0
-//   Frame   : 48 (frame record + x19..x22 save) + RT_ERR_MSGBUF bytes
+//             x22 = 1 if stdout broke or a file's output was lost,
+//             else 0, x23 = 1 if a file's output was lost
+//   Frame   : 64 (frame record + x19..x23 save) + RT_ERR_MSGBUF bytes
 // ---------------------------------------------------------------------
     .globl _bsk_err
     .p2align 2
 _bsk_err:
-    stp x29, x30, [sp, #-48]!       // frame record
+    stp x29, x30, [sp, #-64]!       // frame record
     mov x29, sp
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
+    str x23, [sp, #48]
     sub sp, sp, #RT_ERR_MSGBUF      // message buffer at [sp]
     mov w19, w0                     // keep the code across calls
+    mov w23, #0                     // no file output lost (so far)
 
-    // stdout first: the error text must appear after all output.
+    // The files in write mode first, in ascending order (a no-op when
+    // _bsk_end already finished them); a failure, now or earlier, only
+    // forces exit status 1 (LANGUAGE.md 10).
+    bl _bsk_rt_files_finish
+    mov w23, w0                     // 1 if a file's output was lost
+
+    // stdout next: the error text must appear after all output.
     bl _bsk_rt_finish_output
     mov w22, w0                     // 1 if stdout broke
+    orr w22, w22, w23               // output lost anywhere: status 1
 
     // Look up the message; a code that is not a run-time error prints
     // nothing.

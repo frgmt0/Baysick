@@ -91,7 +91,7 @@
 .equ OP_INEND,      66  /*  - */
 .equ OP_MATINPUT,   67  /*  X=numeric list */
 .equ OP_SMATINPUT,  68  /*  X=string list */
-.equ OP_SMATREDIM,  69  /*  X=string list, A=length temp */
+.equ OP_SMATREDIM,  69  /*  X=string list or table, A=rows temp, B=cols temp or IR_NONE (table only) */
 .equ OP_SMATREAD,   70  /*  X=string list */
 .equ OP_SMATPRINT,  71  /*  X=string list, IMM=MATPR_ZONED or MATPR_PACKED */
 .equ OP_CHGS2N,     72  /*  X=numeric list, A=source sref */
@@ -140,21 +140,7 @@
 .equ OP_SCRATCH,    97  /*  A=file number */
 .equ OP_FRESTORE,   98  /*  A=file number: RESTORE # */
 
-// Fifth Edition contract staging switch (DESIGN.md 2.2). 0: the counts and
-// layouts the current (Fourth Edition) modules are built with. 1: the
-// Fifth Edition contract. Build with `make BSK_ED5=1` during the
-// implementation phase; the integration step deletes the switch and keeps
-// only the BSK_ED5_CONTRACT=1 values. Every other constant is
-// unconditional. (Also defined, identically guarded, in tokens.inc.)
-.ifndef BSK_ED5_CONTRACT
-.equ BSK_ED5_CONTRACT, 0
-.endif
-
-.if BSK_ED5_CONTRACT
 .equ OP_COUNT,      99
-.else
-.equ OP_COUNT,      85
-.endif
 
 // ---- Relation codes (u16 IRI_REL, OP_JCMP only; 0 otherwise) ------------
 .equ REL_NONE,      0
@@ -243,7 +229,7 @@
 .equ IRF_PARAMS,    64  /* u32[LIM_FN_PARAMS] parameter slots in order; unused entries IR_NONE */
 .equ IRF_SIZE,      96
 
-// ---- Module record (IRM_*), 3488 bytes (3624 with BSK_ED5_CONTRACT) -------
+// ---- Module record (IRM_*), 3624 bytes ------------------------------------
 .equ IRM_NFORS,     0   /* u32 number of FOR statements */
 .equ IRM_NSLOTS,    4   /* u32 = SLOT_FOR_BASE + 2*nfors */
 .equ IRM_NSTRINGS,  8   /* u32 */
@@ -259,21 +245,14 @@
 .equ IRM_NSDATA,    3472 /* u32 number of string DATA values */
 .equ IRM_CAPSDATA,  3476 /* u32 (builder private) */
 .equ IRM_SDATA,     3480 /* ptr to IRS_SIZE entries (string DATA values, program order) */
-// Fifth Edition additions. The names are defined at both switch values, but
-// the fields exist only in a 3624-byte module (BSK_ED5_CONTRACT=1). With
-// BSK_ED5_CONTRACT=0 a module is 3488 bytes and no module may read or write
-// these offsets (they lie past its end).
+// Fifth Edition additions
 .equ IRM_NSTEMPS,   3488 /* u32 number of string temp cells (OP_SCELL X < NSTEMPS) */
 .equ IRM_NFILES,    3492 /* u32 number of FILES names 0..LIM_FILES (file numbers 1..NFILES) */
 .equ IRM_FILES,     3496 /* ptr to IRS_SIZE entries: FILES names in file-number order (entry 0 = #1) */
 .equ IRM_CAPFILES,  3504 /* u32 (builder private) */
 .equ IRM_RESERVED5, 3508 /* u32 must be 0 */
 .equ IRM_FNKINDS,   3512 /* 27 x u32, inline: FNK_* bits per function index (0 for main) */
-.if BSK_ED5_CONTRACT
 .equ IRM_SIZE,      3624 /* 3512 + 27*4 = 3620, rounded up to a multiple of 8 */
-.else
-.equ IRM_SIZE,      3488
-.endif
 
 // ---------------------------------------------------------------------------
 // IR builder API (implemented in src/ir/ir_build.s). AAPCS64. All memory
@@ -303,7 +282,7 @@
 //                                          IR_NONE), PARAM (= slot 0 or
 //                                          IR_NONE) and ENDLINE
 //
-// Fifth Edition additions (BSK_ED5_CONTRACT layouts):
+// Fifth Edition additions:
 //  _ir_new_stemp(x0=Module*)             -> w0 = new string temp cell number
 //                                          (IRM_NSTEMPS += 1)
 //  _ir_add_file(x0=Module*, x1=bytes, w2=len) -> w0 = file number 1..

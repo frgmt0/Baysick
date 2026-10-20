@@ -1,30 +1,55 @@
 # =====================================================================
-# src/runtime_x86_64_linux/rt_print.s -- PRINT column logic and
-# buffered stdout.
+# src/runtime_x86_64_linux/rt_print.s -- PRINT column logic, buffered
+# stdout and the output side of the files (LANGUAGE.md 7.21, 7.24, 8, 10;
+# DESIGN.md 6.2, 6.7, 6.8).
 #
 # Defines (global, runtime.inc):
 #   bsk_print_num bsk_print_str bsk_print_comma bsk_print_semi
 #   bsk_print_nl bsk_print_sv bsk_print_tab
 # Defines (private to the runtime, .globl + .hidden):
-#   bsk_rt_finish_output    pending-line newline + flush (END / errors);
-#                           reports whether stdout broke
+#   bsk_rt_finish_output    pending-line newline + flush of stdout (END /
+#                           errors); reports whether output was lost
 #   bsk_rt_write_all        write(2) loop handling short writes / EINTR
 #   bsk_rt_print_fresh      newline if col != 0 (MAT PRINT, rt_mat.s)
 #   bsk_rt_flush            write the stdout buffer now (rt_input.s)
 #   bsk_rt_print_prompt     the terminal INPUT prompt "? " (rt_input.s)
 #   bsk_rt_print_linedone   col = out = 0 after a terminal line
+#   bsk_rt_out_start        file k enters write mode (SCRATCH, rt_files.s)
+#   bsk_rt_out_discard      drop file k's unwritten output (SCRATCH)
+#   bsk_rt_out_failed       file k: has a write to it failed? (rt_files.s)
+#   bsk_rt_out_finish       file k: newline if col != 0, then flush
+#                           (RESTORE #, termination)
+# Uses: bsk_rt_fsel (the pending file selection) and bsk_rt_file_wcheck
+# (rt_files.s), bsk_rt_fmtnum (rt_numfmt.s).
+#
+# Output records. Standard output and each file k (1 .. LIM_FILES) have
+# one output record (OR_* below): the column state `col` / `out`, the
+# output buffer, its fill count and capacity, the file descriptor and a
+# "failed" flag. Record k is .Lrt_print_recs + k * OR_SIZE; record 0 is
+# stdout. The column logic is one set of routines taking a record
+# pointer, so the rules for stdout and for the files cannot drift apart
+# (DESIGN.md 6.8).
 #
 # Column model (LANGUAGE.md section 8): `col` is the logical column,
 # `out` the number of characters physically written on this line.
 # Spaces are lazy: a space only advances `col`; before any other
 # character, col - out spaces are written. Hence no trailing blanks.
-# Output goes through a RT_OUTBUF_SIZE-byte buffer, flushed when full
-# and at termination. No stdio is used.
+#
+# Buffers. Bytes are appended by .Lrt_print_putc, the only place that
+# writes a full buffer: as soon as a byte makes the fill count equal to
+# the capacity (RT_OUTBUF_SIZE for stdout, RT_FILEBUF_SIZE for a file),
+# the whole buffer is written. Otherwise stdout is written at
+# termination, by the INPUT prompt and diagnostics; a file only at
+# RESTORE # and at termination (bsk_rt_out_finish).
 #
 # Broken stdout (LANGUAGE.md section 10): if write(2) to fd 1 fails with
 # an error other than EINTR, or writes 0 bytes, stdout is marked broken;
 # all further output is discarded and bsk_rt_finish_output reports it,
 # so END / STOP / OUT OF DATA exit with status 1 instead of 0.
+# A failed write of a file (DESIGN.md 6.8) sets the file's "failed"
+# flag, empties its buffer and remembers that output was lost (exit
+# status 1); while printing it raises CAN'T WRITE FILE, while finishing
+# it is only reported to the caller.
 # =====================================================================
 .include "baysick.inc"
 
@@ -34,6 +59,17 @@
 .equ RT_CH_LF, 10                   # '\n'
 .equ RT_CH_SPACE, 32                # ' '
 .equ RT_CH_QMARK, 63                # '?'
+
+# Output record (runtime-private, this file only).
+.equ OR_COL,    0                   # u64 logical column
+.equ OR_OUT,    8                   # u64 characters written on this line
+.equ OR_FILL,   16                  # u64 bytes in the buffer
+.equ OR_BUF,    24                  # ptr buffer (file: malloc'd at the first SCRATCH)
+.equ OR_CAP,    32                  # u64 buffer capacity
+.equ OR_FD,     40                  # u32 file descriptor
+.equ OR_FAILED, 44                  # u32 stdout: broken; file: a write failed
+.equ OR_SIZE,   48
+.equ RT_PRINT_NRECS, LIM_FILES + 1  # stdout + files 1 .. LIM_FILES
 
     .text
 
@@ -96,71 +132,103 @@ bsk_rt_write_all:
     .size bsk_rt_write_all, . - bsk_rt_write_all
 
 # ---------------------------------------------------------------------
-# .Lrt_print_flush -- write the buffered bytes to fd 1, empty the buffer.
-#   Purpose : once stdout is broken (.Lrt_print_broken != 0) the bytes
-#             are discarded; a failed write marks stdout broken.
-#   Inputs  : none
-#   Outputs : none
+# .Lrt_print_drain -- write a record's buffered bytes, empty the buffer.
+#   Purpose : once the record has failed (stdout broken) the bytes are
+#             discarded. A failed write sets OR_FAILED; for a file it
+#             also reports failure.
+#   Inputs  : %rdi = output record
+#   Outputs : %eax = 1 if a file write failed now, else 0 (a stdout
+#             failure is silent: it only marks stdout broken)
 #   Clobbers: all caller-saved registers
-#   Callee-saved used: %rbp = frame pointer
-#   Frame   : 8 bytes (saved %rbp)
+#   Callee-saved used: %rbx = record, %rbp = frame pointer
+#   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad)
 # ---------------------------------------------------------------------
     .p2align 4
-.Lrt_print_flush:
-    pushq %rbp                      # aligns %rsp for the call below
+.Lrt_print_drain:
+    pushq %rbp
     movq %rsp, %rbp
-    movq .Lrt_print_fill(%rip), %rdx    # number of buffered bytes
+    pushq %rbx
+    subq $8, %rsp                   # %rsp = 0 (mod 16)
+    movq %rdi, %rbx
+    xorl %eax, %eax                 # nothing failed (yet)
+    movq OR_FILL(%rbx), %rdx        # number of buffered bytes
     testq %rdx, %rdx
-    jz 1f                               # nothing to write
-    movq $0, .Lrt_print_fill(%rip)      # buffer is empty afterwards
-    cmpl $0, .Lrt_print_broken(%rip)
-    jne 1f                              # stdout broken: discard
-    leaq .Lrt_print_buf(%rip), %rsi
-    movl $1, %edi                       # stdout
-    call bsk_rt_write_all
+    jz 1f                           # nothing to write
+    movq $0, OR_FILL(%rbx)          # the buffer is empty afterwards
+    cmpl $0, OR_FAILED(%rbx)
+    jne 1f                          # broken / failed: discard
+    movl OR_FD(%rbx), %edi
+    movq OR_BUF(%rbx), %rsi
+    call bsk_rt_write_all           # %eax = 0 ok, 1 failed
     testl %eax, %eax
-    jz 1f                               # written completely
-    movl $1, .Lrt_print_broken(%rip)    # write failed: stdout broken
+    jz 1f                           # written completely
+    movl $1, OR_FAILED(%rbx)        # stdout broken / file failed
+    leaq .Lrt_print_recs(%rip), %rcx
+    xorl %eax, %eax
+    cmpq %rcx, %rbx
+    je 1f                           # stdout: silent (LANGUAGE.md 10)
+    movl $1, %eax                   # report the file failure
 1:
+    addq $8, %rsp
+    popq %rbx
     popq %rbp
     ret
 
 # ---------------------------------------------------------------------
-# .Lrt_print_putc -- append one byte to the stdout buffer.
-#   Inputs  : %edi = byte (low 8 bits)
-#   Outputs : none
-#   Clobbers: all caller-saved registers (may flush via libc write)
-#   Callee-saved used: none
-#   Frame   : none (leaf, except for a tail jump to .Lrt_print_flush,
-#             which then sees the caller's alignment like a call would)
-# ---------------------------------------------------------------------
-    .p2align 4
-.Lrt_print_putc:
-    movq .Lrt_print_fill(%rip), %rax
-    leaq .Lrt_print_buf(%rip), %rcx
-    movb %dil, (%rcx,%rax)              # buf[fill] = byte
-    addq $1, %rax
-    movq %rax, .Lrt_print_fill(%rip)
-    cmpq $RT_OUTBUF_SIZE, %rax
-    jae .Lrt_print_flush                # full: flush (tail call)
-    ret
-
-# ---------------------------------------------------------------------
-# .Lrt_print_newline -- the "newline" action: write LF, col = out = 0.
-#   Inputs  : none
+# .Lrt_print_putc -- append one byte to a record's buffer.
+#   Purpose : the byte-append routine of DESIGN.md 6.8: right after a
+#             byte makes the fill count equal to the capacity, the full
+#             buffer is written (.Lrt_print_drain); a file whose write
+#             fails -> CAN'T WRITE FILE.
+#   Inputs  : %rdi = output record, %esi = byte (low 8 bits)
 #   Outputs : none
 #   Clobbers: all caller-saved registers
 #   Callee-saved used: %rbp = frame pointer
-#   Frame   : 8 bytes (saved %rbp)
+#   Frame   : 8 bytes (saved %rbp; %rsp = 0 (mod 16) at the call)
+# ---------------------------------------------------------------------
+    .p2align 4
+.Lrt_print_putc:
+    movq OR_FILL(%rdi), %rax
+    movq OR_BUF(%rdi), %rcx
+    movb %sil, (%rcx,%rax)          # buf[fill] = byte
+    addq $1, %rax
+    movq %rax, OR_FILL(%rdi)
+    cmpq OR_CAP(%rdi), %rax
+    jae 1f                          # full: write it now
+    ret
+1:
+    pushq %rbp
+    movq %rsp, %rbp
+    call .Lrt_print_drain           # %eax = 1 if a file write failed
+    popq %rbp
+    testl %eax, %eax
+    jnz .Lrt_print_cantwrite
+    ret
+.Lrt_print_cantwrite:
+    movl $ERR_CANT_WRITE_FILE, %edi
+    jmp bsk_err                     # noreturn; realigns the stack
+
+# ---------------------------------------------------------------------
+# .Lrt_print_newline -- the "newline" action: write LF, col = out = 0.
+#   Inputs  : %rdi = output record
+#   Outputs : none
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: %rbx = record, %rbp = frame pointer
+#   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad)
 # ---------------------------------------------------------------------
     .p2align 4
 .Lrt_print_newline:
     pushq %rbp
     movq %rsp, %rbp
-    movl $RT_CH_LF, %edi
+    pushq %rbx
+    subq $8, %rsp                   # %rsp = 0 (mod 16)
+    movq %rdi, %rbx
+    movl $RT_CH_LF, %esi
     call .Lrt_print_putc
-    movq $0, .Lrt_print_col(%rip)       # col = 0
-    movq $0, .Lrt_print_out(%rip)       # out = 0
+    movq $0, OR_COL(%rbx)           # col = 0
+    movq $0, OR_OUT(%rbx)           # out = 0
+    addq $8, %rsp
+    popq %rbx
     popq %rbp
     ret
 
@@ -168,56 +236,103 @@ bsk_rt_write_all:
 # .Lrt_print_emit -- the "emit(c)" action of LANGUAGE.md section 8.
 #   Purpose : a space only advances col; any other byte is preceded by
 #             col - out real spaces, then written; col += 1; out = col.
-#   Inputs  : %edi = byte (low 8 bits)
+#   Inputs  : %rdi = output record, %esi = byte (low 8 bits)
 #   Outputs : none
 #   Clobbers: all caller-saved registers
-#   Callee-saved used: %rbx = the byte, %r12 = spaces still to write,
-#             %rbp = frame pointer
-#   Frame   : 24 bytes (%rbp, %rbx, %r12)
+#   Callee-saved used: %rbx = record, %r12 = the byte, %r13 = spaces
+#             still to write, %rbp = frame pointer
+#   Frame   : 40 bytes (%rbp, %rbx, %r12, %r13 + 8 bytes pad)
 # ---------------------------------------------------------------------
     .p2align 4
 .Lrt_print_emit:
     pushq %rbp
     movq %rsp, %rbp
     pushq %rbx
-    pushq %r12                      # 3 pushes: %rsp = 0 (mod 16)
-    movzbl %dil, %ebx               # the byte
-    cmpl $RT_CH_SPACE, %ebx
+    pushq %r12
+    pushq %r13
+    subq $8, %rsp                   # %rsp = 0 (mod 16)
+    movq %rdi, %rbx
+    movzbl %sil, %r12d              # the byte
+    cmpl $RT_CH_SPACE, %r12d
     jne .Lrt_print_emit_real
-    addq $1, .Lrt_print_col(%rip)   # lazy space: col += 1 only
+    addq $1, OR_COL(%rbx)           # lazy space: col += 1 only
     jmp .Lrt_print_emit_done
 .Lrt_print_emit_real:
-    movq .Lrt_print_col(%rip), %r12
-    subq .Lrt_print_out(%rip), %r12 # pending spaces = col - out
+    movq OR_COL(%rbx), %r13
+    subq OR_OUT(%rbx), %r13         # pending spaces = col - out
 .Lrt_print_emit_pad:
-    testq %r12, %r12
+    testq %r13, %r13
     jz .Lrt_print_emit_char
-    movl $RT_CH_SPACE, %edi
+    movq %rbx, %rdi
+    movl $RT_CH_SPACE, %esi
     call .Lrt_print_putc
-    subq $1, %r12
+    subq $1, %r13
     jmp .Lrt_print_emit_pad
 .Lrt_print_emit_char:
-    movl %ebx, %edi
+    movq %rbx, %rdi
+    movl %r12d, %esi
     call .Lrt_print_putc            # the byte itself
-    movq .Lrt_print_col(%rip), %rax
+    movq OR_COL(%rbx), %rax
     addq $1, %rax                   # col += 1
-    movq %rax, .Lrt_print_col(%rip)
-    movq %rax, .Lrt_print_out(%rip) # out = col
+    movq %rax, OR_COL(%rbx)
+    movq %rax, OR_OUT(%rbx)         # out = col
 .Lrt_print_emit_done:
+    addq $8, %rsp
+    popq %r13
     popq %r12
     popq %rbx
     popq %rbp
     ret
 
 # ---------------------------------------------------------------------
+# .Lrt_print_select -- the output record of a print entry point.
+#   Purpose : read the pending file selection (bsk_rt_fsel: 0 = none,
+#             k + 1 = file k) and reset it to none; none or file 0 ->
+#             stdout's record; file k >= 1 -> it must be in write mode
+#             (bsk_rt_file_wcheck: else ILLEGAL FILE COMMAND), then its
+#             record (DESIGN.md 6.8 "Pending selection").
+#   Inputs  : none
+#   Outputs : %rax = output record
+#   Clobbers: all caller-saved registers except %xmm0 / %xmm1 (no
+#             floating-point instruction is executed)
+#   Callee-saved used: %rbx = k, %rbp = frame pointer
+#   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad)
+# ---------------------------------------------------------------------
+    .p2align 4
+.Lrt_print_select:
+    movl bsk_rt_fsel(%rip), %eax    # pending selection
+    movl $0, bsk_rt_fsel(%rip)      # reset on entry, before anything else
+    cmpl $1, %eax
+    jbe 1f                          # none, or file 0: stdout
+    pushq %rbp
+    movq %rsp, %rbp
+    pushq %rbx
+    subq $8, %rsp                   # %rsp = 0 (mod 16)
+    leal -1(%rax), %ebx             # k >= 1
+    movl %ebx, %edi
+    call bsk_rt_file_wcheck         # ILLEGAL FILE COMMAND unless write mode
+    imulq $OR_SIZE, %rbx, %rax
+    leaq .Lrt_print_recs(%rip), %rcx
+    addq %rcx, %rax                 # record k
+    addq $8, %rsp
+    popq %rbx
+    popq %rbp
+    ret
+1:
+    leaq .Lrt_print_recs(%rip), %rax    # record 0: stdout
+    ret
+
+# ---------------------------------------------------------------------
 # bsk_print_str -- PRINT a string item (label).
-#   Purpose : emit every byte; never truncated or wrapped.
+#   Purpose : emit every byte to the selected output; never truncated
+#             or wrapped.
 #   Inputs  : %rdi = pointer to the bytes, %rsi = length (may be 0)
 #   Outputs : none
+#   Errors  : ILLEGAL FILE COMMAND, CAN'T WRITE FILE (selected file)
 #   Clobbers: all caller-saved registers
-#   Callee-saved used: %rbx = cursor, %r12 = end pointer,
-#             %rbp = frame pointer
-#   Frame   : 24 bytes (%rbp, %rbx, %r12)
+#   Callee-saved used: %rbx = cursor, %r12 = end pointer, %r13 = output
+#             record, %rbp = frame pointer
+#   Frame   : 40 bytes (%rbp, %rbx, %r12, %r13 + 8 bytes pad)
 # ---------------------------------------------------------------------
     .globl bsk_print_str
     .type bsk_print_str, @function
@@ -226,17 +341,24 @@ bsk_print_str:
     pushq %rbp
     movq %rsp, %rbp
     pushq %rbx
-    pushq %r12                      # 3 pushes: %rsp = 0 (mod 16)
+    pushq %r12
+    pushq %r13
+    subq $8, %rsp                   # %rsp = 0 (mod 16)
     movq %rdi, %rbx                 # cursor
     leaq (%rdi,%rsi), %r12          # end
+    call .Lrt_print_select
+    movq %rax, %r13                 # output record
 .Lrt_print_str_loop:
     cmpq %r12, %rbx
     jae .Lrt_print_str_done
-    movzbl (%rbx), %edi             # next byte
+    movzbl (%rbx), %esi             # next byte
     addq $1, %rbx
+    movq %r13, %rdi
     call .Lrt_print_emit
     jmp .Lrt_print_str_loop
 .Lrt_print_str_done:
+    addq $8, %rsp
+    popq %r13
     popq %r12
     popq %rbx
     popq %rbp
@@ -247,14 +369,16 @@ bsk_print_str:
 # bsk_print_num -- PRINT a number item.
 #   Purpose : format the field F (LANGUAGE.md section 9); if fewer than
 #             PRINT_MIN_ROOM columns remain before PRINT_LINE_WIDTH,
-#             newline first; then emit every character of F.
+#             newline first; then emit every character of F, on the
+#             selected output.
 #   Inputs  : %xmm0 = value (finite)
 #   Outputs : none
+#   Errors  : ILLEGAL FILE COMMAND, CAN'T WRITE FILE (selected file)
 #   Clobbers: all caller-saved registers
 #   Callee-saved used: %rbx = cursor in the field, %r12 = end of field,
-#             %rbp = frame pointer
-#   Frame   : 24 bytes (%rbp, %rbx, %r12) + RT_NUMBUF field buffer at
-#             (%rsp)
+#             %r13 = output record, %rbp = frame pointer
+#   Frame   : 32 bytes (%rbp, %rbx, %r12, %r13) + RT_NUMBUF field
+#             buffer at (%rsp) + 8 bytes pad
 # ---------------------------------------------------------------------
     .globl bsk_print_num
     .type bsk_print_num, @function
@@ -264,25 +388,31 @@ bsk_print_num:
     movq %rsp, %rbp
     pushq %rbx
     pushq %r12
-    subq $RT_NUMBUF, %rsp           # field buffer; %rsp = 0 (mod 16)
+    pushq %r13
+    subq $RT_NUMBUF + 8, %rsp       # field buffer; %rsp = 0 (mod 16)
+    call .Lrt_print_select          # keeps %xmm0 (the value)
+    movq %rax, %r13                 # output record
     movq %rsp, %rdi
     call bsk_rt_fmtnum              # %rax = field length
     movq %rsp, %rbx                 # cursor
     leaq (%rsp,%rax), %r12          # end of field
     # Room check: newline if 75 - col < 12, i.e. col > 63 (col may
     # exceed 75 after a long label; the unsigned test covers that).
-    cmpq $(PRINT_LINE_WIDTH - PRINT_MIN_ROOM), .Lrt_print_col(%rip)
+    cmpq $(PRINT_LINE_WIDTH - PRINT_MIN_ROOM), OR_COL(%r13)
     jbe .Lrt_print_num_loop
+    movq %r13, %rdi
     call .Lrt_print_newline
 .Lrt_print_num_loop:
     cmpq %r12, %rbx
     jae .Lrt_print_num_done
-    movzbl (%rbx), %edi             # next character of the field
+    movzbl (%rbx), %esi             # next character of the field
     addq $1, %rbx
+    movq %r13, %rdi
     call .Lrt_print_emit
     jmp .Lrt_print_num_loop
 .Lrt_print_num_done:
-    addq $RT_NUMBUF, %rsp
+    addq $RT_NUMBUF + 8, %rsp
+    popq %r13
     popq %r12
     popq %rbx
     popq %rbp
@@ -291,9 +421,11 @@ bsk_print_num:
 
 # ---------------------------------------------------------------------
 # bsk_print_comma -- PRINT ',' : next zone strictly to the right.
-#   Purpose : col = (col / 15 + 1) * 15; newline if col >= 75.
+#   Purpose : col = (col / 15 + 1) * 15; newline if col >= 75 (on the
+#             selected output).
 #   Inputs  : none
 #   Outputs : none
+#   Errors  : ILLEGAL FILE COMMAND, CAN'T WRITE FILE (selected file)
 #   Clobbers: all caller-saved registers
 #   Callee-saved used: %rbp = frame pointer
 #   Frame   : 8 bytes (saved %rbp)
@@ -304,16 +436,18 @@ bsk_print_num:
 bsk_print_comma:
     pushq %rbp
     movq %rsp, %rbp
-    movq .Lrt_print_col(%rip), %rax
+    call .Lrt_print_select
+    movq %rax, %rdi                 # output record
+    movq OR_COL(%rdi), %rax
     movl $PRINT_ZONE_WIDTH, %ecx
     xorl %edx, %edx
     divq %rcx                       # %rax = current zone index
     addq $1, %rax                   # next zone
     imulq %rcx, %rax                # its first column
-    movq %rax, .Lrt_print_col(%rip)
+    movq %rax, OR_COL(%rdi)
     cmpq $PRINT_LINE_WIDTH, %rax
     jb 1f                           # still on this line
-    call .Lrt_print_newline
+    call .Lrt_print_newline         # %rdi = the record
 1:
     popq %rbp
     ret
@@ -324,42 +458,56 @@ bsk_print_comma:
 #   strictly to the right; no newline is forced.
 #   Inputs  : none
 #   Outputs : none
-#   Clobbers: %rax, %rcx, %rdx
-#   Callee-saved used: none
-#   Frame   : none (leaf)
+#   Errors  : ILLEGAL FILE COMMAND (selected file)
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: %rbp = frame pointer
+#   Frame   : 8 bytes (saved %rbp)
 # ---------------------------------------------------------------------
     .globl bsk_print_semi
     .type bsk_print_semi, @function
     .p2align 4
 bsk_print_semi:
-    movq .Lrt_print_col(%rip), %rax
+    pushq %rbp
+    movq %rsp, %rbp
+    call .Lrt_print_select
+    movq %rax, %rdi                 # output record
+    movq OR_COL(%rdi), %rax
     movl $PRINT_PACK_WIDTH, %ecx
     xorl %edx, %edx
     divq %rcx                       # floor(col / 3)
     addq $1, %rax
     imulq %rcx, %rax                # next multiple of 3
-    movq %rax, .Lrt_print_col(%rip)
+    movq %rax, OR_COL(%rdi)
+    popq %rbp
     ret
     .size bsk_print_semi, . - bsk_print_semi
 
 # ---------------------------------------------------------------------
-# bsk_print_nl -- end of a PRINT without a trailing separator.
+# bsk_print_nl -- end of a PRINT without a trailing separator: newline
+#   on the selected output.
 #   Inputs  : none
 #   Outputs : none
+#   Errors  : ILLEGAL FILE COMMAND, CAN'T WRITE FILE (selected file)
 #   Clobbers: all caller-saved registers
-#   Callee-saved used: none
-#   Frame   : none (tail jump; .Lrt_print_newline sees our alignment)
+#   Callee-saved used: %rbp = frame pointer
+#   Frame   : 8 bytes (saved %rbp)
 # ---------------------------------------------------------------------
     .globl bsk_print_nl
     .type bsk_print_nl, @function
     .p2align 4
 bsk_print_nl:
-    jmp .Lrt_print_newline
+    pushq %rbp
+    movq %rsp, %rbp
+    call .Lrt_print_select
+    movq %rax, %rdi                 # output record
+    call .Lrt_print_newline
+    popq %rbp
+    ret
     .size bsk_print_nl, . - bsk_print_nl
 
 # ---------------------------------------------------------------------
-# bsk_rt_print_fresh -- start a fresh line: newline if col != 0
-#   (MAT PRINT, DESIGN.md 6.5 / LANGUAGE.md 7.14.5 step 2).
+# bsk_rt_print_fresh -- start a fresh line on stdout: newline if
+#   col != 0 (MAT PRINT, DESIGN.md 6.5 / LANGUAGE.md 7.14.5 step 2).
 #   Inputs  : none
 #   Outputs : none
 #   Clobbers: all caller-saved registers
@@ -371,15 +519,17 @@ bsk_print_nl:
     .type bsk_rt_print_fresh, @function
     .p2align 4
 bsk_rt_print_fresh:
-    cmpq $0, .Lrt_print_col(%rip)
+    leaq .Lrt_print_recs(%rip), %rdi    # stdout
+    cmpq $0, OR_COL(%rdi)
     jne .Lrt_print_newline          # mid-line: end it
     ret                             # already at column 0
     .size bsk_rt_print_fresh, . - bsk_rt_print_fresh
 
 # ---------------------------------------------------------------------
-# bsk_print_sv -- PRINT a string variable or string list element
+# bsk_print_sv -- PRINT a string variable, list or table element
 #   (LANGUAGE.md 8 string item; DESIGN.md 6.7).
-#   Purpose : emit every byte of the value through the column logic.
+#   Purpose : emit every byte of the value through the column logic
+#             (bsk_print_str reads the pending selection).
 #   Inputs  : %rdi = SD record
 #   Outputs : none
 #   Clobbers: all caller-saved registers
@@ -399,12 +549,14 @@ bsk_print_sv:
 # bsk_print_tab -- PRINT TAB(x) (LANGUAGE.md 8, DESIGN.md 6.7).
 #   Purpose : m = fmod(trunc(x), 75) (both exact), m += 75 if m < 0,
 #             so m is in 0 .. 74; if col < m then col = m (a lazy
-#             movement: nothing is written). Never starts a new line.
+#             movement: nothing is written), on the selected output.
+#             Never starts a new line.
 #   Inputs  : %xmm0 = x (finite)
 #   Outputs : none
+#   Errors  : ILLEGAL FILE COMMAND (selected file)
 #   Clobbers: all caller-saved registers (libm)
-#   Callee-saved used: %rbp = frame pointer
-#   Frame   : 8 bytes (saved %rbp; aligns %rsp for the libm calls)
+#   Callee-saved used: %rbx = output record, %rbp = frame pointer
+#   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad)
 # ---------------------------------------------------------------------
     .globl bsk_print_tab
     .type bsk_print_tab, @function
@@ -412,6 +564,10 @@ bsk_print_sv:
 bsk_print_tab:
     pushq %rbp
     movq %rsp, %rbp
+    pushq %rbx
+    subq $8, %rsp                   # %rsp = 0 (mod 16)
+    call .Lrt_print_select          # keeps %xmm0 (x)
+    movq %rax, %rbx                 # output record
     call trunc@PLT                  # k = trunc(x), exact
     movl $TAB_MODULUS, %eax
     cvtsi2sdl %eax, %xmm1           # 75.0
@@ -424,30 +580,34 @@ bsk_print_tab:
     addsd %xmm1, %xmm0              # m in -74 .. -1: + 75, exact
 1:
     cvttsd2si %xmm0, %rax           # 0 <= m <= 74
-    cmpq .Lrt_print_col(%rip), %rax
+    cmpq OR_COL(%rbx), %rax
     jbe 2f                          # col >= m: TAB is ignored
-    movq %rax, .Lrt_print_col(%rip) # col = m (lazy spaces)
+    movq %rax, OR_COL(%rbx)         # col = m (lazy spaces)
 2:
+    addq $8, %rsp
+    popq %rbx
     popq %rbp
     ret
     .size bsk_print_tab, . - bsk_print_tab
 
 # ---------------------------------------------------------------------
-# bsk_rt_flush -- write the stdout buffer now (INPUT diagnostics and
-#   the terminal prompt, rt_input.s). Same rules as every flush: once
-#   stdout is broken the bytes are discarded.
+# bsk_rt_flush -- write the stdout buffer now (INPUT diagnostics, the
+#   terminal prompt, INPUT #0 and IF END #0 on a terminal; rt_input.s).
+#   Same rules as every flush: once stdout is broken the bytes are
+#   discarded.
 #   Inputs  : none
 #   Outputs : none
 #   Clobbers: all caller-saved registers
 #   Callee-saved used: none
-#   Frame   : none (tail jump; .Lrt_print_flush aligns itself)
+#   Frame   : none (tail jump; .Lrt_print_drain aligns itself)
 # ---------------------------------------------------------------------
     .globl bsk_rt_flush
     .hidden bsk_rt_flush
     .type bsk_rt_flush, @function
     .p2align 4
 bsk_rt_flush:
-    jmp .Lrt_print_flush
+    leaq .Lrt_print_recs(%rip), %rdi    # stdout
+    jmp .Lrt_print_drain
     .size bsk_rt_flush, . - bsk_rt_flush
 
 # ---------------------------------------------------------------------
@@ -457,9 +617,9 @@ bsk_rt_flush:
 #   Inputs  : none
 #   Outputs : none
 #   Clobbers: all caller-saved registers
-#   Callee-saved used: %rbx = spaces still to write, %rbp = frame
-#             pointer
-#   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad)
+#   Callee-saved used: %rbx = spaces still to write, %r12 = stdout's
+#             record, %rbp = frame pointer
+#   Frame   : 24 bytes (%rbp, %rbx, %r12)
 # ---------------------------------------------------------------------
     .globl bsk_rt_print_prompt
     .hidden bsk_rt_print_prompt
@@ -469,27 +629,32 @@ bsk_rt_print_prompt:
     pushq %rbp
     movq %rsp, %rbp
     pushq %rbx
-    subq $8, %rsp                   # %rsp = 0 (mod 16)
-    movq .Lrt_print_col(%rip), %rbx
-    subq .Lrt_print_out(%rip), %rbx # pending spaces = col - out
+    pushq %r12                      # 3 pushes: %rsp = 0 (mod 16)
+    leaq .Lrt_print_recs(%rip), %r12    # stdout
+    movq OR_COL(%r12), %rbx
+    subq OR_OUT(%r12), %rbx         # pending spaces = col - out
 1:
     testq %rbx, %rbx
     jz 2f
-    movl $RT_CH_SPACE, %edi
+    movq %r12, %rdi
+    movl $RT_CH_SPACE, %esi
     call .Lrt_print_putc
     subq $1, %rbx
     jmp 1b
 2:
-    movl $RT_CH_QMARK, %edi
+    movq %r12, %rdi
+    movl $RT_CH_QMARK, %esi
     call .Lrt_print_putc            # "?"
-    movl $RT_CH_SPACE, %edi
+    movq %r12, %rdi
+    movl $RT_CH_SPACE, %esi
     call .Lrt_print_putc            # " " (written, not lazy)
-    movq .Lrt_print_col(%rip), %rax
+    movq OR_COL(%r12), %rax
     addq $2, %rax                   # the prompt's two columns
-    movq %rax, .Lrt_print_col(%rip)
-    movq %rax, .Lrt_print_out(%rip) # out = col: nothing pending
-    call .Lrt_print_flush           # the user must see the prompt
-    addq $8, %rsp
+    movq %rax, OR_COL(%r12)
+    movq %rax, OR_OUT(%r12)         # out = col: nothing pending
+    movq %r12, %rdi
+    call .Lrt_print_drain           # the user must see the prompt
+    popq %r12
     popq %rbx
     popq %rbp
     ret
@@ -497,9 +662,9 @@ bsk_rt_print_prompt:
 
 # ---------------------------------------------------------------------
 # bsk_rt_print_linedone -- after a line was read from a terminal the
-#   cursor is at the start of a new line: col = out = 0 (nothing is
-#   written).
-#   Inputs  : none   Outputs : none   Clobbers: none
+#   cursor is at the start of a new line: stdout's col = out = 0
+#   (nothing is written).
+#   Inputs  : none   Outputs : none   Clobbers: %rax
 #   Callee-saved used: none   Frame: none (leaf)
 # ---------------------------------------------------------------------
     .globl bsk_rt_print_linedone
@@ -507,20 +672,23 @@ bsk_rt_print_prompt:
     .type bsk_rt_print_linedone, @function
     .p2align 4
 bsk_rt_print_linedone:
-    movq $0, .Lrt_print_col(%rip)
-    movq $0, .Lrt_print_out(%rip)
+    leaq .Lrt_print_recs(%rip), %rax    # stdout
+    movq $0, OR_COL(%rax)
+    movq $0, OR_OUT(%rax)
     ret
     .size bsk_rt_print_linedone, . - bsk_rt_print_linedone
 
 # ---------------------------------------------------------------------
 # bsk_rt_finish_output -- termination step for END, STOP, OUT OF DATA
-#   and every run-time error: newline if col != 0, then flush stdout.
+#   and every run-time error: stdout's newline if col != 0, then flush
+#   stdout. (The files are finished before, by bsk_rt_files_finish.)
 #   Inputs  : none
-#   Outputs : %eax = 1 if stdout is broken (some output was lost; the
-#             caller exits with status 1), else 0
+#   Outputs : %eax = 1 if output was lost (stdout broke, or a write of
+#             a file failed at any time: the caller exits with status
+#             1), else 0
 #   Clobbers: all caller-saved registers
-#   Callee-saved used: %rbp = frame pointer
-#   Frame   : 8 bytes (saved %rbp)
+#   Callee-saved used: %rbx = stdout's record, %rbp = frame pointer
+#   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad)
 # ---------------------------------------------------------------------
     .globl bsk_rt_finish_output
     .hidden bsk_rt_finish_output
@@ -529,37 +697,198 @@ bsk_rt_print_linedone:
 bsk_rt_finish_output:
     pushq %rbp
     movq %rsp, %rbp
-    cmpq $0, .Lrt_print_col(%rip)
+    pushq %rbx
+    subq $8, %rsp                   # %rsp = 0 (mod 16)
+    leaq .Lrt_print_recs(%rip), %rbx    # stdout
+    cmpq $0, OR_COL(%rbx)
     je 1f                           # at column 0: no pending line
+    movq %rbx, %rdi
     call .Lrt_print_newline
 1:
-    call .Lrt_print_flush
-    movl .Lrt_print_broken(%rip), %eax  # 0 = ok, 1 = output lost
+    movq %rbx, %rdi
+    call .Lrt_print_drain
+    movl OR_FAILED(%rbx), %eax      # 1 = stdout broken
+    addq $8, %rsp
+    popq %rbx
     popq %rbp
     ret
     .size bsk_rt_finish_output, . - bsk_rt_finish_output
 
+# RT_PRINT_FREC: %rax = output record of file k (%edi = k, 1 ..
+# LIM_FILES). Clobbers %rax, %rcx.
+.macro RT_PRINT_FREC
+    movl %edi, %eax
+    imulq $OR_SIZE, %rax, %rax
+    leaq .Lrt_print_recs(%rip), %rcx
+    addq %rcx, %rax
+.endm
 # ---------------------------------------------------------------------
-# State (file-local, zero-initialised):
-#   .Lrt_print_col     u64 logical column
-#   .Lrt_print_out     u64 characters physically written on this line
-#   .Lrt_print_fill    u64 bytes in the stdout buffer
+# bsk_rt_out_failed -- has a write to file k failed?
+#   Inputs  : %edi = k (1 .. LIM_FILES)
+#   Outputs : %eax = the file's "write failed" flag (0 or 1); SCRATCH
+#             (bsk_rt_out_start) clears it
+#   Clobbers: %rax, %rcx
+#   Callee-saved used: none   Frame: none (leaf)
+# ---------------------------------------------------------------------
+    .globl bsk_rt_out_failed
+    .hidden bsk_rt_out_failed
+    .type bsk_rt_out_failed, @function
+    .p2align 4
+bsk_rt_out_failed:
+    RT_PRINT_FREC
+    movl OR_FAILED(%rax), %eax
+    ret
+    .size bsk_rt_out_failed, . - bsk_rt_out_failed
+
+# ---------------------------------------------------------------------
+# bsk_rt_out_start -- file k enters write mode (SCRATCH #k, after its
+#   open succeeded; LANGUAGE.md 7.22, DESIGN.md 6.8).
+#   Purpose : if the file has no output buffer yet, malloc
+#             RT_FILEBUF_SIZE bytes (failure -> OUT OF ROOM; the buffer
+#             is then reused by every later SCRATCH); then col = out = 0,
+#             the buffer empty, the "failed" flag clear, the fd stored.
+#   Inputs  : %edi = k (1 .. LIM_FILES), %esi = fd (open for writing)
+#   Outputs : none
+#   Errors  : OUT OF ROOM
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: %rbx = record, %r12 = fd, %rbp = frame pointer
+#   Frame   : 24 bytes (%rbp, %rbx, %r12)
+# ---------------------------------------------------------------------
+    .globl bsk_rt_out_start
+    .hidden bsk_rt_out_start
+    .type bsk_rt_out_start, @function
+    .p2align 4
+bsk_rt_out_start:
+    pushq %rbp
+    movq %rsp, %rbp
+    pushq %rbx
+    pushq %r12                      # 3 pushes: %rsp = 0 (mod 16)
+    movl %esi, %r12d
+    RT_PRINT_FREC
+    movq %rax, %rbx
+    cmpq $0, OR_BUF(%rbx)
+    jne 1f                          # buffer from an earlier SCRATCH
+    movl $RT_FILEBUF_SIZE, %edi
+    call malloc@PLT
+    testq %rax, %rax
+    jz 2f                           # no memory: OUT OF ROOM
+    movq %rax, OR_BUF(%rbx)
+    movq $RT_FILEBUF_SIZE, OR_CAP(%rbx)
+1:
+    movq $0, OR_COL(%rbx)           # col = out = 0
+    movq $0, OR_OUT(%rbx)
+    movq $0, OR_FILL(%rbx)          # buffer empty
+    movl %r12d, OR_FD(%rbx)
+    movl $0, OR_FAILED(%rbx)        # a new file: nothing failed
+    popq %r12
+    popq %rbx
+    popq %rbp
+    ret
+2:
+    movl %r12d, %edi
+    call close@PLT                  # the new file's fd is not leaked
+    movl $ERR_OUT_OF_ROOM, %edi
+    jmp bsk_err
+    .size bsk_rt_out_start, . - bsk_rt_out_start
+
+# ---------------------------------------------------------------------
+# bsk_rt_out_discard -- drop file k's unwritten output (SCRATCH of a
+#   file in write mode: the file is emptied anyway, LANGUAGE.md 7.22).
+#   Inputs  : %edi = k   Outputs : none   Clobbers: %rax %rcx
+#   Callee-saved used: none   Frame: none (leaf)
+# ---------------------------------------------------------------------
+    .globl bsk_rt_out_discard
+    .hidden bsk_rt_out_discard
+    .type bsk_rt_out_discard, @function
+    .p2align 4
+bsk_rt_out_discard:
+    RT_PRINT_FREC
+    movq $0, OR_FILL(%rax)          # nothing is written
+    ret
+    .size bsk_rt_out_discard, . - bsk_rt_out_discard
+
+# ---------------------------------------------------------------------
+# bsk_rt_out_finish -- finish file k's output (RESTORE #k, termination;
+#   LANGUAGE.md 7.21, 7.23, 10).
+#   Purpose : a file whose "failed" flag is set is skipped (status 0).
+#             Otherwise: if its col != 0 an LF is added to the buffer
+#             (col = out = 0), then the buffered bytes are written.
+#             A failed write: the flag is set, the buffer emptied,
+#             output marked lost; then CAN'T WRITE FILE if %esi = 1,
+#             else status 1 is returned.
+#   Inputs  : %edi = k (a file in write mode), %esi = 1 to raise the
+#             error on failure, 0 to report it
+#   Outputs : %eax = 1 if the write failed (only with %esi = 0), else 0
+#   Errors  : CAN'T WRITE FILE (with %esi = 1)
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: %rbx = record, %r12 = raise flag, %rbp = frame
+#             pointer
+#   Frame   : 24 bytes (%rbp, %rbx, %r12)
+# ---------------------------------------------------------------------
+    .globl bsk_rt_out_finish
+    .hidden bsk_rt_out_finish
+    .type bsk_rt_out_finish, @function
+    .p2align 4
+bsk_rt_out_finish:
+    pushq %rbp
+    movq %rsp, %rbp
+    pushq %rbx
+    pushq %r12                      # 3 pushes: %rsp = 0 (mod 16)
+    movl %esi, %r12d
+    RT_PRINT_FREC
+    movq %rax, %rbx
+    xorl %eax, %eax
+    cmpl $0, OR_FAILED(%rbx)
+    jne 2f                          # flagged: skipped by every flush
+    cmpq $0, OR_COL(%rbx)
+    je 1f                           # at column 0: no pending line
+    # The pending newline. The buffer is never full at rest (the append
+    # routine writes it as soon as it fills), so the LF fits; a buffer
+    # it fills is written by the drain below in one piece.
+    movq OR_FILL(%rbx), %rax
+    movq OR_BUF(%rbx), %rcx
+    movb $RT_CH_LF, (%rcx,%rax)
+    addq $1, %rax
+    movq %rax, OR_FILL(%rbx)
+    movq $0, OR_COL(%rbx)           # col = out = 0
+    movq $0, OR_OUT(%rbx)
+1:
+    movq %rbx, %rdi
+    call .Lrt_print_drain           # %eax = 1 if the write failed
+    testl %eax, %eax
+    jz 2f
+    testl %r12d, %r12d
+    jnz .Lrt_print_cantwrite        # RESTORE #: CAN'T WRITE FILE
+2:
+    popq %r12
+    popq %rbx
+    popq %rbp
+    ret
+    .size bsk_rt_out_finish, . - bsk_rt_out_finish
+
+# ---------------------------------------------------------------------
+# State:
+#   .Lrt_print_recs    RT_PRINT_NRECS output records (OR_*): record 0 is
+#                      stdout (static buffer, fd 1), records 1 ..
+#                      LIM_FILES the files (zero until their first
+#                      SCRATCH)
 #   .Lrt_print_buf     RT_OUTBUF_SIZE bytes of stdout buffer
-#   .Lrt_print_broken  u32 1 once a write to stdout failed, else 0
 # ---------------------------------------------------------------------
-    .bss
+    .data
     .p2align 3
-.Lrt_print_col:
-    .zero 8
-.Lrt_print_out:
-    .zero 8
-.Lrt_print_fill:
-    .zero 8
+.Lrt_print_recs:
+    .quad 0                         # OR_COL
+    .quad 0                         # OR_OUT
+    .quad 0                         # OR_FILL
+    .quad .Lrt_print_buf            # OR_BUF
+    .quad RT_OUTBUF_SIZE            # OR_CAP
+    .long 1                         # OR_FD: stdout
+    .long 0                         # OR_FAILED: not broken
+    .zero OR_SIZE * LIM_FILES       # files 1 .. LIM_FILES
+
+    .bss
     .p2align 4
 .Lrt_print_buf:
     .zero RT_OUTBUF_SIZE
-    .p2align 2
-.Lrt_print_broken:
-    .zero 4
 
     .section .note.GNU-stack,"",@progbits

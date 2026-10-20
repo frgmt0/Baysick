@@ -1,27 +1,51 @@
 // =====================================================================
-// src/runtime/rt_input.s -- INPUT and MAT INPUT: the standard-input line
-// reader, field scanning and the three INPUT diagnostics (DESIGN.md 6.7,
-// LANGUAGE.md 7.14.8, 7.15).
+// src/runtime/rt_input.s -- INPUT, MAT INPUT and (Fifth Edition) INPUT #
+// and IF END #: the line readers, field scanning and the three INPUT
+// diagnostics (DESIGN.md 6.7, 6.8; LANGUAGE.md 7.14.8, 7.15, 7.21,
+// 7.25, 7.26).
 //
 // Defines (global, runtime.inc):
 //   _bsk_input_begin _bsk_input_num _bsk_input_str _bsk_input_str_el
 //   _bsk_input_end
 //   _bsk_mat_input _bsk_smat_input
+// Defines (private to the runtime, .private_extern):
+//   _bsk_rt_parsenum   the numeric-field check and conversion (VAL)
+//   Fifth Edition (rt_files.s):
+//   _bsk_rt_rd_setup   file k's reader: buffers (once), fd, emptied
+//   _bsk_rt_rd_reset   file k's reader emptied (RESTORE #, SCRATCH #)
+//   _bsk_rt_rd_atend   IF END #k: does reader k hold or get a byte?
 // Uses: _bsk_rt_print_prompt/_home/_flush, _bsk_rt_write_all (rt_print.s),
-// _bsk_rt_str_setbytes (rt_str.s), _bsk_saref1 (rt_array.s), _bsk_rt_num (rt_ed4.s), _bsk_err.
+// _bsk_rt_fsel (rt_print.s), _bsk_rt_file_ropen (rt_files.s),
+// _bsk_rt_str_setbytes (rt_str.s), _bsk_saref1 (rt_array.s), _bsk_rt_num
+// (rt_ed4.s), _bsk_err.
 //
-// Lines. Standard input is read lazily with read(0, buf, RT_INBUF_SIZE)
-// into a static buffer (EINTR retried; any other error or 0 bytes = end
-// of input, remembered). A line is assembled into a static buffer of
-// LIM_INPUT_LINE + 1 bytes: the bytes up to the next LF; one CR right
+// Readers. Standard input and every file number have a reader record
+// (RD_*, below; [0] standard input with static buffers, [k] file k with
+// buffers malloc'd when the file is first opened for reading). One line
+// routine (Lrt_in_getline) and one field routine serve all of them; the
+// INPUT dialogue (prompt, diagnostics, END OF INPUT) and the INPUT #
+// rules (no prompt, no diagnostics, END OF FILE, INCORRECT FORMAT IN
+// FILE) are the only difference, selected by a mode flag.
+//
+// Chunk rule (LANGUAGE.md 7.21, DESIGN.md 6.8). A reader calls
+// read(fd, chunk, RT_INBUF_SIZE) only when it needs a byte and holds no
+// unread byte (EINTR retried; any other error or 0 bytes is the end of
+// that reader for this request); it keeps the bytes it received until
+// they are consumed and never reads ahead otherwise. The end is not
+// remembered: the next request that needs a byte reads again, so a
+// file read through another number sees what was written to it since.
+//
+// Lines. A line is assembled into the reader's line buffer of
+// LIM_INPUT_LINE + 16 bytes: the bytes up to the next LF; one CR right
 // before the LF is removed; a non-empty last line without LF counts. A
 // line longer than LIM_INPUT_LINE bytes after the CR removal is INPUT
 // LINE TOO LONG (detected as soon as more than LIM_INPUT_LINE + 1 bytes
 // precede the LF, or at the LF / end of input). End of input when a line
-// is needed is END OF INPUT (exit 0). isatty(0) is asked once, at the
-// first line request; on a terminal each line request first writes the
-// prompt (_bsk_rt_print_prompt) and the column state is reset after the
-// line was read (_bsk_rt_print_home).
+// is needed: END OF INPUT (dialogue, exit 0) or END OF FILE (INPUT #).
+// isatty(0) is asked once, at the first standard-input request; on a
+// terminal each standard-input line request first writes the prompt
+// (dialogue) or flushes stdout (INPUT #0), and the column state is reset
+// after the line was read (_bsk_rt_print_home).
 //
 // Fields. A field ends at the next comma outside quotes (every `"`
 // toggles the quote state); an empty or all-blank (0x20) line has no
@@ -33,12 +57,18 @@
 // `&`); the value is the bytes between the quotes / the field without its
 // leading blanks.
 //
-// INPUT keeps a cursor into the current line (Lrt_in_fpos) and whether a
-// field is left (Lrt_in_fleft). MAT INPUT collects the text of all its
+// Each reader keeps a cursor into its current line (RD_FPOS) and whether
+// a field is left (RD_FLEFT). MAT INPUT collects the text of all its
 // lines (`&` continuation removed) in a growable malloc buffer, one line
 // per LF-terminated record, validates every field and counts them, and
 // only then stores (a second scan of the same text), so nothing is
 // assigned unless the whole input is good (transactional).
+//
+// Pending file selection (DESIGN.md 6.8): every input entry point takes
+// _bsk_rt_fsel (reads it and resets it to none) on entry. None: the
+// INPUT dialogue on standard input. File k: the INPUT # rules on reader
+// k (k >= 1 must be in read mode and is opened if needed,
+// _bsk_rt_file_ropen; k = 0 is standard input).
 // =====================================================================
 .include "baysick.inc"
 
@@ -48,6 +78,19 @@
 .equ RT_IN_TTY_NO, 1                // Lrt_in_tty: stdin is not a terminal
 .equ RT_IN_TTY_YES, 2               // Lrt_in_tty: stdin is a terminal
 .equ RT_IN_TEXT_MIN, 4096           // first size of the MAT INPUT text buffer
+.equ RT_IN_DIALOGUE, 0              // mode: INPUT / MAT INPUT dialogue
+.equ RT_IN_FILE, 1                  // mode: INPUT # rules
+
+// Reader record (runtime-private, this file only).
+.equ RD_FD,     0                   // u32 file descriptor
+.equ RD_FLEFT,  4                   // u32 1 if a field is left on the line
+.equ RD_CHUNK,  8                   // ptr chunk buffer, RT_INBUF_SIZE bytes
+.equ RD_RPOS,   16                  // u64 next unread byte in the chunk
+.equ RD_RLEN,   24                  // u64 bytes in the chunk
+.equ RD_LINE,   32                  // ptr line buffer, RT_IN_LINEBUF bytes
+.equ RD_LLEN,   40                  // u64 length of the current line
+.equ RD_FPOS,   48                  // u64 start of the next field
+.equ RD_SIZE,   56
 
 // RT_IN_PEEK: w6 = the byte at x5, or 0 once x5 has reached x3 (the end
 // of the text being checked). Used by Lrt_in_parsenum; local label 9.
@@ -62,27 +105,18 @@
     .section __TEXT,__text,regular,pure_instructions
 
 // ---------------------------------------------------------------------
-// Lrt_in_getline -- read the next input line into Lrt_in_line.
-//   Purpose : the line reader of the header (prompt on a terminal, CR
-//             removal, length limit, END OF INPUT); afterwards the INPUT
-//             field cursor is at the start of the line and Lrt_in_fleft
-//             says whether the line has a field (not empty/all blank).
+// Lrt_in_istty -- is standard input a terminal? isatty(0) is asked once,
+//   at the first standard-input request, and remembered.
 //   Inputs  : none
-//   Outputs : Lrt_in_line / Lrt_in_llen hold the line
-//   Errors  : END OF INPUT (exit 0), INPUT LINE TOO LONG
+//   Outputs : w0 = 1 for a terminal, else 0
 //   Clobbers: x0-x17, d0-d7, d16-d31
-//   Callee-saved used: x19 = line length so far, x20 = line buffer,
-//             x21 = start of the unread bytes, x22 = their count
-//   Frame   : 64 bytes (frame record + x19..x22 + "LF found" at
-//             [sp,#48])
+//   Callee-saved used: none
+//   Frame   : 16 bytes (frame record)
 // ---------------------------------------------------------------------
     .p2align 2
-Lrt_in_getline:
-    stp x29, x30, [sp, #-64]!
+Lrt_in_istty:
+    stp x29, x30, [sp, #-16]!
     mov x29, sp
-    stp x19, x20, [sp, #16]
-    stp x21, x22, [sp, #32]
-    // Terminal or not: asked once, at the first line request.
     adrp x9, Lrt_in_tty@PAGE
     ldr w10, [x9, Lrt_in_tty@PAGEOFF]
     cbnz w10, 1f
@@ -96,52 +130,108 @@ Lrt_in_getline:
     str w10, [x9, Lrt_in_tty@PAGEOFF]
 1:
     cmp w10, #RT_IN_TTY_YES
-    b.ne 2f
-    bl _bsk_rt_print_prompt         // pending spaces, "? ", flush
-2:
-    mov x19, #0                     // line length
-    adrp x20, Lrt_in_line@PAGE
-    add x20, x20, Lrt_in_line@PAGEOFF
-Lrt_in_getline_more:
-    // Unread bytes in the read buffer?
-    adrp x9, Lrt_in_rpos@PAGE
-    ldr x10, [x9, Lrt_in_rpos@PAGEOFF]
-    adrp x11, Lrt_in_rlen@PAGE
-    ldr x11, [x11, Lrt_in_rlen@PAGEOFF]
-    cmp x10, x11
-    b.lo Lrt_in_getline_scan
-    adrp x9, Lrt_in_eof@PAGE
-    ldr w9, [x9, Lrt_in_eof@PAGEOFF]
-    cbnz w9, Lrt_in_getline_eof     // end of input already seen
-Lrt_in_getline_read:
-    mov w0, #0                      // stdin
-    adrp x1, Lrt_in_rbuf@PAGE
-    add x1, x1, Lrt_in_rbuf@PAGEOFF
+    cset w0, eq
+    ldp x29, x30, [sp], #16
+    ret
+
+// ---------------------------------------------------------------------
+// Lrt_in_refill -- the chunk read of a reader that holds no unread byte:
+//   read(fd, chunk, RT_INBUF_SIZE), EINTR retried.
+//   Inputs  : x0 = reader record
+//   Outputs : w0 = 1 if bytes arrived (RD_RPOS = 0, RD_RLEN = count),
+//             0 at the end (0 bytes or an error; RD_RPOS = RD_RLEN = 0)
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: x19 = reader
+//   Frame   : 32 bytes (frame record + x19)
+// ---------------------------------------------------------------------
+    .p2align 2
+Lrt_in_refill:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    str x19, [sp, #16]
+    mov x19, x0
+    str xzr, [x19, #RD_RPOS]        // nothing unread from now on
+    str xzr, [x19, #RD_RLEN]
+1:
+    ldr w0, [x19, #RD_FD]
+    ldr x1, [x19, #RD_CHUNK]
     mov x2, #RT_INBUF_SIZE
     bl _read
     cmp x0, #0
-    b.gt Lrt_in_getline_got
-    b.eq Lrt_in_getline_seteof      // 0 bytes: end of input
+    b.gt 2f
+    b.eq 3f                         // 0 bytes: the end
     bl ___error                     // -1: EINTR is retried
     ldr w9, [x0]
     cmp w9, #RT_EINTR
-    b.eq Lrt_in_getline_read
-Lrt_in_getline_seteof:
-    adrp x9, Lrt_in_eof@PAGE        // any other error = end of input
-    mov w10, #1
-    str w10, [x9, Lrt_in_eof@PAGEOFF]
-    b Lrt_in_getline_eof
-Lrt_in_getline_got:
-    adrp x9, Lrt_in_rpos@PAGE
-    str xzr, [x9, Lrt_in_rpos@PAGEOFF]
-    adrp x9, Lrt_in_rlen@PAGE
-    str x0, [x9, Lrt_in_rlen@PAGEOFF]
+    b.eq 1b
+3:
+    mov w0, #0                      // any other error = the end
+    b 4f
+2:
+    str x0, [x19, #RD_RLEN]         // the new chunk, from its first byte
+    mov w0, #1
+4:
+    ldr x19, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret
+
+// ---------------------------------------------------------------------
+// Lrt_in_getline -- read the next line of a reader into its line buffer.
+//   Purpose : the line rules of the header (prompt / flush on a
+//             terminal, CR removal, length limit, end of input);
+//             afterwards the reader's field cursor is at the start of
+//             the line and RD_FLEFT says whether the line has a field
+//             (not empty/all blank).
+//   Inputs  : x0 = reader record, w1 = RT_IN_DIALOGUE or RT_IN_FILE
+//   Outputs : RD_LINE / RD_LLEN hold the line
+//   Errors  : END OF INPUT (dialogue, exit 0) / END OF FILE (file
+//             rules), INPUT LINE TOO LONG
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: x19 = line length so far, x20 = line buffer,
+//             x21 = start of the unread bytes, x22 = their count,
+//             x23 = reader, x24 = mode
+//   Frame   : 80 bytes (frame record + x19..x24 + "LF found" at
+//             [sp,#64])
+// ---------------------------------------------------------------------
+    .p2align 2
+Lrt_in_getline:
+    stp x29, x30, [sp, #-80]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]
+    stp x21, x22, [sp, #32]
+    stp x23, x24, [sp, #48]
+    mov x23, x0
+    mov w24, w1
+    // Standard input on a terminal: the dialogue writes its prompt,
+    // INPUT #0 only flushes stdout so the user sees all output.
+    adrp x9, Lrt_in_rd@PAGE
+    add x9, x9, Lrt_in_rd@PAGEOFF
+    cmp x23, x9
+    b.ne 2f                         // a file: no terminal handling
+    bl Lrt_in_istty
+    cbz w0, 2f
+    cbnz w24, 1f
+    bl _bsk_rt_print_prompt         // pending spaces, "? ", flush
+    b 2f
+1:
+    bl _bsk_rt_print_flush
+2:
+    mov x19, #0                     // line length
+    ldr x20, [x23, #RD_LINE]
+Lrt_in_getline_more:
+    // Unread bytes in the chunk? Else one chunk read.
+    ldr x10, [x23, #RD_RPOS]
+    ldr x11, [x23, #RD_RLEN]
+    cmp x10, x11
+    b.lo Lrt_in_getline_scan
+    mov x0, x23
+    bl Lrt_in_refill
+    cbz w0, Lrt_in_getline_eof      // the end of this reader
     mov x10, #0
-    mov x11, x0
+    ldr x11, [x23, #RD_RLEN]
 Lrt_in_getline_scan:
     // x10 = rpos, x11 = rlen: look for the LF in the unread bytes.
-    adrp x21, Lrt_in_rbuf@PAGE
-    add x21, x21, Lrt_in_rbuf@PAGEOFF
+    ldr x21, [x23, #RD_CHUNK]
     add x21, x21, x10               // first unread byte
     sub x22, x11, x10               // unread count
     mov x0, x21
@@ -158,22 +248,21 @@ Lrt_in_getline_scan:
     add x10, x10, #1
     cmp x9, x10
     b.hi Lrt_in_getline_toolong
-    str x0, [sp, #48]               // keep "LF found" across memcpy
+    str x0, [sp, #64]               // keep "LF found" across memcpy
     add x0, x20, x19
     mov x1, x21
     mov x2, x22
     bl _memcpy                      // append to the line
-    ldr x9, [sp, #48]
+    ldr x9, [sp, #64]
     add x19, x19, x22
-    adrp x10, Lrt_in_rpos@PAGE
-    ldr x11, [x10, Lrt_in_rpos@PAGEOFF]
+    ldr x11, [x23, #RD_RPOS]
     add x11, x11, x22
     cbz x9, 2f
     add x11, x11, #1                // consume the LF too
-    str x11, [x10, Lrt_in_rpos@PAGEOFF]
+    str x11, [x23, #RD_RPOS]
     b Lrt_in_getline_lf
 2:
-    str x11, [x10, Lrt_in_rpos@PAGEOFF] // buffer used up: read more
+    str x11, [x23, #RD_RPOS]        // chunk used up: read more
     b Lrt_in_getline_more
 Lrt_in_getline_lf:
     // One CR immediately before the LF is removed.
@@ -195,29 +284,34 @@ Lrt_in_getline_eof:
     cmp x19, x10
     b.hi Lrt_in_getline_toolong
 Lrt_in_getline_done:
-    adrp x9, Lrt_in_llen@PAGE
-    str x19, [x9, Lrt_in_llen@PAGEOFF]
-    adrp x9, Lrt_in_fpos@PAGE
-    str xzr, [x9, Lrt_in_fpos@PAGEOFF]  // INPUT cursor at the start
+    str x19, [x23, #RD_LLEN]
+    str xzr, [x23, #RD_FPOS]        // field cursor at the start
     mov x0, x20
     mov x1, x19
     bl Lrt_in_allblank
     eor w0, w0, #1                  // a field is left unless all blank
-    adrp x9, Lrt_in_fleft@PAGE
-    str w0, [x9, Lrt_in_fleft@PAGEOFF]
+    str w0, [x23, #RD_FLEFT]
+    adrp x9, Lrt_in_rd@PAGE
+    add x9, x9, Lrt_in_rd@PAGEOFF
+    cmp x23, x9
+    b.ne 1f
     adrp x9, Lrt_in_tty@PAGE
     ldr w10, [x9, Lrt_in_tty@PAGEOFF]
     cmp w10, #RT_IN_TTY_YES
     b.ne 1f
     bl _bsk_rt_print_home           // the terminal is at a new line
 1:
+    ldp x23, x24, [sp, #48]
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #64
+    ldp x29, x30, [sp], #80
     ret
 Lrt_in_getline_end:
-    mov w0, #ERR_END_OF_INPUT
-    bl _bsk_err                     // newline, flush, message, exit 0
+    mov w0, #ERR_END_OF_INPUT       // dialogue: newline, flush, exit 0
+    mov w9, #ERR_END_OF_FILE        // INPUT #: exit 1
+    cmp w24, #RT_IN_DIALOGUE
+    csel w0, w0, w9, eq
+    bl _bsk_err
 Lrt_in_getline_toolong:
     mov w0, #ERR_INPUT_LINE_TOO_LONG
     bl _bsk_err
@@ -294,7 +388,8 @@ Lrt_in_field_eol:
     ret
 
 // ---------------------------------------------------------------------
-// Lrt_in_parsenum -- validate and convert a numeric field.
+// _bsk_rt_parsenum, Lrt_in_parsenum -- validate and convert a numeric
+//   field (also the whole argument of VAL, rt_ed5.s).
 //   Purpose : copy the field without its blanks (at most RT_IN_NUMBUF-1
 //             bytes, more cannot be valid), check
 //             [+|-] mantissa [E|e [+|-] digits] (1..9 mantissa digits,
@@ -305,7 +400,9 @@ Lrt_in_field_eol:
 //   Callee-saved used: none
 //   Frame   : 48 bytes (frame record + RT_IN_NUMBUF text at [sp,#16])
 // ---------------------------------------------------------------------
+    .private_extern _bsk_rt_parsenum
     .p2align 2
+_bsk_rt_parsenum:
 Lrt_in_parsenum:
     stp x29, x30, [sp, #-48]!
     mov x29, sp
@@ -505,117 +602,194 @@ Lrt_in_diag:
 .endm
 
 // ---------------------------------------------------------------------
-// Lrt_in_nextfield -- INPUT: the next field of the current line for one
-//   target, with the NOT ENOUGH INPUT rule: while no field is left,
-//   write `NOT ENOUGH INPUT -- ADD MORE` and read a new line.
-//   Inputs  : none
+// Lrt_in_nextfield -- the next field of a reader's current line for one
+//   target. While no field is left: in the dialogue, write `NOT ENOUGH
+//   INPUT -- ADD MORE` and read a new line; with the INPUT # rules, read
+//   the next line silently.
+//   Inputs  : x0 = reader record, w1 = mode
 //   Outputs : x0 = field pointer, x1 = field length
-//   Errors  : END OF INPUT, INPUT LINE TOO LONG (Lrt_in_getline)
+//   Errors  : END OF INPUT / END OF FILE, INPUT LINE TOO LONG
+//             (Lrt_in_getline)
 //   Clobbers: x0-x17, d0-d7, d16-d31
-//   Callee-saved used: none
-//   Frame   : 16 bytes (frame record)
+//   Callee-saved used: x19 = reader, x20 = mode
+//   Frame   : 32 bytes (frame record + x19, x20)
 // ---------------------------------------------------------------------
     .p2align 2
 Lrt_in_nextfield:
-    stp x29, x30, [sp, #-16]!
+    stp x29, x30, [sp, #-32]!
     mov x29, sp
+    stp x19, x20, [sp, #16]
+    mov x19, x0
+    mov w20, w1
 1:
-    adrp x9, Lrt_in_fleft@PAGE
-    ldr w9, [x9, Lrt_in_fleft@PAGEOFF]
+    ldr w9, [x19, #RD_FLEFT]
     cbnz w9, 2f
+    cbnz w20, 3f                    // INPUT #: no diagnostic
     RT_IN_DIAG more                 // no field left on this line
+3:
+    mov x0, x19
+    mov w1, w20
     bl Lrt_in_getline
     b 1b
 2:
-    adrp x0, Lrt_in_line@PAGE
-    add x0, x0, Lrt_in_line@PAGEOFF
-    adrp x9, Lrt_in_fpos@PAGE
-    ldr x1, [x9, Lrt_in_fpos@PAGEOFF]
-    adrp x9, Lrt_in_llen@PAGE
-    ldr x2, [x9, Lrt_in_llen@PAGEOFF]
+    ldr x0, [x19, #RD_LINE]
+    ldr x1, [x19, #RD_FPOS]
+    ldr x2, [x19, #RD_LLEN]
     bl Lrt_in_field                 // x0/x1 field, x2 next pos, x3 more
-    adrp x9, Lrt_in_fpos@PAGE
-    str x2, [x9, Lrt_in_fpos@PAGEOFF]
-    adrp x9, Lrt_in_fleft@PAGE
-    str w3, [x9, Lrt_in_fleft@PAGEOFF]
-    ldp x29, x30, [sp], #16
+    str x2, [x19, #RD_FPOS]
+    str w3, [x19, #RD_FLEFT]
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #32
     ret
 
 // ---------------------------------------------------------------------
-// _bsk_input_begin -- INPUT: read the statement's first line.
+// Lrt_in_take -- take the pending file selection (DESIGN.md 6.8): read
+//   _bsk_rt_fsel and reset it to none. None: the dialogue on standard
+//   input's reader. File k: the INPUT # rules on reader k; for k >= 1
+//   the file must be in read mode and is opened if needed
+//   (_bsk_rt_file_ropen); k = 0 is the dialogue.
+//   Inputs  : none
+//   Outputs : x0 = reader record, w1 = mode
+//   Errors  : ILLEGAL FILE COMMAND, CAN'T OPEN FILE, OUT OF ROOM
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: x19 = k
+//   Frame   : 32 bytes (frame record + x19)
+// ---------------------------------------------------------------------
+    .p2align 2
+Lrt_in_take:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    str x19, [sp, #16]
+    mov w1, #RT_IN_DIALOGUE
+    mov w19, #0                     // reader 0: standard input
+    adrp x9, _bsk_rt_fsel@PAGE
+    ldr w10, [x9, _bsk_rt_fsel@PAGEOFF] // 0 none, else k + 1
+    cbz w10, 1f
+    str wzr, [x9, _bsk_rt_fsel@PAGEOFF] // taken: back to "none"
+    sub w19, w10, #1                    // k
+    cbz w19, 2f                         // #0: standard input, file rules
+    mov w0, w19
+    bl _bsk_rt_file_ropen               // read mode, open if needed
+2:
+    mov w1, #RT_IN_FILE
+1:
+    adrp x0, Lrt_in_rd@PAGE
+    add x0, x0, Lrt_in_rd@PAGEOFF
+    mov x9, #RD_SIZE
+    madd x0, x19, x9, x0                // &reader[k]
+    ldr x19, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret
+
+// ---------------------------------------------------------------------
+// _bsk_input_begin -- INPUT / INPUT #: read the statement's first line.
 //   Inputs  : none
 //   Outputs : none
-//   Errors  : END OF INPUT (exit 0), INPUT LINE TOO LONG
+//   Errors  : END OF INPUT (exit 0) / END OF FILE, INPUT LINE TOO LONG;
+//             ILLEGAL FILE COMMAND, CAN'T OPEN FILE, OUT OF ROOM (a file)
 //   Clobbers: x0-x17, d0-d7, d16-d31
 //   Callee-saved used: none
-//   Frame   : none (tail call)
+//   Frame   : 16 bytes (frame record)
 // ---------------------------------------------------------------------
     .globl _bsk_input_begin
     .p2align 2
 _bsk_input_begin:
-    b Lrt_in_getline
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    bl Lrt_in_take                  // x0 reader, w1 mode
+    bl Lrt_in_getline
+    ldp x29, x30, [sp], #16
+    ret
 
 // ---------------------------------------------------------------------
-// _bsk_input_num -- INPUT: the value of the next field for a numeric
-//   target. No field left -> NOT ENOUGH INPUT, new line; an invalid
-//   field -> INPUT DATA NOT IN CORRECT FORMAT, the rest of the line is
-//   discarded, new line; repeated until a valid field is found.
+// _bsk_input_num -- INPUT / INPUT #: the value of the next field for a
+//   numeric target. Dialogue: no field left -> NOT ENOUGH INPUT, new
+//   line; an invalid field -> INPUT DATA NOT IN CORRECT FORMAT, the rest
+//   of the line is discarded, new line; repeated until a valid field is
+//   found. INPUT #: further lines are read silently while no field is
+//   left; an invalid field is INCORRECT FORMAT IN FILE.
 //   Inputs  : none
 //   Outputs : d0 = value
-//   Errors  : END OF INPUT, INPUT LINE TOO LONG
+//   Errors  : END OF INPUT / END OF FILE, INPUT LINE TOO LONG,
+//             INCORRECT FORMAT IN FILE; the file errors of Lrt_in_take
 //   Clobbers: x0-x17, d0-d7, d16-d31
-//   Callee-saved used: none
-//   Frame   : 16 bytes (frame record)
+//   Callee-saved used: x19 = reader, x20 = mode
+//   Frame   : 32 bytes (frame record + x19, x20)
 // ---------------------------------------------------------------------
     .globl _bsk_input_num
     .p2align 2
 _bsk_input_num:
-    stp x29, x30, [sp, #-16]!
+    stp x29, x30, [sp, #-32]!
     mov x29, sp
+    stp x19, x20, [sp, #16]
+    bl Lrt_in_take
+    mov x19, x0
+    mov w20, w1
 1:
+    mov x0, x19
+    mov w1, w20
     bl Lrt_in_nextfield
     bl Lrt_in_parsenum              // w0 valid, d0 value
     cbnz w0, 2f
+    cbnz w20, Lrt_in_badfile        // INPUT #: nobody can retype
     RT_IN_DIAG retype
+    mov x0, x19
+    mov w1, w20
     bl Lrt_in_getline               // retype: a new line for this target
     b 1b
 2:
-    ldp x29, x30, [sp], #16
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #32
     ret
 
+Lrt_in_badfile:
+    mov w0, #ERR_FILE_FORMAT        // INCORRECT FORMAT IN FILE
+    bl _bsk_err
+
 // ---------------------------------------------------------------------
-// Lrt_in_strvalue -- INPUT: the value of the next valid field for a
-//   string target; diagnostics as _bsk_input_num (NOT ENOUGH INPUT, new
-//   line; invalid -> RETYPE, new line; repeated).
-//   Inputs  : none
-//   Outputs : x1 = value bytes (inside the line buffer), x2 = length
-//   Errors  : END OF INPUT, INPUT LINE TOO LONG
+// Lrt_in_strvalue -- the value of the next valid field for a string
+//   target; diagnostics and file rules as _bsk_input_num.
+//   Inputs  : x0 = reader record, w1 = mode
+//   Outputs : x1 = value bytes (inside the reader's line buffer),
+//             x2 = length
+//   Errors  : END OF INPUT / END OF FILE, INPUT LINE TOO LONG,
+//             INCORRECT FORMAT IN FILE
 //   Clobbers: x0-x17, d0-d7, d16-d31
-//   Callee-saved used: none
-//   Frame   : 16 bytes (frame record)
+//   Callee-saved used: x19 = reader, x20 = mode
+//   Frame   : 32 bytes (frame record + x19, x20)
 // ---------------------------------------------------------------------
     .p2align 2
 Lrt_in_strvalue:
-    stp x29, x30, [sp, #-16]!
+    stp x29, x30, [sp, #-32]!
     mov x29, sp
+    stp x19, x20, [sp, #16]
+    mov x19, x0
+    mov w20, w1
 1:
+    mov x0, x19
+    mov w1, w20
     bl Lrt_in_nextfield
     mov w2, #0                      // `&` is an ordinary byte here
     bl Lrt_in_parsestr              // w0 valid, x1/x2 value
     cbnz w0, 2f
+    cbnz w20, Lrt_in_badfile        // INPUT #: nobody can retype
     RT_IN_DIAG retype
+    mov x0, x19
+    mov w1, w20
     bl Lrt_in_getline
     b 1b
 2:
-    ldp x29, x30, [sp], #16
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #32
     ret
 
 // ---------------------------------------------------------------------
-// _bsk_input_str -- INPUT: the next field for a string target, stored
-//   into dst with _bsk_str_set semantics; diagnostics as _bsk_input_num.
+// _bsk_input_str -- INPUT / INPUT #: the next field for a string target,
+//   stored into dst with _bsk_str_set semantics; diagnostics and file
+//   rules as _bsk_input_num.
 //   Inputs  : x0 = destination SD
 //   Outputs : none
-//   Errors  : END OF INPUT, INPUT LINE TOO LONG, OUT OF ROOM
+//   Errors  : those of _bsk_input_num, OUT OF ROOM
 //   Clobbers: x0-x17, d0-d7, d16-d31
 //   Callee-saved used: x19 = destination
 //   Frame   : 32 bytes (frame record + x19)
@@ -627,6 +801,7 @@ _bsk_input_str:
     mov x29, sp
     str x19, [sp, #16]
     mov x19, x0
+    bl Lrt_in_take                  // x0 reader, w1 mode
     bl Lrt_in_strvalue              // x1/x2 value
     mov x0, x19
     bl _bsk_rt_str_setbytes         // dst := the value (from the line)
@@ -635,14 +810,14 @@ _bsk_input_str:
     ret
 
 // ---------------------------------------------------------------------
-// _bsk_input_str_el -- INPUT into a string list element L$(i) (the
-//   element form of `insv`, IR.md 3.2): the field is taken first, with
-//   every diagnostic and retype of _bsk_input_str; only when the value
-//   is assigned is the subscript checked (LANGUAGE.md 7.1, 7.15), then
-//   the element := the value.
+// _bsk_input_str_el -- INPUT / INPUT # into a string list element L$(i)
+//   (the element form of `insv`, IR.md 3.2): the field is taken first,
+//   with every diagnostic and retype of _bsk_input_str (or the file
+//   errors); only when the value is assigned is the subscript checked
+//   (LANGUAGE.md 7.1, 7.15, 7.25), then the element := the value.
 //   Inputs  : x0 = string-list descriptor (RTA_*), d0 = subscript i
 //   Outputs : none
-//   Errors  : END OF INPUT, INPUT LINE TOO LONG; then SUBSCRIPT ERROR
+//   Errors  : those of _bsk_input_str; then SUBSCRIPT ERROR
 //             (_bsk_saref1); OUT OF ROOM
 //   Clobbers: x0-x17, d0-d7, d16-d31
 //   Callee-saved used: x19 = descriptor, then the value bytes,
@@ -658,6 +833,7 @@ _bsk_input_str_el:
     str d8, [sp, #32]
     mov x19, x0
     fmov d8, d0
+    bl Lrt_in_take                  // x0 reader, w1 mode
     bl Lrt_in_strvalue              // x1/x2 value (in the line buffer)
     mov x20, x2
     mov x0, x19
@@ -674,9 +850,11 @@ _bsk_input_str_el:
 
 // ---------------------------------------------------------------------
 // _bsk_input_end -- INPUT after the last target: fields left on the
-//   current line -> `TOO MUCH INPUT -- EXCESS IGNORED`.
+//   current line -> `TOO MUCH INPUT -- EXCESS IGNORED`. INPUT #: the
+//   rest of the line is discarded silently.
 //   Inputs  : none
 //   Outputs : none
+//   Errors  : the file errors of Lrt_in_take
 //   Clobbers: x0-x17, d0-d7, d16-d31
 //   Callee-saved used: none
 //   Frame   : 16 bytes (frame record)
@@ -684,14 +862,16 @@ _bsk_input_str_el:
     .globl _bsk_input_end
     .p2align 2
 _bsk_input_end:
-    adrp x9, Lrt_in_fleft@PAGE
-    ldr w9, [x9, Lrt_in_fleft@PAGEOFF]
-    cbz w9, 1f
     stp x29, x30, [sp, #-16]!
     mov x29, sp
+    bl Lrt_in_take                  // x0 reader, w1 mode
+    ldr w9, [x0, #RD_FLEFT]
+    cbz w9, 1f                      // the line is used up
+    str wzr, [x0, #RD_FLEFT]        // the rest is discarded
+    cbnz w1, 1f                     // INPUT #: silently
     RT_IN_DIAG excess
-    ldp x29, x30, [sp], #16
 1:
+    ldp x29, x30, [sp], #16
     ret
 
 // ---------------------------------------------------------------------
@@ -884,15 +1064,18 @@ Lrt_in_matin_restart:
     adrp x9, Lrt_in_tlen@PAGE
     str xzr, [x9, Lrt_in_tlen@PAGEOFF]  // nothing collected yet
 Lrt_in_matin_line:
+    adrp x0, Lrt_in_rd@PAGE
+    add x0, x0, Lrt_in_rd@PAGEOFF     // standard input's reader
+    mov w1, #RT_IN_DIALOGUE
     bl Lrt_in_getline
     // Find the last non-blank byte and whether it is an `&` outside
     // quotes: x0 = line, x1 = length, x2 = index, x3 = last non-blank
     // index + 1 (0: none), w4 = in quotes, w5 = 1 if that byte is an
     // `&` outside quotes.
-    adrp x0, Lrt_in_line@PAGE
-    add x0, x0, Lrt_in_line@PAGEOFF
-    adrp x9, Lrt_in_llen@PAGE
-    ldr x1, [x9, Lrt_in_llen@PAGEOFF]
+    adrp x9, Lrt_in_rd@PAGE
+    add x9, x9, Lrt_in_rd@PAGEOFF
+    ldr x0, [x9, #RD_LINE]
+    ldr x1, [x9, #RD_LLEN]
     mov x2, #0
     mov x3, #0
     mov w4, #0
@@ -988,6 +1171,136 @@ _bsk_smat_input:
     mov w1, #1
     b Lrt_in_matin
 
+
+// ---------------------------------------------------------------------
+// Lrt_in_reader -- the reader record of file number k.
+//   Inputs  : w0 = k (0 .. LIM_FILES)
+//   Outputs : x0 = record
+//   Clobbers: x9
+//   Callee-saved used: none
+//   Frame   : none (leaf)
+// ---------------------------------------------------------------------
+    .p2align 2
+Lrt_in_reader:
+    mov w9, #RD_SIZE
+    umull x9, w0, w9                // k * RD_SIZE
+    adrp x0, Lrt_in_rd@PAGE
+    add x0, x0, Lrt_in_rd@PAGEOFF
+    add x0, x0, x9
+    ret
+
+// ---------------------------------------------------------------------
+// _bsk_rt_rd_reset -- empty file k's reader (RESTORE #k, SCRATCH #k):
+//   no unread chunk bytes, no current line, no field left. The buffers
+//   are kept for reuse.
+//   Inputs  : w0 = k (1 .. LIM_FILES)
+//   Outputs : none
+//   Clobbers: x0, x9
+//   Callee-saved used: none
+//   Frame   : none (leaf)
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_rd_reset
+    .p2align 2
+_bsk_rt_rd_reset:
+    mov w9, #RD_SIZE
+    umull x9, w0, w9
+    adrp x0, Lrt_in_rd@PAGE
+    add x0, x0, Lrt_in_rd@PAGEOFF
+    add x0, x0, x9                  // &reader[k]
+    str xzr, [x0, #RD_RPOS]
+    str xzr, [x0, #RD_RLEN]
+    str xzr, [x0, #RD_LLEN]
+    str xzr, [x0, #RD_FPOS]
+    str wzr, [x0, #RD_FLEFT]
+    ret
+
+// ---------------------------------------------------------------------
+// _bsk_rt_rd_setup -- file k was opened for reading on fd: its reader's
+//   buffers are malloc'd the first time (an RT_INBUF_SIZE chunk and an
+//   RT_IN_LINEBUF line, reused after RESTORE #), the reader is emptied
+//   and reads fd from now on.
+//   Inputs  : w0 = k (1 .. LIM_FILES), w1 = fd
+//   Outputs : none
+//   Errors  : OUT OF ROOM (malloc failed; fd is closed first)
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: x19 = reader, x20 = fd, x21 = k
+//   Frame   : 48 bytes (frame record + x19..x21, padded)
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_rd_setup
+    .p2align 2
+_bsk_rt_rd_setup:
+    stp x29, x30, [sp, #-48]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]
+    str x21, [sp, #32]
+    mov w21, w0
+    mov w20, w1
+    bl Lrt_in_reader
+    mov x19, x0
+    ldr x9, [x19, #RD_CHUNK]
+    cbnz x9, 1f                     // allocated at an earlier open
+    mov x0, #RT_INBUF_SIZE
+    bl _malloc
+    cbz x0, Lrt_in_rd_oom
+    str x0, [x19, #RD_CHUNK]
+    mov x0, #LIM_INPUT_LINE
+    add x0, x0, #(RT_IN_LINEBUF - LIM_INPUT_LINE)  // RT_IN_LINEBUF bytes
+    bl _malloc
+    cbz x0, Lrt_in_rd_oom
+    str x0, [x19, #RD_LINE]
+1:
+    str w20, [x19, #RD_FD]
+    mov w0, w21
+    bl _bsk_rt_rd_reset             // nothing read yet
+    ldr x21, [sp, #32]
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #48
+    ret
+Lrt_in_rd_oom:
+    mov w0, w20
+    bl _close                       // the new file's fd is not leaked
+    mov w0, #ERR_OUT_OF_ROOM
+    bl _bsk_err                     // noreturn
+
+// ---------------------------------------------------------------------
+// _bsk_rt_rd_atend -- IF END # on reader k (LANGUAGE.md 7.26, DESIGN.md
+//   6.8): at its end when it holds no unread byte and a chunk read
+//   returns no byte. A chunk that arrives is kept for the next INPUT #.
+//   For standard input (k = 0) on a terminal stdout is flushed before
+//   the read.
+//   Inputs  : w0 = k (0 .. LIM_FILES); file k >= 1 is open for reading
+//   Outputs : w0 = 1 at the end, else 0
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: x19 = reader, x20 = k
+//   Frame   : 32 bytes (frame record + x19, x20)
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_rd_atend
+    .p2align 2
+_bsk_rt_rd_atend:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    stp x19, x20, [sp, #16]
+    mov w20, w0
+    bl Lrt_in_reader
+    mov x19, x0
+    ldr x10, [x19, #RD_RPOS]
+    ldr x11, [x19, #RD_RLEN]
+    mov w0, #0
+    cmp x10, x11
+    b.lo 2f                         // unread bytes: another line follows
+    cbnz w20, 1f                    // a file: just read
+    bl Lrt_in_istty
+    cbz w0, 1f
+    bl _bsk_rt_print_flush          // the terminal user sees all output
+1:
+    mov x0, x19
+    bl Lrt_in_refill                // w0 = 1 if bytes arrived
+    eor w0, w0, #1                  // at the end when none did
+2:
+    ldp x19, x20, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret
+
 // ---------------------------------------------------------------------
 // The three diagnostics (texts from include/errors.inc).
 // ---------------------------------------------------------------------
@@ -995,29 +1308,37 @@ _bsk_smat_input:
     BSK_EMIT_INPUT_MSGS Lrt_in_msg
 
 // ---------------------------------------------------------------------
-// State (zero-initialised):
+// State.
+//   Lrt_in_rd     LIM_FILES + 1 reader records (RD_*): [0] standard
+//                 input (fd 0, static buffers Lrt_in_rbuf / Lrt_in_line),
+//                 [k] file k (buffers malloc'd at its first open)
 //   Lrt_in_tty    u32  0 not asked yet, RT_IN_TTY_NO, RT_IN_TTY_YES
-//   Lrt_in_eof    u32  1 once read(0) reported the end (or an error)
-//   Lrt_in_rpos   u64  next unread byte in Lrt_in_rbuf
-//   Lrt_in_rlen   u64  bytes in Lrt_in_rbuf
-//   Lrt_in_llen   u64  length of the current line
-//   Lrt_in_fpos   u64  INPUT: start of the next field in the line
-//   Lrt_in_fleft  u32  INPUT: 1 if a field is left on the line
 //   Lrt_in_text   ptr  MAT INPUT text buffer (malloc'd, reused)
 //   Lrt_in_tcap   u64  its capacity
 //   Lrt_in_tlen   u64  bytes collected by the current MAT INPUT
 //   Lrt_in_rbuf   RT_INBUF_SIZE bytes read from stdin
-//   Lrt_in_line   the current line (RT_IN_LINEBUF bytes)
+//   Lrt_in_line   standard input's current line (RT_IN_LINEBUF bytes)
 // ---------------------------------------------------------------------
+    .section __DATA,__data
+    .p2align 3
+Lrt_in_rd:
+    .long 0                         // RD_FD: standard input
+    .long 0                         // RD_FLEFT
+    .quad Lrt_in_rbuf               // RD_CHUNK
+    .quad 0                         // RD_RPOS
+    .quad 0                         // RD_RLEN
+    .quad Lrt_in_line               // RD_LINE
+    .quad 0                         // RD_LLEN
+    .quad 0                         // RD_FPOS
+    .space RD_SIZE * LIM_FILES      // files: zero = no buffers yet
+
 .zerofill __DATA,__bss,Lrt_in_tty,4,2
-.zerofill __DATA,__bss,Lrt_in_eof,4,2
-.zerofill __DATA,__bss,Lrt_in_fleft,4,2
-.zerofill __DATA,__bss,Lrt_in_rpos,8,3
-.zerofill __DATA,__bss,Lrt_in_rlen,8,3
-.zerofill __DATA,__bss,Lrt_in_llen,8,3
-.zerofill __DATA,__bss,Lrt_in_fpos,8,3
 .zerofill __DATA,__bss,Lrt_in_text,8,3
 .zerofill __DATA,__bss,Lrt_in_tcap,8,3
 .zerofill __DATA,__bss,Lrt_in_tlen,8,3
 .zerofill __DATA,__bss,Lrt_in_rbuf,RT_INBUF_SIZE,4
 .zerofill __DATA,__bss,Lrt_in_line,RT_IN_LINEBUF,4
+
+.if (RD_LINE != 32) || (RD_SIZE != 56)
+    .error "rt_input.s: the static standard-input reader assumes this RD_* layout"
+.endif

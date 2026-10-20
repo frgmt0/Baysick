@@ -1,15 +1,16 @@
 // =====================================================================
 // src/runtime/rt_ed4.s -- the small Third/Fourth Edition entry points
-// (DESIGN.md 6.7): ON, RANDOMIZE, SGN, COT, NUM, DET and PRINT TAB.
+// (DESIGN.md 6.7): ON, RANDOMIZE, SGN, COT, NUM and DET
+// (PRINT TAB, _bsk_print_tab, lives in rt_print.s with the other print
+// entry points and the pending file selection).
 //
 // Defines (global, runtime.inc):
 //   _bsk_on _bsk_randomize _bsk_sgn _bsk_cot _bsk_num _bsk_det
-//   _bsk_print_tab
 // Defines (private to the runtime, .private_extern):
 //   _bsk_rt_num   double, the NUM value (initially 0), written by MAT
 //                 INPUT (rt_input.s)
 // Uses: _bsk_rt_kinv_det (the DET cell, rt_kinit.s), _bsk_rt_rnd_state
-// (rt_rnd.s), _bsk_rt_print_tabcol (rt_print.s).
+// (rt_rnd.s).
 // =====================================================================
 .include "baysick.inc"
 
@@ -167,36 +168,6 @@ Lrt_ed4_finite:
     mov w0, #ERR_OVERFLOW
     b _bsk_err
 1:
-    ret
-
-// ---------------------------------------------------------------------
-// _bsk_print_tab -- PRINT TAB(x) (LANGUAGE.md 8, DESIGN.md 6.7).
-//   Purpose : m = fmod(trunc(x), 75) (both exact), m += 75 if m < 0;
-//             if col < m then col = m (lazy; TAB never starts a line).
-//   Inputs  : d0 = x (finite)
-//   Outputs : none
-//   Clobbers: x0-x17, d0-d7, d16-d31
-//   Callee-saved used: none
-//   Frame   : 16 bytes (frame record)
-// ---------------------------------------------------------------------
-    .globl _bsk_print_tab
-    .p2align 2
-_bsk_print_tab:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-    frintz d0, d0                   // k = trunc(x)
-    mov w9, #TAB_MODULUS
-    ucvtf d1, w9
-    bl _fmod                        // m = fmod(k, 75): |m| < 75, sign of k
-    fcmp d0, #0.0
-    b.ge 1f
-    mov w9, #TAB_MODULUS
-    ucvtf d1, w9
-    fadd d0, d0, d1                 // negative: m + 75 (exact)
-1:
-    fcvtzu x0, d0                   // 0 .. 74 (-0 converts to 0)
-    bl _bsk_rt_print_tabcol
-    ldp x29, x30, [sp], #16
     ret
 
 // ---------------------------------------------------------------------

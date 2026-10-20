@@ -355,8 +355,7 @@ Lbk_x64_in_op_callfn:
     ldr w0, [x21, #IRI_A]
     cmn w0, #1                      // IR_NONE: no first argument
     b.eq 1f
-    mov x1, #0
-    bl Lbk_x64_in_load
+    bl Lbk_x64_in_load_arg0
 1:
     ldr w2, [x21, #IRI_X]
     cmp w2, #NUM_LETTERS
@@ -744,6 +743,14 @@ Lbk_x64_in_op_smatredim:
     ldr w0, [x21, #IRI_A]
     mov x1, #0
     bl Lbk_x64_in_load
+    ldr w0, [x21, #IRI_B]
+    cmn w0, #1                      // IR_NONE: a list
+    b.eq 1f
+    mov x1, #1
+    bl Lbk_x64_in_load
+    CALLRT Lbk_x64_in_rt_mat_redim2
+    b Lbk_x64_in_next
+1:
     CALLRT Lbk_x64_in_rt_mat_redim1
     b Lbk_x64_in_next
 
@@ -826,7 +833,19 @@ Lbk_x64_in_op_fnarg:
     sub x9, x1, #1
     cmp x9, #6
     b.hi Lbk_x64_in_bad_imm
+    mov x12, x1
+    bl Lbk_x64_in_callee_fnk
+    lsr w9, w0, w12
     ldr w0, [x21, #IRI_A]
+    mov x1, x12
+    tbz w9, #0, 1f
+    // string parameter k: the sref goes to R(k)
+    adrp x10, Lbk_x64_in_argregs@PAGE
+    add x10, x10, Lbk_x64_in_argregs@PAGEOFF
+    ldr x1, [x10, x12, lsl #3]
+    bl Lbk_x64_in_loadq
+    b Lbk_x64_in_next
+1:
     bl Lbk_x64_in_load
     b Lbk_x64_in_next
 
@@ -868,6 +887,176 @@ Lbk_x64_in_op_stfv:
     lsl x2, x0, #3
     FMT Lbk_x64_in_st_cell_fmt
     b Lbk_x64_in_next
+
+// ---- Fifth Edition opcodes (DESIGN.md 5.4.5) ---------------------------------
+Lbk_x64_in_op_scell:
+    // %rax = &.Lbsk_scells + 16*X; store
+    ldr w9, [x21, #IRI_X]
+    ldr w10, [x20, #IRM_NSTEMPS]
+    cmp w9, w10
+    b.hs Lbk_x64_in_bad_slot
+    mov x10, #SD_SIZE
+    mul x2, x9, x10
+    FMT Lbk_x64_in_scell_fmt
+    b Lbk_x64_in_store_dst_rax
+
+Lbk_x64_in_op_sstr:
+    // %rdi = A (the destination sref); %xmm0 = B; call bsk_str
+    ldr w0, [x21, #IRI_A]
+    adrp x1, Lbk_x64_in_reg_rdi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rdi@PAGEOFF
+    bl Lbk_x64_in_loadq
+    ldr w0, [x21, #IRI_B]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    CALLRT Lbk_x64_in_rt_str
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_slen:
+    // len / asc / val: %rdi = A; call bsk_len | bsk_asc | bsk_val; store
+    ldr w0, [x21, #IRI_A]
+    adrp x1, Lbk_x64_in_reg_rdi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rdi@PAGEOFF
+    bl Lbk_x64_in_loadq
+    ldrh w9, [x21, #IRI_OP]
+    sub w9, w9, #OP_LEN
+    adrp x10, Lbk_x64_in_len_names@PAGE
+    add x10, x10, Lbk_x64_in_len_names@PAGEOFF
+    ldr x2, [x10, x9, lsl #3]
+    FMT Lbk_x64_in_call_fmt
+    b Lbk_x64_in_store_dst
+
+Lbk_x64_in_op_sald2:
+    // %rdi = &.Lsdesc_<X>; %xmm0 = A; %xmm1 = B; %rax = bsk_saref2; store
+    bl Lbk_x64_in_sdesc_addr
+    bl Lbk_x64_in_load_ab
+    CALLRT Lbk_x64_in_rt_saref2
+    b Lbk_x64_in_store_dst_rax
+
+Lbk_x64_in_op_sparam:
+    // %rax = string parameter k (local cell k); store
+    cbz x25, Lbk_x64_in_bad_place
+    bl Lbk_x64_in_nparams
+    ldr x1, [x21, #IRI_IMM]
+    cmp x1, x0
+    b.hs Lbk_x64_in_bad_param
+    add x2, x23, x1
+    lsl x2, x2, #3
+    FMT Lbk_x64_in_ld_rax_cell
+    b Lbk_x64_in_store_dst_rax
+
+Lbk_x64_in_op_sfv:
+    // %rax = the result descriptor (local cell NP) of a multi-line string FN
+    bl Lbk_x64_in_need_ml
+    mov x0, #0
+    bl Lbk_x64_in_cell_np
+    lsl x2, x0, #3
+    FMT Lbk_x64_in_ld_rax_cell
+    b Lbk_x64_in_store_dst_rax
+
+Lbk_x64_in_op_scallfn:
+    // first argument A (nothing if IR_NONE) by the callee's parameter 0 kind;
+    // %rax = B (the result sref); call .Lfn_<X>; nothing is stored
+    ldr w0, [x21, #IRI_A]
+    cmn w0, #1
+    b.eq 1f
+    bl Lbk_x64_in_load_arg0
+1:
+    ldr w0, [x21, #IRI_B]
+    adrp x1, Lbk_x64_in_reg_rax@PAGE
+    add x1, x1, Lbk_x64_in_reg_rax@PAGEOFF
+    bl Lbk_x64_in_loadq
+    ldr w2, [x21, #IRI_X]
+    cmp w2, #NUM_LETTERS
+    b.hs Lbk_x64_in_bad_letter
+    FMT Lbk_x64_in_call_fn
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_sret:
+    // bsk_str_set(result descriptor, A); a multi-line function restores the
+    // caller's run-time line; epilogue
+    cbz x25, Lbk_x64_in_bad_place
+    mov x0, x25
+    bl Lbk_x64_in_fnk
+    tbz w0, #8, Lbk_x64_in_bad_kind     // FNK_STRING
+    bl Lbk_x64_in_nparams
+    lsl x2, x0, #3
+    add x2, x2, x23, lsl #3
+    adrp x3, Lbk_x64_in_reg_rdi@PAGE
+    add x3, x3, Lbk_x64_in_reg_rdi@PAGEOFF
+    FMT Lbk_x64_in_movq_ld
+    ldr w0, [x21, #IRI_A]
+    adrp x1, Lbk_x64_in_reg_rsi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rsi@PAGEOFF
+    bl Lbk_x64_in_loadq
+    CALLRT Lbk_x64_in_rt_str_set
+    ldr w9, [x27, #IRF_KIND]
+    cmp w9, #FUNC_KIND_FNML
+    b.ne 1f
+    mov x0, #1
+    bl Lbk_x64_in_cell_np
+    lsl x2, x0, #3
+    FMT Lbk_x64_in_ret_line
+1:
+    FMT Lbk_x64_in_epilogue
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_fsel:
+    // %xmm0 = A; call bsk_fsel
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    CALLRT Lbk_x64_in_rt_fsel
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_jeof:
+    // %xmm0 = A; call bsk_feof; testl %eax, %eax; jne X
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    CALLRT Lbk_x64_in_rt_feof
+    mov x2, x25
+    ldr w3, [x21, #IRI_X]
+    FMT Lbk_x64_in_jeof_fmt
+    b Lbk_x64_in_next
+
+Lbk_x64_in_op_fileop:
+    // scratch / frestore: %xmm0 = A; call bsk_scratch | bsk_frestore
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    ldrh w9, [x21, #IRI_OP]
+    sub w9, w9, #OP_SCRATCH
+    adrp x10, Lbk_x64_in_file_names@PAGE
+    add x10, x10, Lbk_x64_in_file_names@PAGEOFF
+    ldr x2, [x10, x9, lsl #3]
+    FMT Lbk_x64_in_call_fmt
+    b Lbk_x64_in_next
+
+// Lbk_x64_in_load_arg0 -- load argument 0 of a callfn / scallfn (temp in w0)
+// by the callee's parameter 0 kind: a string parameter takes the sref in
+// %rdi, a numeric one the number in %xmm0.
+// In:  w0 = temp, x21 = current record.  Frame: 16 bytes
+    .p2align 2
+Lbk_x64_in_load_arg0:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    str x0, [sp, #-16]!
+    bl Lbk_x64_in_callee_fnk
+    ldr x9, [sp], #16
+    mov x10, x0
+    mov x0, x9
+    tbnz w10, #0, 1f                // FNK_SPARAM0
+    mov x1, #0
+    bl Lbk_x64_in_load
+    b 2f
+1:
+    adrp x1, Lbk_x64_in_reg_rdi@PAGE
+    add x1, x1, Lbk_x64_in_reg_rdi@PAGEOFF
+    bl Lbk_x64_in_loadq
+2:
+    ldp x29, x30, [sp], #16
+    ret
 
 // common tail: store %xmm0 into the DST temp's slot
 Lbk_x64_in_store_dst:
@@ -994,12 +1183,29 @@ Lbk_x64_in_table:
     .long Lbk_x64_in_op_stparam - Lbk_x64_in_table      // OP_STPARAM   82
     .long Lbk_x64_in_op_ldfv - Lbk_x64_in_table         // OP_LDFV      83
     .long Lbk_x64_in_op_stfv - Lbk_x64_in_table         // OP_STFV      84
+    .long Lbk_x64_in_op_scell - Lbk_x64_in_table        // OP_SCELL     85
+    .long Lbk_x64_in_op_sstr - Lbk_x64_in_table         // OP_SSTR      86
+    .long Lbk_x64_in_op_slen - Lbk_x64_in_table         // OP_LEN       87
+    .long Lbk_x64_in_op_slen - Lbk_x64_in_table         // OP_ASC       88
+    .long Lbk_x64_in_op_slen - Lbk_x64_in_table         // OP_VAL       89
+    .long Lbk_x64_in_op_sald2 - Lbk_x64_in_table        // OP_SALD2     90
+    .long Lbk_x64_in_op_sparam - Lbk_x64_in_table       // OP_SPARAM    91
+    .long Lbk_x64_in_op_sfv - Lbk_x64_in_table          // OP_SFV       92
+    .long Lbk_x64_in_op_scallfn - Lbk_x64_in_table      // OP_SCALLFN   93
+    .long Lbk_x64_in_op_sret - Lbk_x64_in_table         // OP_SRET      94
+    .long Lbk_x64_in_op_fsel - Lbk_x64_in_table         // OP_FSEL      95
+    .long Lbk_x64_in_op_jeof - Lbk_x64_in_table         // OP_JEOF      96
+    .long Lbk_x64_in_op_fileop - Lbk_x64_in_table       // OP_SCRATCH   97
+    .long Lbk_x64_in_op_fileop - Lbk_x64_in_table       // OP_FRESTORE  98
 Lbk_x64_in_table_end:
 .if (Lbk_x64_in_table_end - Lbk_x64_in_table) != 4 * OP_COUNT
     .error "x64_insn.s dispatch table does not cover OP_COUNT opcodes"
 .endif
 .if (OP_SLIT != OP_MATINV + 1) || (OP_STFV != OP_SLIT + 29) || (OP_COT != OP_SGN + 1)
     .error "x64_insn.s dispatch table assumes the opcode order of ir.inc"
+.endif
+.if (OP_SCELL != OP_STFV + 1) || (OP_ASC != OP_LEN + 1) || (OP_VAL != OP_LEN + 2) || (OP_FRESTORE != OP_SCRATCH + 1) || (OP_FRESTORE != OP_SCELL + 13)
+    .error "x64_insn.s Fifth Edition dispatch entries assume the opcode order of ir.inc"
 .endif
 .if (OP_SUB != OP_ADD + 1) || (OP_MUL != OP_ADD + 2) || (OP_INT != OP_SIN + 8)
     .error "x64_insn.s name tables assume consecutive opcodes"
@@ -1113,8 +1319,9 @@ Lbk_x64_in_nparams:
 
 // ---------------------------------------------------------------------
 // Lbk_x64_in_ncells -- L, the number of 8-byte local cells of the current
-// function: NP + 2 for a multi-line function (parameters, value variable,
-// saved run-time line), else max(1, NP).
+// function: NP + 2 for a multi-line function (parameters, value variable or
+// result descriptor, saved run-time line); a single-line string function
+// NP + 1 (parameters, result descriptor); else max(1, NP).
 // Out: x0 = L.  Frame: 16 bytes
 // ---------------------------------------------------------------------
     .p2align 2
@@ -1128,9 +1335,20 @@ Lbk_x64_in_ncells:
     add x0, x0, #2
     b 2f
 1:
-    cmp x0, #1
-    mov x9, #1
-    csel x0, x9, x0, lo
+    // single-line function: a string function adds the result cell (cell NP),
+    // else max(1, NP)
+    str x0, [sp, #-16]!
+    mov x0, x25
+    bl Lbk_x64_in_fnk
+    and w0, w0, #FNK_STRING
+    ldr x9, [sp], #16
+    cbz w0, 3f
+    add x0, x9, #1
+    b 2f
+3:
+    cmp x9, #1
+    mov x10, #1
+    csel x0, x10, x9, lo
 2:
     ldp x29, x30, [sp], #16
     ret
@@ -1164,11 +1382,62 @@ Lbk_x64_in_need_ml:
     ret
 
 // ---------------------------------------------------------------------
+// Lbk_x64_in_fnk -- FNK_* bits of a function.
+// In:  x0 = function index (FUNC_FN_BASE + letter; 0 = main)
+// Out: w0 = the bits of IRM_FNKINDS
+// Clobbers: x9.  Leaf, no frame.
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_fnk:
+    add x9, x20, #IRM_FNKINDS
+    ldr w0, [x9, x0, lsl #2]
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_x64_in_callee_fnk -- FNK_* bits of the function called by the call
+// that the current record belongs to: for a callfn / scallfn the record's X;
+// for a fnarg the X of the callfn / scallfn that follows its run of fnargs.
+// In:  x21 = current record
+// Out: w0 = bits.  Fails if no call follows or the letter is bad.
+// Frame: 16 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_x64_in_callee_fnk:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov x11, x21
+Lbk_x64_in_cf_scan:
+    ldrh w9, [x11, #IRI_OP]
+    cmp w9, #OP_FNARG
+    b.ne 1f
+    add x11, x11, #IRI_SIZE
+    cmp x11, x22
+    b.lo Lbk_x64_in_cf_scan
+    b Lbk_x64_in_bad_kind
+1:
+    cmp w9, #OP_CALLFN
+    b.eq 2f
+    cmp w9, #OP_SCALLFN
+    b.eq 2f
+    b Lbk_x64_in_bad_kind
+2:
+    ldr w0, [x11, #IRI_X]
+    cmp w0, #NUM_LETTERS
+    b.hs Lbk_x64_in_bad_letter
+    add x0, x0, #FUNC_FN_BASE
+    bl Lbk_x64_in_fnk
+    ldp x29, x30, [sp], #16
+    ret
+
+// ---------------------------------------------------------------------
 // Lbk_x64_in_cells_init -- prologue part of an FN function: spill the
-// arguments (%xmm<k> -> local cell k, k < NP); a multi-line function then
-// clears its value variable (cell NP) and saves the caller's run-time line
-// (cell NP+1).
-// Frame: 32 bytes (frame record + the loop counter)
+// arguments (numeric: %xmm<k> -> local cell k; string parameter: its
+// integer register R(k) -> local cell k; k < NP). A string function then
+// stores its result descriptor (%rax) in cell NP; a multi-line function
+// otherwise clears its value variable (cell NP). A multi-line function then
+// saves the caller's run-time line (cell NP+1) and, if it is a string
+// function, clears its value (bsk_str_clear on the result descriptor).
+// Frame: 32 bytes (frame record + the loop counter + string-function flag)
 // ---------------------------------------------------------------------
     .p2align 2
 Lbk_x64_in_cells_init:
@@ -1180,15 +1449,40 @@ Lbk_x64_in_ci_loop:
     ldr x2, [sp, #16]
     cmp x2, x0
     b.hs Lbk_x64_in_ci_args_done
-    // "movsd %xmm<k>, 8*(W+k)(%rsp)"
+    mov x0, x25
+    bl Lbk_x64_in_fnk
+    ldr x2, [sp, #16]
+    lsr w9, w0, w2
     add x3, x23, x2
     lsl x3, x3, #3
+    tbnz w9, #0, Lbk_x64_in_ci_sparam
+    // "movsd %xmm<k>, 8*(W+k)(%rsp)"
     FMT Lbk_x64_in_arg_save
+    b Lbk_x64_in_ci_next
+Lbk_x64_in_ci_sparam:
+    // "movq R(k), 8*(W+k)(%rsp)"
+    adrp x10, Lbk_x64_in_argregs@PAGE
+    add x10, x10, Lbk_x64_in_argregs@PAGEOFF
+    ldr x2, [x10, x2, lsl #3]
+    FMT Lbk_x64_in_sarg_save
+Lbk_x64_in_ci_next:
     ldr x2, [sp, #16]
     add x2, x2, #1
     str x2, [sp, #16]
     b Lbk_x64_in_ci_loop
 Lbk_x64_in_ci_args_done:
+    mov x0, x25
+    bl Lbk_x64_in_fnk
+    and w0, w0, #FNK_STRING
+    str x0, [sp, #24]               // nonzero: string function
+    cbz x0, 1f
+    // result descriptor arrives in %rax: cell NP := %rax
+    mov x0, #0
+    bl Lbk_x64_in_cell_np
+    lsl x2, x0, #3
+    FMT Lbk_x64_in_st_rax
+    b 2f
+1:
     ldr w9, [x27, #IRF_KIND]
     cmp w9, #FUNC_KIND_FNML
     b.ne Lbk_x64_in_ci_done
@@ -1196,10 +1490,21 @@ Lbk_x64_in_ci_args_done:
     bl Lbk_x64_in_cell_np
     lsl x2, x0, #3
     FMT Lbk_x64_in_fv_init          // value variable := 0
+2:
+    ldr w9, [x27, #IRF_KIND]
+    cmp w9, #FUNC_KIND_FNML
+    b.ne Lbk_x64_in_ci_done
     mov x0, #1
     bl Lbk_x64_in_cell_np
     lsl x2, x0, #3
     FMT Lbk_x64_in_line_save        // saved run-time line
+    ldr x9, [sp, #24]
+    cbz x9, Lbk_x64_in_ci_done
+    // multi-line string function: its value starts empty
+    mov x0, #0
+    bl Lbk_x64_in_cell_np
+    lsl x2, x0, #3
+    FMT Lbk_x64_in_sfv_clear
 Lbk_x64_in_ci_done:
     ldp x29, x30, [sp], #32
     ret
@@ -1370,6 +1675,11 @@ Lbk_x64_in_prologue:
     .asciz "    leaq .Lbsk_vars(%%rip), %%rbx\n"
 Lbk_x64_in_arg_save:
     .asciz "    movsd %%xmm%u, %u(%%rsp)\n"
+Lbk_x64_in_sarg_save:
+    .asciz "    movq %%%s, %u(%%rsp)\n"
+Lbk_x64_in_sfv_clear:
+    .ascii "    movq %u(%%rsp), %%rdi\n"
+    .asciz "    call bsk_str_clear\n"
 Lbk_x64_in_fv_init:
     .asciz "    movq $0, %u(%%rsp)\n"
 Lbk_x64_in_line_save:
@@ -1484,6 +1794,28 @@ Lbk_x64_in_ld_cell_fmt:
 Lbk_x64_in_st_cell_fmt:
     .asciz "    movsd %%xmm0, %u(%%rsp)\n"
 Lbk_x64_in_reg_rdi:     .asciz "rdi"
+Lbk_x64_in_reg_rax:     .asciz "rax"
+Lbk_x64_in_reg_rcx:     .asciz "rcx"
+Lbk_x64_in_reg_r8:      .asciz "r8"
+Lbk_x64_in_reg_r9:      .asciz "r9"
+Lbk_x64_in_reg_r10:     .asciz "r10"
+Lbk_x64_in_reg_r11:     .asciz "r11"
+Lbk_x64_in_scell_fmt:
+    .asciz "    leaq .Lbsk_scells+%u(%%rip), %%rax\n"
+Lbk_x64_in_ld_rax_cell:
+    .asciz "    movq %u(%%rsp), %%rax\n"
+Lbk_x64_in_jeof_fmt:
+    .ascii "    testl %%eax, %%eax\n"
+    .asciz "    jne %B%u\n"
+Lbk_x64_in_rt_saref2:   .asciz "bsk_saref2"
+Lbk_x64_in_rt_str:      .asciz "bsk_str"
+Lbk_x64_in_rt_len:      .asciz "bsk_len"
+Lbk_x64_in_rt_asc:      .asciz "bsk_asc"
+Lbk_x64_in_rt_val:      .asciz "bsk_val"
+Lbk_x64_in_rt_fsel:     .asciz "bsk_fsel"
+Lbk_x64_in_rt_feof:     .asciz "bsk_feof"
+Lbk_x64_in_rt_scratch:  .asciz "bsk_scratch"
+Lbk_x64_in_rt_frestore: .asciz "bsk_frestore"
 
 // runtime entry points (DESIGN.md 6.4.2 ELF names)
 Lbk_x64_in_rt_saref1:   .asciz "bsk_saref1"
@@ -1600,6 +1932,16 @@ Lbk_x64_in_sjcc_names:
     .quad Lbk_x64_in_jle            // le
     .quad Lbk_x64_in_jg             // gt
     .quad Lbk_x64_in_jge            // ge
+// integer argument registers R(k) of a call between generated functions
+Lbk_x64_in_argregs:
+    .quad Lbk_x64_in_reg_rdi, Lbk_x64_in_reg_rsi, Lbk_x64_in_reg_rdx, Lbk_x64_in_reg_rcx
+    .quad Lbk_x64_in_reg_r8, Lbk_x64_in_reg_r9, Lbk_x64_in_reg_r10, Lbk_x64_in_reg_r11
+// indexed by opcode - OP_LEN
+Lbk_x64_in_len_names:
+    .quad Lbk_x64_in_rt_len, Lbk_x64_in_rt_asc, Lbk_x64_in_rt_val
+// indexed by opcode - OP_SCRATCH
+Lbk_x64_in_file_names:
+    .quad Lbk_x64_in_rt_scratch, Lbk_x64_in_rt_frestore
 // indexed by opcode - OP_SGN
 Lbk_x64_in_sgn_names:
     .quad Lbk_x64_in_rt_sgn, Lbk_x64_in_rt_cot

@@ -9,6 +9,8 @@
 //
 // Each is a statement handler (fe_stmt.s keyword table): entered with the
 // scanner after the keyword; errors leave through _fe_err.
+// Fifth Edition: INPUT #e, targets (LANGUAGE.md 7.25)
+// and RESTORE #e (7.23); the file selection is fe_files.s.
 // =====================================================================
 .include "baysick.inc"
 
@@ -34,6 +36,9 @@
 //   target: numeric: [subscripts]; `tN = innum`; its store; string: its
 //   `svar` or subscript, then `insv` (plain or element form,
 //   _fe_sstore); finally `inend`.
+//   INPUT #e, targets (Fifth Edition): e (-> tF), then a ',' is required
+//   (else INCORRECT FORMAT); `fsel tF` precedes `inbeg`, every `innum` /
+//   `insv` and `inend` (IR.md 4.3, _fe_fsel).
 //   in:  scanner after "INPUT"
 //   out: none
 //   clobbers: x0-x17, d0-d7
@@ -45,6 +50,13 @@
 _fe_input:
     stp x29, x30, [sp, #-32]!
     mov x29, sp
+    mov w0, #0
+    bl _fe_peek
+    cmp w0, #'#'
+    b.ne 4f
+    bl _fe_input_file                   // the designator and its ','
+4:
+    bl _fe_fsel
     FE_NONE
     mov w0, #OP_INBEG
     bl _fe_emit
@@ -63,6 +75,7 @@ Lfe_input_loop:
     b 2f
 1:
     // tN = innum; store it
+    bl _fe_fsel
     FE_NONE
     mov w0, #OP_INNUM
     bl _fe_emit_new
@@ -79,16 +92,19 @@ Lfe_input_loop:
     mov w0, #ERR_INCORRECT_FORMAT
     bl _fe_err
 3:
+    bl _fe_fsel
     FE_NONE
     mov w0, #OP_INEND
     bl _fe_emit
+    bl _fe_clear_file                   // the INPUT # selection ends here
     ldp x29, x30, [sp], #32
     ret
 
 // ---------------------------------------------------------------------
 // _fe_restore -- RESTORE (both blocks), RESTORE* (numeric), RESTORE$
 //   (string); anything else after the keyword -> INCORRECT FORMAT.
-//   Lowering: `restore all|num|str`.
+//   Lowering: `restore all|num|str`. Fifth Edition: RESTORE #e (7.23):
+//   e; `frestore te`.
 //   in:  scanner after "RESTORE"
 //   out: none
 //   clobbers: x0-x17
@@ -110,8 +126,23 @@ _fe_restore:
     b 2f
 1:
     cmp w0, #'$'
-    b.ne 3f
+    b.ne 4f
     mov w19, #RESTORE_STR
+    b 2f
+4:
+    cmp w0, #'#'
+    b.ne 3f
+    // RESTORE #e: e; frestore te
+    mov w0, #1
+    bl _fe_advance
+    bl _fe_expr
+    mov w19, w0
+    bl _fe_expect_eol
+    FE_NONE
+    mov w1, w19
+    mov w0, #OP_FRESTORE
+    bl _fe_emit
+    b 5f
 2:
     mov w0, #1
     bl _fe_advance
@@ -121,6 +152,7 @@ _fe_restore:
     mov w5, w19                         // IMM = variant (zero-extended)
     mov w0, #OP_RESTORE
     bl _fe_emit
+5:
     ldr x19, [sp, #16]
     ldp x29, x30, [sp], #32
     ret

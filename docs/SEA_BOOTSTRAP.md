@@ -7,14 +7,15 @@ specifies (`docs/LANGUAGE.md`), by a later Dartmouth edition, or by nothing Dart
 It ends with a recommendation for the next edition Baysick should grow into. Nothing here is
 normative; LANGUAGE.md wins for every language rule.
 
-**Update:** the recommendation of §4 item 1 has been taken. LANGUAGE.md now specifies the Fifth
+**Update:** the recommendation of §4 item 1 has been taken. LANGUAGE.md specifies the Fifth
 Edition subset (sequential files with `IF END`, `LEN ASC STR$ VAL`, string `DEF`, string tables;
-"The Fifth Edition", §4.6, §6.1, §7.10.1, §7.21–§7.26), being implemented (DESIGN.md §2.4). Its
+"The Fifth Edition", §4.6, §6.1, §7.10.1, §7.21–§7.26), and Baysick implements it on both
+targets (DESIGN.md §2.4). Its
 semantics come from the GE MARK II BASIC manual of November 1970 [G70] (LANGUAGE.md §0), the
 closest available document, with every detail recorded as a Baysick decision. `TIM` was left
 out after all (row 19: a compiler does not need it), with the other exclusions listed in
-LANGUAGE.md "The Fifth Edition". The rows of §2 marked "Fifth (specified)" below are covered
-once that work is integrated.
+LANGUAGE.md "The Fifth Edition". The rows of §2 marked "Fifth (implemented)" or
+"**implemented**" below are covered now: rows 3, 4, 8, 10, 11, 13 and 15.
 
 ## 1. Sources
 
@@ -64,19 +65,19 @@ Edition as specified in LANGUAGE.md; **(b)** covered by the Fifth or Sixth Editi
 |--:|------|:-----:|-------------|
 | 1 | Read the source one line at a time | (a), limited | `INPUT A$` reads one field of a line (§7.15). See §3: only lines without `,` and `"` and not empty |
 | 2 | Read a line **verbatim** — commas, quotes, `&`, leading blanks, empty lines | **(c)** | INPUT and MAT INPUT always split at commas and interpret quotes ([M68] p. 65); the Fifth/Sixth Edition file INPUT is the same statement on a file ([K81] p. 529). `LINPUT` is unverified ([W]) |
-| 3 | Detect the end of the input and continue running | (b) | Fourth Edition: end of input ends the program (LANGUAGE.md §7.15, `END OF INPUT`, exit 0), so nothing can run after the last line. Fifth Edition: `IF END` on sequential files [K81 p. 529]. **Fifth (specified):** `IF END #0` / `INPUT #0` read standard input as file 0 and test its end (LANGUAGE.md §7.21, §7.26) |
-| 4 | Several input files (modules, a prelude) / several outputs (assembly + listing) | (b) | Fifth Edition `FILES`/`FILE`, `INPUT #`, `PRINT #` [K81 p. 528–529]; Sixth Edition run-time `FILE` [K81 p. 530; U72 §11.2.3]. **Fifth (specified):** `FILES` (names fixed at compile time, up to 8), `SCRATCH #`, `RESTORE #`, `PRINT #`, `INPUT #` (LANGUAGE.md §7.21–§7.25); run-time `FILE` stays a Sixth Edition feature |
+| 3 | Detect the end of the input and continue running | (b) | Fourth Edition: end of input ends the program (LANGUAGE.md §7.15, `END OF INPUT`, exit 0), so nothing can run after the last line. Fifth Edition: `IF END` on sequential files [K81 p. 529]. **Fifth (implemented):** `IF END #0` / `INPUT #0` read standard input as file 0 and test its end (LANGUAGE.md §7.21, §7.26) |
+| 4 | Several input files (modules, a prelude) / several outputs (assembly + listing) | (b) | Fifth Edition `FILES`/`FILE`, `INPUT #`, `PRINT #` [K81 p. 528–529]; Sixth Edition run-time `FILE` [K81 p. 530; U72 §11.2.3]. **Fifth (implemented):** `FILES` (names fixed at compile time, up to 8), `SCRATCH #`, `RESTORE #`, `PRINT #`, `INPUT #` (LANGUAGE.md §7.21–§7.25); run-time `FILE` stays a Sixth Edition feature |
 | 5 | Write arbitrary text to the output | (a) | `PRINT A$` writes any bytes (§8); a byte that BASIC cannot type (`"`, control characters) is built with `CHANGE` (§7.19). Lines may exceed 75 columns (never wrapped). Trailing blanks are never written (lazy spaces, §8) — harmless for assembly text |
 | 6 | Character codes of a string, and a string from codes | (a) | `CHANGE` ([M68] p. 67–69; [K81] p. 528: "any conceivable string operation could be carried out by equivalent operations on numbers") |
 | 7 | Compare strings, sort identifiers, symbol tables | (a) | IF with strings (§7.7), string lists (§4.4), numeric lists for hashing via CHANGE codes |
-| 8 | String length, character at position, substring | (a) via CHANGE / (b) | Fourth: `CHANGE A$ TO V` then `V(0)`, `V(i)`. Fifth: `LEN`, `ASC` [K81 p. 529] (**specified**, LANGUAGE.md §6.1); Sixth: `SEG$`, `POS` [K81 p. 531] |
+| 8 | String length, character at position, substring | (a) via CHANGE / (b) | Fourth: `CHANGE A$ TO V` then `V(0)`, `V(i)`. Fifth: `LEN`, `ASC` [K81 p. 529] (**implemented**, LANGUAGE.md §6.1); Sixth: `SEG$`, `POS` [K81 p. 531] |
 | 9 | Concatenation, building output lines | (a) via CHANGE / (b) | Fourth: copy codes into one list, `CHANGE V TO A$` (or print pieces with `;`, §8). Sixth: `&` [K81 p. 531] |
-| 10 | Number → text (emit constants, labels, offsets) | (a) by arithmetic / (b) | Fourth: digits by `INT` arithmetic + CHANGE. Fifth: `STR$` [K81 p. 529] (BASIC's 6-significant-digit print form: fine for integers below 10⁹, not for exact reals; **specified**, LANGUAGE.md §6.1) |
-| 11 | Text → number (parse numeric literals) | (a) by arithmetic / (b) | Fourth: CHANGE + digit arithmetic. Fifth: `VAL` [K81 p. 529] (**specified**: the INPUT number syntax, LANGUAGE.md §6.1) |
+| 10 | Number → text (emit constants, labels, offsets) | (a) by arithmetic / (b) | Fourth: digits by `INT` arithmetic + CHANGE. Fifth: `STR$` [K81 p. 529] (BASIC's 6-significant-digit print form: fine for integers below 10⁹, not for exact reals; **implemented**, LANGUAGE.md §6.1) |
+| 11 | Text → number (parse numeric literals) | (a) by arithmetic / (b) | Fourth: CHANGE + digit arithmetic. Fifth: `VAL` [K81 p. 529] (**implemented**: the INPUT number syntax, LANGUAGE.md §6.1) |
 | 12 | Exact IEEE bit patterns of real constants | (a) | Baysick numbers are doubles (§5.4); scaling by powers of two is exact, so a program can extract mantissa and exponent and print hex digits |
-| 13 | Recursive descent parsing, nested scopes | (a), clumsy | GOSUB has a 1024-deep return stack but no locals (§7.9); explicit stacks in lists. Multi-line DEF has local parameters and is non-recursive (§7.10); **Fifth (specified):** string parameters and string results (§7.10.1); recursive DEF left out |
+| 13 | Recursive descent parsing, nested scopes | (a), clumsy | GOSUB has a 1024-deep return stack but no locals (§7.9); explicit stacks in lists. Multi-line DEF has local parameters and is non-recursive (§7.10); **Fifth (implemented):** string parameters and string results (§7.10.1); recursive DEF left out |
 | 14 | Procedures with private variables, separate compilation | (b) | Sixth Edition `CALL`/`SUB`/`SUBEND` [K81 p. 530] |
-| 15 | Records, 2-D tables of strings (AST nodes, token tables) | (a) / (b) | Fourth: parallel numeric lists/tables and 1-D string lists. Fifth: two-dimensional string arrays [K81 p. 529] (**specified**, LANGUAGE.md §4.4) |
+| 15 | Records, 2-D tables of strings (AST nodes, token tables) | (a) / (b) | Fourth: parallel numeric lists/tables and 1-D string lists. Fifth: two-dimensional string arrays [K81 p. 529] (**implemented**, LANGUAGE.md §4.4) |
 | 16 | Program size of a real compiler (thousands of lines) | (a), with limits | Baysick limits (§12): 10 000 lines of ≤ 255 bytes, line numbers ≤ 99999. Fifth `CHAIN`/subprograms and Sixth `SUB` allow splitting [K81 p. 529–530] |
 | 17 | Report errors on stderr and fail the build with a non-zero exit status | **(c)** | A program's only stderr output and only non-zero exit are BASIC run-time errors (§10). A deliberate run-time error (e.g. `ON 0 GO TO 10`) exits 1 with `ON EVALUATED OUT OF RANGE IN n` — usable as a last resort, not as diagnostics |
 | 18 | Command-line arguments, environment (input file name, options) | **(c)** | No Dartmouth edition has them (programs ran under a time-sharing command system). Use stdin/stdout redirection |

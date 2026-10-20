@@ -153,6 +153,28 @@ Lbk_x64_em_sdb_loop:
     b Lbk_x64_em_sdb_loop
 Lbk_x64_em_sdb_done:
 
+    // ---- FILES names .Lfile_<k>, k = 1 ... NFILES (still in .rodata) ----------
+    ldr w23, [x19, #IRM_NFILES]
+    ldr x22, [x19, #IRM_FILES]
+    mov x21, #0
+Lbk_x64_em_file_loop:
+    cmp x21, x23
+    b.hs Lbk_x64_em_file_done
+    // label line (file number k = index + 1), then the bytes
+    mov x0, x20
+    adrp x1, Lbk_x64_em_file_label@PAGE
+    add x1, x1, Lbk_x64_em_file_label@PAGEOFF
+    add x2, x21, #1
+    bl _bk_x64_fmt
+    mov x0, x20
+    ldr x1, [x22, #IRS_PTR]
+    ldr w2, [x22, #IRS_LEN]
+    bl _bk_x64_bytes
+    add x22, x22, #IRS_SIZE
+    add x21, x21, #1
+    b Lbk_x64_em_file_loop
+Lbk_x64_em_file_done:
+
     // ---- .data.rel.ro: SD_* records of the string constants ----------------
     mov x0, x20
     adrp x1, Lbk_x64_em_sec_relro@PAGE
@@ -206,6 +228,34 @@ Lbk_x64_em_sdata_done:
     mov x2, x23
     bl _bk_x64_fmt
 
+    // ---- bsk_files: one SD_* record per FILES name, then bsk_files_count -----
+    mov x0, x20
+    adrp x1, Lbk_x64_em_files_head@PAGE
+    add x1, x1, Lbk_x64_em_files_head@PAGEOFF
+    bl _ob_puts
+    ldr w23, [x19, #IRM_NFILES]
+    ldr x22, [x19, #IRM_FILES]
+    mov x21, #0
+Lbk_x64_em_files_loop:
+    cmp x21, x23
+    b.hs Lbk_x64_em_files_done
+    // ".quad .Lfile_<k>" / ".long <len>, 0"
+    mov x0, x20
+    adrp x1, Lbk_x64_em_files_fmt@PAGE
+    add x1, x1, Lbk_x64_em_files_fmt@PAGEOFF
+    add x2, x21, #1
+    ldr w3, [x22, #IRS_LEN]
+    bl _bk_x64_fmt
+    add x22, x22, #IRS_SIZE
+    add x21, x21, #1
+    b Lbk_x64_em_files_loop
+Lbk_x64_em_files_done:
+    mov x0, x20
+    adrp x1, Lbk_x64_em_files_count@PAGE
+    add x1, x1, Lbk_x64_em_files_count@PAGEOFF
+    mov x2, x23
+    bl _bk_x64_fmt
+
     // ---- .data: array descriptors (RTA_*), letter order ----------------
     mov x0, x20
     adrp x1, Lbk_x64_em_sec_data@PAGE
@@ -251,6 +301,33 @@ Lbk_x64_em_sdesc_loop:
     add x22, x22, x21, lsl #4
     ldr w9, [x22, #IRA_DIMS]
     cbz w9, Lbk_x64_em_sdesc_next
+    cmp w9, #2
+    b.ne 1f
+    // table: ".long 2, b1, b2, b2+1, letter, (b1+1)*(b2+1)" in two calls
+    ldr w5, [x22, #IRA_B1]
+    ldr w6, [x22, #IRA_B2]
+    add x7, x6, #1
+    mov x0, x20
+    adrp x1, Lbk_x64_em_sdesc2_fmt@PAGE
+    add x1, x1, Lbk_x64_em_sdesc2_fmt@PAGEOFF
+    mov x2, x21
+    mov x3, x21
+    mov x4, x5
+    mov x5, x6
+    mov x6, x7
+    bl _bk_x64_fmt
+    ldr w9, [x22, #IRA_B1]
+    ldr w10, [x22, #IRA_B2]
+    add x9, x9, #1
+    add x10, x10, #1
+    mul x3, x9, x10
+    mov x2, x21
+    mov x0, x20
+    adrp x1, Lbk_x64_em_desc_tail@PAGE
+    add x1, x1, Lbk_x64_em_desc_tail@PAGEOFF
+    bl _bk_x64_fmt
+    b Lbk_x64_em_sdesc_next
+1:
     // ".Lsdesc_<L>:" / ".quad .Lbsk_sarr_<L>" / ".long 1, b1, 0, 1, letter, b1+1"
     ldr w5, [x22, #IRA_B1]
     add x6, x5, #1
@@ -313,10 +390,13 @@ Lbk_x64_em_sarr_loop:
     add x22, x22, x21, lsl #4
     ldr w9, [x22, #IRA_DIMS]
     cbz w9, Lbk_x64_em_sarr_next
-    // bytes = SD_SIZE * (b1 + 1)
+    // bytes = SD_SIZE * (b1 + 1) * (b2 + 1)   (b2 = 0 for lists)
     ldr w10, [x22, #IRA_B1]
+    ldr w11, [x22, #IRA_B2]
     add x10, x10, #1
-    lsl x3, x10, #4
+    add x11, x11, #1
+    mul x3, x10, x11
+    lsl x3, x3, #4
     mov x0, x20
     adrp x1, Lbk_x64_em_sarr@PAGE
     add x1, x1, Lbk_x64_em_sarr@PAGEOFF
@@ -327,6 +407,15 @@ Lbk_x64_em_sarr_next:
     cmp x21, #NUM_LETTERS
     b.lo Lbk_x64_em_sarr_loop
 
+    // ---- .bss: the NSTEMPS string temp cells (only if any) ---------------------
+    ldr w9, [x19, #IRM_NSTEMPS]
+    cbz w9, 2f
+    lsl x2, x9, #4
+    mov x0, x20
+    adrp x1, Lbk_x64_em_scells@PAGE
+    add x1, x1, Lbk_x64_em_scells@PAGEOFF
+    bl _bk_x64_fmt
+2:
     // ---- non-executable stack marker (last line of the file) -------------
     mov x0, x20
     adrp x1, Lbk_x64_em_tail@PAGE
@@ -452,6 +541,28 @@ Lbk_x64_em_svars:
 Lbk_x64_em_sarr:
     .ascii "    .p2align 3\n"
     .ascii ".Lbsk_sarr_%L:\n"
+    .asciz "    .zero %u\n"
+Lbk_x64_em_file_label:
+    .asciz ".Lfile_%u:\n"
+Lbk_x64_em_files_head:
+    .ascii "    .globl bsk_files\n"
+    .ascii "    .type bsk_files, @object\n"
+    .asciz "bsk_files:\n"
+Lbk_x64_em_files_fmt:
+    .ascii "    .quad .Lfile_%u\n"
+    .asciz "    .long %u, 0\n"
+Lbk_x64_em_files_count:
+    .ascii "    .globl bsk_files_count\n"
+    .ascii "    .type bsk_files_count, @object\n"
+    .ascii "bsk_files_count:\n"
+    .asciz "    .quad %u\n"
+Lbk_x64_em_sdesc2_fmt:
+    .ascii ".Lsdesc_%L:\n"
+    .ascii "    .quad .Lbsk_sarr_%L\n"
+    .asciz "    .long 2, %u, %u, %u"
+Lbk_x64_em_scells:
+    .ascii "    .p2align 3\n"
+    .ascii ".Lbsk_scells:\n"
     .asciz "    .zero %u\n"
 Lbk_x64_em_tail:
     .asciz "    .section .note.GNU-stack,\"\",@progbits\n"

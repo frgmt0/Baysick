@@ -4,6 +4,7 @@
 # (LANGUAGE.md 7.4, 7.5, 7.14.4, 7.16; DESIGN.md 6.7).
 #
 # Defines: bsk_read bsk_sread bsk_sread_el bsk_restore bsk_smat_read
+# (MAT READ of a string list or, Fifth Edition, a string table)
 # Uses: bsk_saref1 (rt_array.s), bsk_rt_str_assign (rt_str.s).
 # Uses (defined by every compiled program): bsk_data (double[]),
 # bsk_data_count (u64), bsk_sdata (SD[], CAP 0), bsk_sdata_count (u64).
@@ -133,39 +134,72 @@ bsk_restore:
     .size bsk_restore, . - bsk_restore
 
 # ---------------------------------------------------------------------
-# bsk_smat_read -- MAT READ of a string list with its current bound
-#   (LANGUAGE.md 7.14.4, DESIGN.md 6.5).
-#   Purpose : bound 0 -> DIMENSION ERROR; else elements 1 .. B1 receive
-#             the next string DATA values, each stored at once (an OUT
-#             OF DATA in the middle leaves the earlier ones stored).
-#   Inputs  : %rdi = string-list descriptor (RTA_*)
+# bsk_smat_read -- MAT READ of a string list or string table with its
+#   current shape (LANGUAGE.md 7.14.4, DESIGN.md 6.5, 6.8).
+#   Purpose : a list of current bound n is one row of n elements 1 .. n;
+#             a table of current shape r x c is r rows of c elements,
+#             (1,1) .. (1,c), (2,1) .., element (i,j) at
+#             RTA_DATA + SD_SIZE * (i * RTA_ROWLEN + j). A zero
+#             dimension -> DIMENSION ERROR. Each element receives the
+#             next string DATA value and is stored at once (an OUT OF
+#             DATA in the middle leaves the earlier ones stored).
+#   Inputs  : %rdi = string-list or string-table descriptor (RTA_*)
 #   Outputs : none
 #   Errors  : DIMENSION ERROR, OUT OF DATA (exit 0), OUT OF ROOM
 #   Clobbers: all caller-saved registers
-#   Callee-saved used: %rbx = current element (SD*), %r12 = elements
-#             left, %rbp = frame pointer
-#   Frame   : 24 bytes (%rbp, %rbx, %r12)
+#   Callee-saved used: %rbx = first element of the current row (SD*),
+#             %r12 = rows left, %r13 = columns, %r14 = column index,
+#             %r15 = row stride in bytes, %rbp = frame pointer
+#   Frame   : 56 bytes (%rbp, %rbx, %r12-%r15 + 8 bytes pad)
 # ---------------------------------------------------------------------
     .globl bsk_smat_read
     .type bsk_smat_read, @function
     .p2align 4
 bsk_smat_read:
-    movl RTA_B1(%rdi), %eax             # current bound n
-    testl %eax, %eax
-    jz .Lrt_data_dimerr                 # a list of no elements
     pushq %rbp
     movq %rsp, %rbp
     pushq %rbx
-    pushq %r12                          # 3 pushes: %rsp = 0 (mod 16)
-    movq %rax, %r12                     # elements left
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    subq $8, %rsp                       # %rsp = 0 (mod 16)
     movq RTA_DATA(%rdi), %rbx
+    movl RTA_B1(%rdi), %eax             # list: n; table: rows
+    testl %eax, %eax
+    jz .Lrt_data_dimerr                 # no element
+    cmpl $2, RTA_DIMS(%rdi)
+    je 1f
+    movl $1, %r12d                      # a list: one row ...
+    movq %rax, %r13                     # ... of n elements
     addq $SD_SIZE, %rbx                 # element 1
-.Lrt_data_smat_loop:
-    movq %rbx, %rdi
+    xorl %r15d, %r15d                   # (no second row)
+    jmp .Lrt_data_smat_row
+1:
+    movq %rax, %r12                     # rows
+    movl RTA_B2(%rdi), %r13d            # columns
+    testl %r13d, %r13d
+    jz .Lrt_data_dimerr                 # no column
+    movl RTA_ROWLEN(%rdi), %r15d
+    imulq $SD_SIZE, %r15, %r15          # row stride in bytes
+    leaq SD_SIZE(%rbx,%r15), %rbx       # element (1,1)
+.Lrt_data_smat_row:
+    xorl %r14d, %r14d                   # column index
+.Lrt_data_smat_col:
+    movq %r14, %rdi
+    shlq $4, %rdi                       # * SD_SIZE
+    addq %rbx, %rdi                     # this element
     call bsk_sread                      # next string value, stored now
-    addq $SD_SIZE, %rbx
+    addq $1, %r14
+    cmpq %r13, %r14
+    jb .Lrt_data_smat_col
+    addq %r15, %rbx                     # next row
     subq $1, %r12
-    jnz .Lrt_data_smat_loop
+    jnz .Lrt_data_smat_row
+    addq $8, %rsp
+    popq %r15
+    popq %r14
+    popq %r13
     popq %r12
     popq %rbx
     popq %rbp
@@ -174,6 +208,11 @@ bsk_smat_read:
     movl $ERR_DIMENSION_ERROR, %edi
     jmp bsk_err
     .size bsk_smat_read, . - bsk_smat_read
+
+.equ RT_DATA_SD_SIZE_IS_16, SD_SIZE - 16
+.if RT_DATA_SD_SIZE_IS_16
+    .error "bsk_smat_read multiplies by SD_SIZE with a shift by 4"
+.endif
 
 # DATA cursor: index of the next value to read, initially 0.
     .bss

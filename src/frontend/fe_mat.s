@@ -28,6 +28,14 @@
 // String lists are only allowed in MAT READ, MAT PRINT and MAT INPUT; in
 // an assignment they are MISMATCHED STRING OPERATION.
 //
+// Fifth Edition (LANGUAGE.md 4.4, 7.14): a string array
+// may be a table: MAT READ X$(r, c) (`smatredim X$, tr, tc`), MAT READ /
+// MAT PRINT X$ of a table. A bare string name in MAT READ / MAT PRINT fixes
+// nothing (bit L of _fe_smat_names); one whose dimensionality is still
+// unknown after the whole program becomes a list with bound 10
+// (_fe_mat_finish). MAT INPUT X$ is a use as a list (a table -> ILLEGAL
+// VARIABLE); MAT READ X$(r) / X$(r, c) a use as a list / table.
+//
 // Every name used by a MAT statement is recorded in the bit mask
 // _fe_mat_names (fe_compile.s); a subscripted MAT READ target also fixes
 // the letter's dimensionality through _fe_array_use (fe_expr.s). Errors
@@ -131,7 +139,7 @@ Lfe_mat_read_loop:
     mov w0, #0
     bl _fe_peek
     cmp w0, #'('
-    b.ne Lfe_mat_read_elems
+    b.ne Lfe_mat_read_bare
     mov w0, #1
     bl _fe_advance
     cbnz w22, Lfe_mat_read_sdim
@@ -153,15 +161,27 @@ Lfe_mat_read_loop:
     bl Lfe_mat_emit
     b Lfe_mat_read_elems
 Lfe_mat_read_sdim:
-    // X$(r): r; smatredim X$, tr (a second dimension is ILLEGAL VARIABLE)
+    // X$(r) / X$(r, c): r; [c;] smatredim X$, tr [, tc]; a use of X$ as a
+    // list / table
+    mov w0, #2
+    bl Lfe_mat_dims
+    mov w20, w0
+    mov w21, w1
+    mov w1, w2
     mov w0, w19
-    bl _fe_ssubscript
-    mov w1, w0
+    bl _fe_sarray_use2
     mov w0, #OP_SMATREDIM
-    mov w2, #IR_NONE
+    mov w1, w20
+    mov w2, w21
     mov w4, w19
     mov x5, #0
     bl Lfe_mat_emit
+    b Lfe_mat_read_elems
+Lfe_mat_read_bare:
+    // no dimensions: a bare string name fixes nothing
+    cbz w22, Lfe_mat_read_elems
+    mov w0, w19
+    bl Lfe_mat_smark
 Lfe_mat_read_elems:
     // matread X / smatread X$
     mov w0, #OP_MATREAD
@@ -211,9 +231,11 @@ Lfe_mat_input:
     bl Lfe_mat_name
     mov w19, w0
     mov w20, w1
-    cbnz w20, 1f
-    mov w0, w19
     mov w1, #1                          // MAT INPUT fixes a list
+    cbz w20, 3f
+    bl _fe_sarray_use2                  // MAT INPUT of a string table: ILLEGAL VARIABLE
+    b 1f
+3:
     bl _fe_array_use
 1:
     bl _fe_expect_eol                   // MAT INPUT V(5): INCORRECT FORMAT
@@ -256,6 +278,9 @@ Lfe_mat_print_loop:
     bl Lfe_mat_name                     // ILLEGAL VARIABLE if no name
     mov w19, w0
     mov w23, w1
+    cbz w23, 3f
+    bl Lfe_mat_smark                    // a bare string name fixes nothing
+3:
     // what follows the name selects the format of this item
     mov w0, #0
     bl _fe_peek
@@ -546,7 +571,7 @@ Lfe_mat_assign_format:
 //   (also A1$) -> ILLEGAL VARIABLE; a string list where none is allowed
 //   (assignments) -> MISMATCHED STRING OPERATION. A numeric letter is
 //   recorded in _fe_mat_names (it fixes no dimensionality); a string list
-//   is marked used.
+//   is marked used (Fifth Edition: the caller decides, see the header).
 //   in:  w0 = 1 if a string list is allowed, else 0
 //   out: w0 = letter 0..25 (letter and '$' consumed), w1 = 1 for a string
 //        list, else 0
@@ -593,8 +618,6 @@ Lfe_mat_name_string:
     mov w0, #2
     bl _fe_advance
     mov w0, w19
-    bl _fe_sarray_use
-    mov w0, w19
     mov w1, #1
 Lfe_mat_name_ret:
     ldp x19, x20, [sp, #16]
@@ -603,6 +626,21 @@ Lfe_mat_name_ret:
 Lfe_mat_name_bad:
     mov w0, #ERR_ILLEGAL_VARIABLE
     bl _fe_err
+
+// ---------------------------------------------------------------------
+// Lfe_mat_smark -- a bare string array name in MAT READ / MAT PRINT:
+//   _fe_smat_names |= 1 << letter (its dimensionality stays open).
+//   in: w0 = letter   out: none   clobbers: x9-x11   leaf, no frame
+// ---------------------------------------------------------------------
+    .p2align 2
+Lfe_mat_smark:
+    adrp x9, _fe_smat_names@PAGE
+    ldr w10, [x9, _fe_smat_names@PAGEOFF]
+    mov w11, #1
+    lsl w11, w11, w0
+    orr w10, w10, w11
+    str w10, [x9, _fe_smat_names@PAGEOFF]
+    ret
 
 // ---------------------------------------------------------------------
 // Lfe_mat_dims -- a dimension / IDN argument list "e [, e] )" whose '('
@@ -711,9 +749,11 @@ Lfe_mat_emit:
 // _fe_mat_finish -- give every letter that a MAT statement named but
 //   whose dimensionality is still unknown after all lines the default
 //   table shape LIM_DEFAULT_BOUND x LIM_DEFAULT_BOUND (LANGUAGE.md 7.11,
-//   IR.md 3.1). Called once, after the phase-3 checks.
+//   IR.md 3.1). Called once, after the phase-3 checks. Fifth Edition: a
+//   string array named only bare by MAT READ / MAT PRINT becomes a list
+//   with bound LIM_DEFAULT_BOUND (LANGUAGE.md 4.4).
 //   in:  none
-//   out: none (_fe_arrays updated)
+//   out: none (_fe_arrays, _fe_sarrays updated)
 //   clobbers: x9-x15   leaf, no frame
 // ---------------------------------------------------------------------
     .globl _fe_mat_finish
@@ -743,6 +783,29 @@ Lfe_mat_finish_next:
     add w12, w12, #1
     b Lfe_mat_finish_loop
 Lfe_mat_finish_done:
+    adrp x9, _fe_smat_names@PAGE
+    ldr w10, [x9, _fe_smat_names@PAGEOFF]
+    adrp x11, _fe_sarrays@PAGE
+    add x11, x11, _fe_sarrays@PAGEOFF
+    mov w12, #0                         // letter
+1:
+    cmp w12, #NUM_LETTERS
+    b.hs 3f
+    lsr w13, w10, w12
+    tbz w13, #0, 2f                     // not named bare by MAT
+    add x14, x11, x12, lsl #FE_ARR_SHIFT
+    ldr w15, [x14]
+    cbnz w15, 2f                        // a list or a table already
+    mov w15, #1                         // a list, bound 10, not DIMmed
+    str w15, [x14]
+    mov w15, #LIM_DEFAULT_BOUND
+    str w15, [x14, #4]
+    str wzr, [x14, #8]
+    str wzr, [x14, #12]
+2:
+    add w12, w12, #1
+    b 1b
+3:
     ret
 
 // ---------------------------------------------------------------------

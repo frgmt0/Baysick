@@ -13,7 +13,9 @@
 # tests/cross_run.sh on Linux: BUNDLE marker, Makefile.linux, include/*.inc,
 # src/runtime_x86_64_linux/*.s, the two include-check files, cross_run.sh and
 # cases/<programs|errors>/NAME.s plus the unchanged sidecars (.out .err
-# .meta and the optional .in stdin file). A case whose
+# .meta and the optional .in stdin file). NAME.files/ and NAME.expect/
+# (docs/DESIGN.md 8.5) are copied unchanged when present; compile-phase or tests/ir cases with
+# them are a setup error (exit 2). A case whose
 # compilation fails gets NAME.packfail ("status <n>" line, then the compiler's
 # stderr) instead of NAME.s. compile-phase error tests are skipped.
 #
@@ -52,6 +54,23 @@ if [ -e "$BUNDLE" ]; then
 fi
 
 setup_fail() { echo "cross_pack.sh: $1" >&2; exit 2; }
+
+# Misplaced file-test directories are a corpus mistake (docs/DESIGN.md section 8.5): compile-phase
+# error tests and IR tests never run a program. Checked for every case, before creating anything.
+for bas in "$ROOT"/tests/errors/*.bas "$ROOT"/tests/ir/*.bas; do
+    [ -e "$bas" ] || continue
+    base=${bas%.bas}
+    [ -d "$base.files" ] || [ -d "$base.expect" ] || continue
+    case "$bas" in
+    */tests/errors/*)
+        phase=
+        [ -f "$base.meta" ] && phase=$(sed -n 's/^phase=//p' "$base.meta" | head -1)
+        [ "$phase" = compile ] || continue
+        setup_fail "errors/$(basename "$base"): .files/.expect only for program and run-phase tests" ;;
+    *)
+        setup_fail "ir/$(basename "$base"): .files/.expect only for program and run-phase tests" ;;
+    esac
+done
 
 mkdir -p "$BUNDLE/include" "$BUNDLE/src/runtime_x86_64_linux" "$BUNDLE/tests" \
     "$BUNDLE/cases/programs" "$BUNDLE/cases/errors" \
@@ -113,6 +132,12 @@ pack_case() {
     for _ext in out err meta in; do
         if [ -f "$_base.$_ext" ]; then
             cp "$_base.$_ext" "$_dir/$_name.$_ext" || setup_fail "cannot copy $_base.$_ext"
+        fi
+    done
+    # file-test directories (docs/DESIGN.md section 8.5), copied unchanged
+    for _ext in files expect; do
+        if [ -d "$_base.$_ext" ]; then
+            cp -R "$_base.$_ext" "$_dir/$_name.$_ext" || setup_fail "cannot copy $_base.$_ext"
         fi
     done
     PACKED=$((PACKED + 1))

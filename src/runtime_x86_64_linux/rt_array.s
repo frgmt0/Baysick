@@ -2,8 +2,8 @@
 # src/runtime_x86_64_linux/rt_array.s -- array element addressing with
 # bounds checks.
 #
-# Defines: bsk_aref1 bsk_aref2 bsk_saref1   (DESIGN.md sections 6.2, 6.4,
-#          6.7)
+# Defines: bsk_aref1 bsk_aref2 bsk_saref1 bsk_saref2   (DESIGN.md sections
+#          6.2, 6.4, 6.7, 6.8)
 # Defines (private to the runtime, .globl + .hidden):
 #   bsk_rt_round_half   floor(x + 1/2), exactly (CHANGE, rt_ed4.s)
 # A subscript s is converted to r = floor(s + 0.5) (LANGUAGE.md 7.11),
@@ -141,6 +141,35 @@ bsk_saref1:
     .size bsk_saref1, . - bsk_saref1
 
 # ---------------------------------------------------------------------
+# bsk_saref2 -- address of string table element T$(i, j) (DESIGN.md
+#   6.8, LANGUAGE.md 4.4, 7.11).
+#   Purpose : the subscript rule of bsk_aref2 against the current
+#             RTA_B1 / RTA_B2; element (i, j) is the SD record at
+#             RTA_DATA + SD_SIZE * (i * RTA_ROWLEN + j).
+#   Inputs  : %rdi = string-table descriptor (RTA_*), %xmm0 = subscript
+#             i, %xmm1 = subscript j
+#   Outputs : %rax = address of the SD record
+#   Errors  : SUBSCRIPT ERROR if i is outside 0..B1 or j outside 0..B2
+#   Clobbers: %rax, %rcx, %r8, %r9, %xmm0, %xmm1, %xmm2, %xmm3
+#   Callee-saved used: none
+#   Frame   : none (leaf)
+# ---------------------------------------------------------------------
+    .globl bsk_saref2
+    .type bsk_saref2, @function
+    .p2align 4
+bsk_saref2:
+    RT_SUBSCRIPT %xmm0, RTA_B1, %r8 # row
+    RT_SUBSCRIPT %xmm1, RTA_B2, %r9 # column
+    movl RTA_ROWLEN(%rdi), %ecx
+    imulq %rcx, %r8                 # i * rowlen
+    addq %r9, %r8                   # + j
+    imulq $SD_SIZE, %r8, %r8        # SD_SIZE bytes per element
+    movq RTA_DATA(%rdi), %rax
+    addq %r8, %rax
+    ret
+    .size bsk_saref2, . - bsk_saref2
+
+# ---------------------------------------------------------------------
 # bsk_rt_round_half -- r = floor(x + 1/2), computed exactly (the
 #   subscript rounding of LANGUAGE.md 7.11, also used by CHANGE for
 #   the length L(0) and the character codes, LANGUAGE.md 7.19).
@@ -162,7 +191,7 @@ bsk_rt_round_half:
     ret
     .size bsk_rt_round_half, . - bsk_rt_round_half
 
-# Shared error exit for the three functions (reached by a jump from a leaf,
+# Shared error exit for the four functions (reached by a jump from a leaf,
 # so %rsp is as at a call entry; bsk_err realigns anyway).
 .Lrt_array_bad:
     movl $ERR_SUBSCRIPT, %edi

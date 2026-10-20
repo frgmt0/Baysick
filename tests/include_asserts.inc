@@ -59,7 +59,7 @@ ASSERT ((IRM_SARRAYS + NUM_LETTERS*IRA_SIZE) == IRM_NSDATA), "IRM: string data c
 ASSERT ((IRM_SDATA % 8) == 0),                             "IRM_SDATA alignment"
 ASSERT ((IRM_FUNCS % 8) == 0),                             "IRM_FUNCS alignment"
 ASSERT (PH_SDK < PH_LIMIT),                                "placeholders below PH_LIMIT"
-// Fifth Edition (unconditional values)
+// Fifth Edition
 ASSERT ((OP_FRESTORE - OP_SCELL) == 13),                   "Fifth Edition opcodes are contiguous"
 ASSERT (OP_SCELL == (OP_STFV + 1)),                        "Fifth Edition opcodes follow OP_STFV"
 ASSERT (TK_SFN0 == (TK_SFN + 1)),                          "TK_SFN0 follows TK_SFN"
@@ -78,17 +78,9 @@ ASSERT (FNK_SPARAMS_MASK == ((FNK_SPARAM0 << LIM_FN_PARAMS) - 1)), "FNK string-p
 ASSERT (LIM_FILE_NAME >= LIM_PHYS_LINE_LEN),               "every FILES name a line can hold fits LIM_FILE_NAME"
 ASSERT (LIM_FILES == 8),                                   "eight files (GE 1970)"
 ASSERT (RT_FILEBUF_SIZE == RT_OUTBUF_SIZE),                "file buffers like the stdout buffer"
-.if BSK_ED5_CONTRACT
 ASSERT (OP_COUNT == (OP_FRESTORE + 1)),                    "OP_COUNT"
 ASSERT (KW_COUNT == (KW_SCRATCH + 1)),                     "KW_COUNT"
 ASSERT (TK_COUNT == (TK_SFN0 + 1)),                        "TK_COUNT"
 ASSERT (BI_COUNT == (BI_STR + 1)),                         "BI_COUNT"
 ASSERT ((IRM_FNKINDS + NUM_FUNCS*4 + 4) == IRM_SIZE),      "IRM layout (Fifth Edition)"
 ASSERT ((IRM_SIZE % 8) == 0),                              "IRM_SIZE alignment"
-.else
-ASSERT (OP_COUNT == (OP_STFV + 1)),                        "OP_COUNT (Fourth Edition staging)"
-ASSERT (KW_COUNT == (KW_FNEND + 1)),                       "KW_COUNT (Fourth Edition staging)"
-ASSERT (TK_COUNT == (TK_FN0 + 1)),                         "TK_COUNT (Fourth Edition staging)"
-ASSERT (BI_COUNT == (BI_DET + 1)),                         "BI_COUNT (Fourth Edition staging)"
-ASSERT ((IRM_SDATA + 8) == IRM_SIZE),                      "IRM layout (Fourth Edition staging)"
-.endif

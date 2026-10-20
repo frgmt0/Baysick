@@ -4,6 +4,7 @@
 // Defines: _bsk_aref1 _bsk_aref2   (DESIGN.md section 6.2)
 //          _bsk_saref1             (string lists, DESIGN.md section 6.7;
 //                                   here to share the subscript macro)
+//          _bsk_saref2             (string tables, DESIGN.md section 6.8)
 // A subscript s is converted to r = floor(s + 0.5) (LANGUAGE.md 7.11),
 // evaluated exactly: r = floor(s), plus 1 if s - floor(s) >= 0.5. The
 // IEEE sum s + 0.5 is NOT used: it can round up (s = 0.5 - 2^-54 gives
@@ -104,11 +105,34 @@ _bsk_saref1:
     ldr x9, [x0, #RTA_DATA]
     add x0, x9, x10, lsl #4         // data + SD_SIZE * index
     ret
+// ---------------------------------------------------------------------
+// _bsk_saref2 -- address of string table element T$(i, j) (DESIGN.md
+//   6.8, Fifth Edition).
+//   Purpose : the subscript rule of _bsk_aref2 against the current
+//             RTA_B1 / RTA_B2; element (i, j) is SD record
+//             i * RTA_ROWLEN + j.
+//   Inputs  : x0 = string-table descriptor (RTA_*), d0 = i, d1 = j
+//   Outputs : x0 = address of the element's SD record
+//   Errors  : SUBSCRIPT ERROR if i is outside 0..B1 or j outside 0..B2
+//   Clobbers: x9-x12, d0, d1, d16, d17
+//   Callee-saved used: none
+//   Frame   : none (leaf)
+// ---------------------------------------------------------------------
+    .globl _bsk_saref2
+    .p2align 2
+_bsk_saref2:
+    RT_SUBSCRIPT d0, RTA_B1, x10    // row
+    RT_SUBSCRIPT d1, RTA_B2, x12    // column
+    ldr w11, [x0, #RTA_ROWLEN]
+    madd x10, x10, x11, x12         // i * rowlen + j
+    ldr x9, [x0, #RTA_DATA]
+    add x0, x9, x10, lsl #4         // data + SD_SIZE * index
+    ret
 .if SD_SIZE != 16
-    .error "rt_array: _bsk_saref1 assumes SD_SIZE == 16"
+    .error "rt_array: _bsk_saref1 and _bsk_saref2 assume SD_SIZE == 16"
 .endif
 
-// Shared error exit for all three functions.
+// Shared error exit for all four functions.
 Lrt_array_bad:
     mov w0, #ERR_SUBSCRIPT
     b _bsk_err

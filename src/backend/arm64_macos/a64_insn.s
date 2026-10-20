@@ -130,15 +130,8 @@ Lbk_in_w_done:
     // ---- prologue: frame record, x19/x20, temp area, globals base -------
     FMT Lbk_in_prologue
     // frame = align16(8*(W+L) + 8): temps + local cells (+ one spare word)
-    bl Lbk_in_fn_shape              // w0 = NP, w1 = multi-line flag
-    cbnz w1, 1f
-    cmp w0, #1                      // L = max(1, NP)
-    mov w2, #1
-    csel w2, w0, w2, hi
-    b 2f
-1:
-    add w2, w0, #2                  // L = NP + 2
-2:
+    bl Lbk_in_fn_cells              // w0 = L, the number of local cells
+    mov w2, w0
     add x9, x23, x2
     lsl x9, x9, #3
     add x9, x9, #8 + 15
@@ -164,20 +157,63 @@ Lbk_in_w_done:
 Lbk_in_pro_loop:
     cmp x24, x28
     b.hs Lbk_in_pro_done
-    adrp x0, Lbk_in_str@PAGE
-    add x0, x0, Lbk_in_str@PAGEOFF
+    // parameter k arrives in d<k>, or in x<k> when its string-parameter
+    // bit in IRM_FNKINDS is set (Fifth Edition)
+    bl Lbk_in_fn_kinds
+    lsr w9, w0, w24
     adrp x1, Lbk_in_pd@PAGE
     add x1, x1, Lbk_in_pd@PAGEOFF
+    adrp x10, Lbk_in_px@PAGE
+    add x10, x10, Lbk_in_px@PAGEOFF
+    tst w9, #1
+    csel x1, x10, x1, ne
+    adrp x0, Lbk_in_str@PAGE
+    add x0, x0, Lbk_in_str@PAGEOFF
     mov x2, x24
     mov x3, x24
     bl Lbk_in_cell
     add x24, x24, #1
     b Lbk_in_pro_loop
 Lbk_in_pro_done:
-    // multi-line function: value := 0, save the caller's run-time line
     bl Lbk_in_fn_shape
-    cbz w1, Lbk_in_pro_end
     mov x28, x0                     // NP
+    mov x24, x1                     // multi-line flag (the loop counter is dead)
+    // string function: the hidden result address arrives in x8 and lives
+    // in cell NP; a multi-line one also saves the caller's line and
+    // clears its value variable
+    bl Lbk_in_fn_kinds
+    tst w0, #FNK_STRING
+    b.eq Lbk_in_pro_numfn
+    adrp x0, Lbk_in_str@PAGE
+    add x0, x0, Lbk_in_str@PAGEOFF
+    adrp x1, Lbk_in_px@PAGE
+    add x1, x1, Lbk_in_px@PAGEOFF
+    mov x2, #8
+    mov x3, x28
+    bl Lbk_in_cell
+    cbz x24, Lbk_in_pro_end
+    FMT Lbk_in_ml_saveline
+    adrp x0, Lbk_in_str@PAGE
+    add x0, x0, Lbk_in_str@PAGEOFF
+    adrp x1, Lbk_in_px@PAGE
+    add x1, x1, Lbk_in_px@PAGEOFF
+    mov x2, #17
+    add x3, x28, #1
+    bl Lbk_in_cell
+    adrp x0, Lbk_in_ldr@PAGE
+    add x0, x0, Lbk_in_ldr@PAGEOFF
+    adrp x1, Lbk_in_px@PAGE
+    add x1, x1, Lbk_in_px@PAGEOFF
+    mov x2, #0
+    mov x3, x28
+    bl Lbk_in_cell
+    adrp x2, Lbk_in_rt_str_clear@PAGE
+    add x2, x2, Lbk_in_rt_str_clear@PAGEOFF
+    FMT Lbk_in_bl_fmt
+    b Lbk_in_pro_end
+Lbk_in_pro_numfn:
+    // multi-line function: value := 0, save the caller's run-time line
+    cbz x24, Lbk_in_pro_end
     FMT Lbk_in_ml_zero
     adrp x0, Lbk_in_str@PAGE
     add x0, x0, Lbk_in_str@PAGEOFF
@@ -241,6 +277,7 @@ Lbk_in_return:
 
 Lbk_in_op_nop:
     b Lbk_in_next
+
 
 Lbk_in_op_line:
     // "<label>:" then store the BASIC line number into _bsk_curline
@@ -402,15 +439,16 @@ Lbk_in_op_ast2:
 
 Lbk_in_op_callfn:
     // d0 = A (nothing for a call without arguments); bl Lfn_<L>; store
-    ldr w0, [x21, #IRI_A]
-    cmn w0, #1                      // IR_NONE: no argument
-    b.eq 1f
-    mov x1, #0
-    bl Lbk_in_load
-1:
+    // (argument 0 is an sref in x0 when the callee's parameter 0 is a string)
     ldr w2, [x21, #IRI_X]
     cmp w2, #NUM_LETTERS
     b.hs Lbk_in_bad_letter
+    ldr w0, [x21, #IRI_A]
+    cmn w0, #1                      // IR_NONE: no argument
+    b.eq 1f
+    bl Lbk_in_arg0
+1:
+    ldr w2, [x21, #IRI_X]
     FMT Lbk_in_bl_fn
     b Lbk_in_store_dst
 
@@ -434,6 +472,7 @@ Lbk_in_op_ret:
     ldr w0, [x21, #IRI_A]
     mov x1, #0
     bl Lbk_in_load
+Lbk_in_ret_tail:
     bl Lbk_in_fn_shape
     cbz w1, 1f
     add x3, x0, #1
@@ -681,6 +720,7 @@ Lbk_in_op_svar:
     cmp w9, #NUM_STRING_SLOTS
     b.hs Lbk_in_bad_slot
     FMT Lbk_in_svar_base
+Lbk_in_sref_add:
     ldr w9, [x21, #IRI_X]
 .if (SD_SIZE != 16)
     .error "a64_insn.s svar shifts the slot by 4: SD_SIZE must be 16"
@@ -816,6 +856,17 @@ Lbk_in_op_smatredim:
     ldr w0, [x21, #IRI_A]
     mov x1, #0
     bl Lbk_in_load
+    ldr w9, [x21, #IRI_B]
+    cmn w9, #1                      // IR_NONE: list form
+    b.eq 1f
+    mov w0, w9                      // string table: d1 = columns, redim2
+    mov x1, #1
+    bl Lbk_in_load
+    adrp x2, Lbk_in_rt_mat_redim2@PAGE
+    add x2, x2, Lbk_in_rt_mat_redim2@PAGEOFF
+    FMT Lbk_in_bl_fmt
+    b Lbk_in_next
+1:
     bl Lbk_in_ed_emit_call
     b Lbk_in_next
 
@@ -903,8 +954,14 @@ Lbk_in_op_fnarg:
     sub x9, x1, #1
     cmp x9, #6
     b.hi Lbk_in_bad_imm
+    bl Lbk_in_call_kinds            // the callee's string-parameter bits
+    lsr w9, w0, w1
     ldr w0, [x21, #IRI_A]
+    tbnz w9, #0, 1f
     bl Lbk_in_load
+    b Lbk_in_next
+1:
+    bl Lbk_in_load_x                // string parameter: an sref in x<k>
     b Lbk_in_next
 
 // STPARAM k: parameter cell k := A
@@ -952,6 +1009,121 @@ Lbk_in_op_stfv:
     add x1, x1, Lbk_in_pd@PAGEOFF
     mov x2, #0
     bl Lbk_in_cell
+    b Lbk_in_next
+
+// ---- Fifth Edition opcodes (docs/DESIGN.md 5.3) --------------------------
+
+// SCELL: x0 = &_bsk_scells + 16*X; DST := x0
+Lbk_in_op_scell:
+    ldr w9, [x21, #IRI_X]
+    ldr w10, [x20, #IRM_NSTEMPS]
+    cmp w9, w10
+    b.hs Lbk_in_bad_slot
+    FMT Lbk_in_scell_base
+    b Lbk_in_sref_add
+
+// SSTR: x0 = A (sref), d0 = B; bl _bsk_str
+Lbk_in_op_sstr:
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_in_load_x
+    ldr w0, [x21, #IRI_B]
+    mov x1, #0
+    bl Lbk_in_load
+    bl Lbk_in_ed_emit_call
+    b Lbk_in_next
+
+// LEN / ASC / VAL: x0 = A (sref); d0 stored
+Lbk_in_op_sref_d:
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_in_load_x
+    bl Lbk_in_ed_emit_call
+    b Lbk_in_store_dst
+
+// SALD2: x0 = &Lsdesc_<X>, d0 = A, d1 = B; x0 = _bsk_saref2(...); DST := x0
+Lbk_in_op_sald2:
+    mov w0, #0
+    mov x1, #IRI_X
+    bl Lbk_in_sdesc_reg
+    bl Lbk_in_load_ab
+    bl Lbk_in_ed_emit_call
+    b Lbk_in_store_sref
+
+// SPARAM k: x0 = local cell k (the string parameter's sref); DST := x0
+Lbk_in_op_sparam:
+    cbz x25, Lbk_in_bad_place
+    ldr x3, [x21, #IRI_IMM]
+    bl Lbk_in_check_cell
+    adrp x0, Lbk_in_ldr@PAGE
+    add x0, x0, Lbk_in_ldr@PAGEOFF
+    adrp x1, Lbk_in_px@PAGE
+    add x1, x1, Lbk_in_px@PAGEOFF
+    mov x2, #0
+    bl Lbk_in_cell
+    b Lbk_in_store_sref
+
+// SFV: x0 = cell NP (the multi-line string function's value); DST := x0
+Lbk_in_op_sfv:
+    bl Lbk_in_fn_shape
+    cbz w1, Lbk_in_bad_place
+    mov x3, x0
+    adrp x0, Lbk_in_ldr@PAGE
+    add x0, x0, Lbk_in_ldr@PAGEOFF
+    adrp x1, Lbk_in_px@PAGE
+    add x1, x1, Lbk_in_px@PAGEOFF
+    mov x2, #0
+    bl Lbk_in_cell
+    b Lbk_in_store_sref
+
+// SCALLFN: argument 0 (d0 or x0) = A unless none; x8 = B (the result
+// descriptor); bl Lfn_<X>; nothing is stored
+Lbk_in_op_scallfn:
+    ldr w2, [x21, #IRI_X]
+    cmp w2, #NUM_LETTERS
+    b.hs Lbk_in_bad_letter
+    ldr w0, [x21, #IRI_A]
+    cmn w0, #1                      // IR_NONE: no argument
+    b.eq 1f
+    bl Lbk_in_arg0
+1:
+    ldr w0, [x21, #IRI_B]
+    mov x1, #8
+    bl Lbk_in_load_x
+    ldr w2, [x21, #IRI_X]
+    FMT Lbk_in_bl_fn
+    b Lbk_in_next
+
+// SRET: x0 = cell NP (the result descriptor), x1 = A; bl _bsk_str_set;
+// then as `ret`: a multi-line function restores the caller's line; epilogue
+Lbk_in_op_sret:
+    cbz x25, Lbk_in_bad_place
+    bl Lbk_in_fn_shape
+    mov x3, x0
+    adrp x0, Lbk_in_ldr@PAGE
+    add x0, x0, Lbk_in_ldr@PAGEOFF
+    adrp x1, Lbk_in_px@PAGE
+    add x1, x1, Lbk_in_px@PAGEOFF
+    mov x2, #0
+    bl Lbk_in_cell
+    ldr w0, [x21, #IRI_A]
+    mov x1, #1
+    bl Lbk_in_load_x
+    adrp x2, Lbk_in_rt_str_set@PAGE
+    add x2, x2, Lbk_in_rt_str_set@PAGEOFF
+    FMT Lbk_in_bl_fmt
+    b Lbk_in_ret_tail
+
+// JEOF: d0 = A; bl _bsk_feof; jump to X when w0 is not 0
+Lbk_in_op_jeof:
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_in_load
+    bl Lbk_in_ed_emit_call
+    bl Lbk_in_lblpfx
+    mov x2, x0
+    ldr w3, [x21, #IRI_X]
+    FMT Lbk_in_jeof_fmt
     b Lbk_in_next
 
 // common tail: store d0 into the DST temp's slot
@@ -1064,6 +1236,20 @@ Lbk_in_table:
     .long Lbk_in_op_stparam - Lbk_in_table // OP_STPARAM 82
     .long Lbk_in_op_ldfv - Lbk_in_table // OP_LDFV 83
     .long Lbk_in_op_stfv - Lbk_in_table // OP_STFV 84
+    .long Lbk_in_op_scell - Lbk_in_table // OP_SCELL 85
+    .long Lbk_in_op_sstr - Lbk_in_table // OP_SSTR 86
+    .long Lbk_in_op_sref_d - Lbk_in_table // OP_LEN 87
+    .long Lbk_in_op_sref_d - Lbk_in_table // OP_ASC 88
+    .long Lbk_in_op_sref_d - Lbk_in_table // OP_VAL 89
+    .long Lbk_in_op_sald2 - Lbk_in_table // OP_SALD2 90
+    .long Lbk_in_op_sparam - Lbk_in_table // OP_SPARAM 91
+    .long Lbk_in_op_sfv - Lbk_in_table // OP_SFV 92
+    .long Lbk_in_op_scallfn - Lbk_in_table // OP_SCALLFN 93
+    .long Lbk_in_op_sret - Lbk_in_table // OP_SRET 94
+    .long Lbk_in_op_prtab - Lbk_in_table // OP_FSEL 95 (d0 = A, one call)
+    .long Lbk_in_op_jeof - Lbk_in_table // OP_JEOF 96
+    .long Lbk_in_op_prtab - Lbk_in_table // OP_SCRATCH 97
+    .long Lbk_in_op_prtab - Lbk_in_table // OP_FRESTORE 98
 Lbk_in_table_end:
 .if (Lbk_in_table_end - Lbk_in_table) != 4 * OP_COUNT
     .error "a64_insn.s dispatch table does not cover OP_COUNT opcodes"
@@ -1071,7 +1257,10 @@ Lbk_in_table_end:
 .if (OP_MATINV != OP_MATREDIM + 12) || (OP_MATPRINT != OP_MATREDIM + 2) || (OP_MATSCALE != OP_MATREDIM + 10)
     .error "a64_insn.s MAT name table assumes opcodes 42..54 in contract order"
 .endif
-.if (OP_STFV != OP_SLIT + 29) || (OP_COUNT != OP_STFV + 1)
+.if (OP_FRESTORE != OP_SCELL + 13) || (OP_COUNT != OP_FRESTORE + 1)
+    .error "a64_insn.s Fifth Edition tables assume opcodes 85..98 in contract order"
+.endif
+.if (OP_STFV != OP_SLIT + 29) || (OP_SCELL != OP_STFV + 1)
     .error "a64_insn.s Third/Fourth Edition tables assume opcodes 55..84 in contract order"
 .endif
 .if (OP_SUB != OP_ADD + 1) || (OP_MUL != OP_ADD + 2) || (OP_INT != OP_SIN + 8)
@@ -1251,8 +1440,9 @@ Lbk_in_sdesc_reg:
     add x9, x20, #IRM_SARRAYS
     add x9, x9, x3, lsl #4
     ldr w9, [x9, #IRA_DIMS]
+    sub w9, w9, #1                  // a string list (1) or table (2)
     cmp w9, #1
-    b.ne Lbk_in_sdesc_reg_bad
+    b.hi Lbk_in_sdesc_reg_bad
     mov w2, w0
     mov x4, x2
     mov x5, x2
@@ -1335,17 +1525,10 @@ Lbk_in_fn_shape:
 // ---------------------------------------------------------------------
     .p2align 2
 Lbk_in_check_cell:
-    mov x11, x30                    // fn_shape is a leaf reached by bl
-    bl Lbk_in_fn_shape
+    mov x11, x30                    // fn_cells is a leaf reached by bl
+    bl Lbk_in_fn_cells
     mov x30, x11
-    cbnz w1, 1f
-    cmp w0, #1
-    mov w9, #1
-    csel w9, w0, w9, hi             // L = max(1, NP)
-    b 2f
-1:
-    add w9, w0, #2                  // multi-line: NP + 2
-2:
+    mov w9, w0                      // L local cells
     cmp x3, x9
     b.hs Lbk_in_bad_place
     ret
@@ -1448,6 +1631,112 @@ Lbk_in_desc_reg:
 Lbk_in_desc_reg_bad:
     FAIL Lbk_in_err_letter
 
+// ---------------------------------------------------------------------
+// Lbk_in_fn_kinds -- IRM_FNKINDS bits of the function being emitted
+// (0 for a function with no string parameter and a numeric value).
+// Out: w0 = FNK_* bits.   Leaf, no frame; clobbers x9.
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_in_fn_kinds:
+    add x9, x20, #IRM_FNKINDS
+    ldr w0, [x9, x25, lsl #2]
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_in_fn_cells -- L, the number of 8-byte local cells of the function
+// being emitted (DESIGN.md 5.3): max(1, NP) for main and single-line
+// functions, NP + 1 for a single-line string function (cell NP holds the
+// result address), NP + 2 for a multi-line function.
+// Out: w0 = L.   Leaf, no frame; clobbers x9, x10.
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_in_fn_cells:
+    ldr w0, [x27, #IRF_NPARAMS]
+    ldr w9, [x27, #IRF_KIND]
+    cmp w9, #FUNC_KIND_FNML
+    b.ne 1f
+    add w0, w0, #2
+    ret
+1:
+    add x10, x20, #IRM_FNKINDS
+    ldr w10, [x10, x25, lsl #2]
+    tst w10, #FNK_STRING
+    b.eq 2f
+    add w0, w0, #1
+    ret
+2:
+    cmp w0, #1                      // L = max(1, NP)
+    mov w9, #1
+    csel w0, w9, w0, lo
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_in_callee_kinds -- IRM_FNKINDS bits of a function.
+// In:  w0 = function index (1 + letter).   Out: w0 = FNK_* bits.
+// Leaf, no frame; clobbers x9.
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_in_callee_kinds:
+    add x9, x20, #IRM_FNKINDS
+    ldr w0, [x9, x0, lsl #2]
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_in_call_kinds -- FNK_* bits of the callee of the call whose
+// `fnarg` the current record is: the callfn / scallfn that follows the
+// run of fnarg records (IR.md 3.2).  Preserves x1.
+// In:  x21 = current record
+// Out: w0 = FNK_* bits.   Leaf, no frame; clobbers x9, x10.
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_in_call_kinds:
+    mov x9, x21
+1:
+    add x9, x9, #IRI_SIZE
+    cmp x9, x22
+    b.hs Lbk_in_bad_place           // no call follows
+    ldrh w10, [x9, #IRI_OP]
+    cmp w10, #OP_FNARG
+    b.eq 1b
+    cmp w10, #OP_CALLFN
+    b.eq 2f
+    cmp w10, #OP_SCALLFN
+    b.ne Lbk_in_bad_place
+2:
+    ldr w10, [x9, #IRI_X]
+    cmp w10, #NUM_LETTERS
+    b.hs Lbk_in_bad_letter
+    add w10, w10, #FUNC_FN_BASE
+    add x9, x20, #IRM_FNKINDS
+    ldr w0, [x9, x10, lsl #2]
+    ret
+
+// ---------------------------------------------------------------------
+// Lbk_in_arg0 -- load argument 0 of the callfn / scallfn being emitted
+// (temp A) into d0, or into x0 when the callee's parameter 0 is a
+// string parameter.
+// In:  x21 = current record (X = a valid letter)
+// Frame: 16 bytes
+// ---------------------------------------------------------------------
+    .p2align 2
+Lbk_in_arg0:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    ldr w0, [x21, #IRI_X]
+    add w0, w0, #FUNC_FN_BASE
+    bl Lbk_in_callee_kinds
+    and w9, w0, #FNK_SPARAM0
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    cbnz w9, 1f
+    bl Lbk_in_load
+    b 2f
+1:
+    bl Lbk_in_load_x
+2:
+    ldp x29, x30, [sp], #16
+    ret
+
 // ======================================================================
 // Text templates
 // ======================================================================
@@ -1522,6 +1811,13 @@ Lbk_in_svar_add:
     .asciz "    add x0, x0, #%u\n"
 Lbk_in_svar_addx16:
     .asciz "    add x0, x0, x16\n"
+Lbk_in_scell_base:
+    .ascii "    adrp x0, _bsk_scells@PAGE\n"
+    .asciz "    add x0, x0, _bsk_scells@PAGEOFF\n"
+Lbk_in_jeof_fmt:
+    .ascii "    cbz w0, 1f\n"
+    .ascii "    b %s%u\n"
+    .asciz "1:\n"
 Lbk_in_sjcmp_fmt:
     .ascii "    cmp w0, #0\n"
     .ascii "    b.%s 1f\n"
@@ -1639,6 +1935,16 @@ Lbk_in_rt_mat_mul:    .asciz "_bsk_mat_mul"
 Lbk_in_rt_mat_scale:  .asciz "_bsk_mat_scale"
 Lbk_in_rt_mat_trn:    .asciz "_bsk_mat_trn"
 Lbk_in_rt_mat_inv:    .asciz "_bsk_mat_inv"
+Lbk_in_rt_str_clear: .asciz "_bsk_str_clear"
+Lbk_in_rt_str:      .asciz "_bsk_str"
+Lbk_in_rt_len:      .asciz "_bsk_len"
+Lbk_in_rt_asc:      .asciz "_bsk_asc"
+Lbk_in_rt_val:      .asciz "_bsk_val"
+Lbk_in_rt_saref2:   .asciz "_bsk_saref2"
+Lbk_in_rt_fsel:     .asciz "_bsk_fsel"
+Lbk_in_rt_feof:     .asciz "_bsk_feof"
+Lbk_in_rt_scratch:  .asciz "_bsk_scratch"
+Lbk_in_rt_frestore: .asciz "_bsk_frestore"
 Lbk_in_rt_saref1: .asciz "_bsk_saref1"
 Lbk_in_rt_str_set: .asciz "_bsk_str_set"
 Lbk_in_rt_str_cmp: .asciz "_bsk_str_cmp"
@@ -1740,6 +2046,20 @@ Lbk_in_ed_names:
     .quad 0
     .quad 0
     .quad 0
+    .quad 0                         // scell
+    .quad Lbk_in_rt_str             // sstr
+    .quad Lbk_in_rt_len
+    .quad Lbk_in_rt_asc
+    .quad Lbk_in_rt_val
+    .quad Lbk_in_rt_saref2          // sald2
+    .quad 0                         // sparam
+    .quad 0                         // sfv
+    .quad 0                         // scallfn
+    .quad 0                         // sret
+    .quad Lbk_in_rt_fsel
+    .quad Lbk_in_rt_feof            // jeof
+    .quad Lbk_in_rt_scratch
+    .quad Lbk_in_rt_frestore
 Lbk_in_pfx_tab:
     .quad Lbk_in_pfx_A, Lbk_in_pfx_B, Lbk_in_pfx_C, Lbk_in_pfx_D, Lbk_in_pfx_E, Lbk_in_pfx_F
     .quad Lbk_in_pfx_G, Lbk_in_pfx_H, Lbk_in_pfx_I, Lbk_in_pfx_J, Lbk_in_pfx_K, Lbk_in_pfx_L

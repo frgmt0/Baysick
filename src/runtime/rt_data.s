@@ -3,7 +3,8 @@
 // (LANGUAGE.md 7.4, 7.5, 7.14.4, 7.16; DESIGN.md 6.2, 6.5, 6.7).
 //
 // Defines: _bsk_read _bsk_restore
-//          _bsk_sread _bsk_sread_el _bsk_smat_read   (string data block)
+//          _bsk_sread _bsk_sread_el _bsk_smat_read   (string data block;
+//          _bsk_smat_read also reads string tables, DESIGN.md 6.8)
 // Uses (defined by every compiled program): _bsk_data (double[]),
 // _bsk_data_count (u64), _bsk_sdata (SD[], CAP 0), _bsk_sdata_count (u64).
 //
@@ -130,37 +131,62 @@ _bsk_sread_el:
     b _bsk_str_set                  // tail call: element := copy
 
 // ---------------------------------------------------------------------
-// _bsk_smat_read -- MAT READ of a string list with its current bound n:
-//   elements 1..n receive the next string data values, each stored as
-//   it is read (an OUT OF DATA in the middle ends the program after the
-//   earlier ones). Current bound 0 -> DIMENSION ERROR.
-//   Inputs  : x0 = string-list descriptor (RTA_*, SD elements)
+// _bsk_smat_read -- MAT READ of a string list or (Fifth Edition) string
+//   table with its current shape: a list's elements 1..n, a table's
+//   elements (1,1) .. (1,c), (2,1) .. (r,c) receive the next string data
+//   values, each stored as it is read (an OUT OF DATA in the middle ends
+//   the program after the earlier ones). A zero dimension (list bound 0,
+//   table r or c 0) -> DIMENSION ERROR (LANGUAGE.md 7.14.4).
+//   Inputs  : x0 = string-list or string-table descriptor (RTA_*, SD
+//             elements)
 //   Outputs : none
 //   Errors  : DIMENSION ERROR; OUT OF DATA (exit 0); OUT OF ROOM
 //   Clobbers: x0-x17, d0-d7, d16-d31
-//   Callee-saved used: x19 = address of the next element, x20 = elements
-//             left
-//   Frame   : 32 bytes (frame record + x19, x20)
+//   Callee-saved used: x19 = address of the current row's first element,
+//             x20 = rows left, x21 = columns, x22 = row stride (bytes),
+//             x23 = column index
+//   Frame   : 64 bytes (frame record + x19..x23, padded)
 // ---------------------------------------------------------------------
     .globl _bsk_smat_read
     .p2align 2
 _bsk_smat_read:
-    ldr w9, [x0, #RTA_B1]
-    cbz w9, Lrt_data_dimerr         // an empty list is no vector
-    stp x29, x30, [sp, #-32]!
+    stp x29, x30, [sp, #-64]!
     mov x29, sp
     stp x19, x20, [sp, #16]
+    stp x21, x22, [sp, #32]
+    str x23, [sp, #48]
+    ldr w20, [x0, #RTA_B1]          // rows (a list: its n)
+    cbz w20, Lrt_data_dimerr        // an empty list is no vector
     ldr x19, [x0, #RTA_DATA]
+    ldr w9, [x0, #RTA_DIMS]
+    cmp w9, #1
+    b.ne 1f
+    mov w21, #1                     // a list: n rows of one element
+    mov x22, #SD_SIZE
     add x19, x19, #SD_SIZE          // element 1
-    mov w20, w9                     // n
+    b Lrt_data_smread_row
 1:
-    mov x0, x19
+    ldr w21, [x0, #RTA_B2]          // a table: c columns
+    cbz w21, Lrt_data_dimerr
+    ldr w22, [x0, #RTA_ROWLEN]
+    lsl x22, x22, #4                // row stride: ROWLEN SD records
+    add x19, x19, x22
+    add x19, x19, #SD_SIZE          // element (1,1)
+Lrt_data_smread_row:
+    mov x23, #0
+Lrt_data_smread_col:
+    add x0, x19, x23, lsl #4        // element of column x23 + 1
     bl _bsk_sread
-    add x19, x19, #SD_SIZE
+    add x23, x23, #1
+    cmp x23, x21
+    b.lo Lrt_data_smread_col
+    add x19, x19, x22               // next row
     subs x20, x20, #1
-    b.ne 1b
+    b.ne Lrt_data_smread_row
+    ldr x23, [sp, #48]
+    ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #32
+    ldp x29, x30, [sp], #64
     ret
 
 Lrt_data_dimerr:

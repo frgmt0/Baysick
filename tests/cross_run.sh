@@ -15,7 +15,8 @@
 # case assembles + links the compiler's .s and compares the run exactly like
 # tests/run.sh (same sidecar formats, including the optional NAME.in stdin
 # file, same output format, same exit status: 0 all passed, 1 any failed,
-# 2 setup error). docs/DESIGN.md section 8.3.
+# 2 setup error). Every case runs in a fresh empty
+# working directory with NAME.files/ copied in and NAME.expect/ checked afterwards (8.5). docs/DESIGN.md section 8.3.
 
 AS=${AS:-as}
 CC=${CC:-gcc}
@@ -66,11 +67,12 @@ PASS=0
 FAIL=0
 FAILED=""
 
-# run_limited SECONDS INFILE CMD... : run CMD with stdin from INFILE, kill it
-# after SECONDS; returns CMD's exit status (137 if killed). Caller redirects output.
+# run_limited SECONDS INFILE WORKDIR CMD... : run CMD in directory WORKDIR with stdin from
+# INFILE, kill it after SECONDS; returns CMD's exit status (137 if killed). Caller redirects
+# output. The exec makes the subshell become CMD, so the kill reaches the program itself.
 run_limited() {
-    _t=$1; _in=$2; shift 2
-    "$@" <"$_in" &
+    _t=$1; _in=$2; _wd=$3; shift 3
+    (cd "$_wd" && exec "$@" <"$_in") &
     _cpid=$!
     (
         _i=0
@@ -113,6 +115,41 @@ meta_get() { # meta_get FILE KEY
     sed -n "s/^$2=//p" "$1" | head -1
 }
 
+# newwork BASE : make the case's fresh, empty working directory $WORK below $TMP and copy the
+# fixtures BASE.files/ into it (docs/DESIGN.md section 8.5). Returns 1 on failure.
+newwork() {
+    WORK=$(mktemp -d "$TMP/work.XXXXXX") || return 1
+    if [ -d "$1.files" ]; then cp -R "$1.files/." "$WORK/" || return 1; fi
+    return 0
+}
+
+# relfiles DIR : sorted relative paths (no leading ./) of the regular files under DIR.
+# Names have no blanks or glob characters (the corpus rule), so callers may word-split.
+relfiles() {
+    (cd "$1" && find . -type f | sed 's|^\./||' | sort)
+}
+
+# check_files NAME BASE : section 8.5 checks 1 and 2 of the files left in $WORK. Records one
+# failure and returns 1 on the first problem.
+check_files() {
+    _n=$1; _b=$2
+    if [ -d "$_b.expect" ]; then
+        for _r in $(relfiles "$_b.expect"); do
+            if [ ! -f "$WORK/$_r" ]; then fail "$_n" "missing file $_r"; return 1; fi
+            same "$_b.expect/$_r" "$WORK/$_r" "file $_r" "$_n" || return 1
+        done
+    fi
+    for _r in $(relfiles "$WORK"); do
+        if [ -f "$_b.expect/$_r" ]; then continue; fi
+        if [ -f "$_b.files/$_r" ]; then
+            if cmp -s "$_b.files/$_r" "$WORK/$_r"; then continue; fi
+            fail "$_n" "fixture $_r changed"; return 1
+        fi
+        fail "$_n" "unexpected file $_r"; return 1
+    done
+    return 0
+}
+
 # build NAME BASE : packfail check, assemble and link BASE.s into $TMP/prog.
 # Returns 0 on success; otherwise records the failure and returns 1.
 build() {
@@ -148,7 +185,8 @@ for n in $(case_names programs); do
     base=$BUNDLE/cases/programs/$n
     if [ ! -f "$base.out" ]; then fail "$name" "missing $n.out"; continue; fi
     build "$name" "$base" || continue
-    run_limited "$TIMEOUT" "$(stdin_for "$base")" "$TMP/prog" >"$TMP/r.out" 2>"$TMP/r.err"
+    if ! newwork "$base"; then fail "$name" "cannot prepare the work directory"; rm -rf "$WORK"; continue; fi
+    run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$TMP/prog" >"$TMP/r.out" 2>"$TMP/r.err"
     st=$?
     experr=$TMP/empty
     [ -f "$base.err" ] && experr=$base.err
@@ -156,6 +194,8 @@ for n in $(case_names programs); do
     [ $st -eq 0 ] || { fail "$name" "exit status $st, expected 0"; ok=0; }
     [ $ok = 1 ] && { same "$base.out" "$TMP/r.out" "stdout" "$name" || ok=0; }
     [ $ok = 1 ] && { same "$experr" "$TMP/r.err" "stderr" "$name" || ok=0; }
+    [ $ok = 1 ] && { check_files "$name" "$base" || ok=0; }
+    rm -rf "$WORK"
     [ $ok = 1 ] && pass
 done
 
@@ -168,7 +208,8 @@ for n in $(case_names errors); do
     fi
     want=$(meta_get "$base.meta" exit)
     build "$name" "$base" || continue
-    run_limited "$TIMEOUT" "$(stdin_for "$base")" "$TMP/prog" >"$TMP/r.out" 2>"$TMP/r.err"
+    if ! newwork "$base"; then fail "$name" "cannot prepare the work directory"; rm -rf "$WORK"; continue; fi
+    run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$TMP/prog" >"$TMP/r.out" 2>"$TMP/r.err"
     st=$?
     expout=$TMP/empty
     [ -f "$base.out" ] && expout=$base.out
@@ -176,6 +217,8 @@ for n in $(case_names errors); do
     [ "$st" = "$want" ] || { fail "$name" "program exit status $st, expected $want"; ok=0; }
     [ $ok = 1 ] && { same "$base.err" "$TMP/r.err" "stderr" "$name" || ok=0; }
     [ $ok = 1 ] && { same "$expout" "$TMP/r.out" "stdout" "$name" || ok=0; }
+    [ $ok = 1 ] && { check_files "$name" "$base" || ok=0; }
+    rm -rf "$WORK"
     [ $ok = 1 ] && pass
 done
 

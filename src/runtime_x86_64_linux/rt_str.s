@@ -1,9 +1,9 @@
 # =====================================================================
 # src/runtime_x86_64_linux/rt_str.s -- string values: assignment and
-# comparison (LANGUAGE.md 4.4, 7.1, 7.7; DESIGN.md 6.7).
+# comparison (LANGUAGE.md 4.4, 7.1, 7.7; DESIGN.md 6.7, 6.8).
 #
 # Defines (global, runtime.inc):
-#   bsk_str_set bsk_str_cmp
+#   bsk_str_set bsk_str_cmp bsk_str_clear
 # Defines (private to the runtime, .globl + .hidden):
 #   bsk_rt_str_reserve   make an SD own at least n bytes (OUT OF ROOM)
 #   bsk_rt_str_assign    SD := copy of n bytes (INPUT, MAT INPUT,
@@ -146,6 +146,24 @@ bsk_str_set:
 1:
     ret
     .size bsk_str_set, . - bsk_str_set
+
+# ---------------------------------------------------------------------
+# bsk_str_clear -- the string := empty (DESIGN.md 6.8: a multi-line
+#   string function's value at its start). LEN := 0; PTR and CAP are
+#   kept, so an owned buffer stays owned.
+#   Inputs  : %rdi = SD
+#   Outputs : none
+#   Clobbers: none
+#   Callee-saved used: none
+#   Frame   : none (leaf)
+# ---------------------------------------------------------------------
+    .globl bsk_str_clear
+    .type bsk_str_clear, @function
+    .p2align 4
+bsk_str_clear:
+    movl $0, SD_LEN(%rdi)           # LEN := 0
+    ret
+    .size bsk_str_clear, . - bsk_str_clear
 
 # ---------------------------------------------------------------------
 # bsk_str_cmp -- compare two strings (LANGUAGE.md 7.7).

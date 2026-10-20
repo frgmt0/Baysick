@@ -3,27 +3,34 @@
 // 4.3-4.5, 7.19; IR.md 4.2-4.3).
 //
 //   _fe_add_label(x0=bytes, w1=len) -> w0 string id   (TOO MANY LABELS)
-//   _fe_sarray_use(w0=letter)                         string list used
-//   _fe_ssubscript(w0=letter) -> w0 subscript temp    after "L$("
-//   _fe_sref_try() -> w0 sref temp or -1              a string reference?
+//   _fe_sref_try() -> w0 sref temp or -1              a string expression?
 //   _fe_sref_need() -> w0 sref temp                   one is required
 //   _fe_sref_end()                                    no arithmetic after it
 //   _fe_change()                                      the CHANGE statement
 //
-// A string reference is a string constant ("..." -> `slit sK`), a string
-// variable (V$ -> `svar V$`) or a string list element (L$(i) -> i, then
-// `sald1 L$, ti`). There are no string expressions: wherever a statement
-// needs a string, exactly one reference is parsed; a number there, or an
-// arithmetic operator after it, is MISMATCHED STRING OPERATION (4.5).
+// _fe_sref_try / _fe_sref_need are the string expressions of fe_sexpr.s
+// (constants, string variables, list and table elements, STR$, FNx$,
+// string parameters; 4.5-4.6): wherever a statement needs a string,
+// exactly one is parsed; a number there, or an arithmetic operator after
+// it, is MISMATCHED STRING OPERATION (4.5). A CHANGE target may be a
+// string variable, a list or table element or a string parameter.
 // =====================================================================
 .include "baysick.inc"
 
 .equ FE_PEEK_EOL,       0x100       // _fe_peek result beyond the line end
-.equ FE_ARR_ENTRY,      16          // array-state entry (_fe_sarrays), see fe_compile.s
 
 // FE_NONE: set the optional _fe_emit / _fe_emit_new operands to "unused".
 .macro FE_NONE
     mov w1, #IR_NONE
+    mov w2, #IR_NONE
+    mov w3, #IR_NONE
+    mov w4, #IR_NONE
+    mov x5, #0
+    mov w6, #REL_NONE
+.endm
+
+// FE_NONE_KEEP1: as FE_NONE, but w1 (operand A) is kept.
+.macro FE_NONE_KEEP1
     mov w2, #IR_NONE
     mov w3, #IR_NONE
     mov w4, #IR_NONE
@@ -71,175 +78,30 @@ _fe_add_label:
     ret
 
 // ---------------------------------------------------------------------
-// _fe_sarray_use -- string list `letter` is used: it exists, with the
-//   default bound LIM_DEFAULT_BOUND unless a DIM sets one.
-//   in:  w0 = letter
-//   out: none
-//   clobbers: x9-x11   leaf, no frame
-// ---------------------------------------------------------------------
-    .globl _fe_sarray_use
-    .p2align 2
-_fe_sarray_use:
-    adrp x9, _fe_sarrays@PAGE
-    add x9, x9, _fe_sarrays@PAGEOFF
-.if (FE_ARR_ENTRY != 16)
-    .error "fe_str.s shifts the letter by 4: FE_ARR_ENTRY must be 16"
-.endif
-    add x9, x9, w0, uxtw #4             // &sarrays[letter] (16 bytes each)
-    ldr w10, [x9]
-    cbnz w10, 1f
-    mov w10, #1                         // a list
-    str w10, [x9]
-    mov w11, #LIM_DEFAULT_BOUND
-    str w11, [x9, #4]
-    str wzr, [x9, #8]
-1:
-    ret
-
-// ---------------------------------------------------------------------
-// _fe_ssubscript -- the subscript of a string list element "i )" after
-//   "L$(" (already consumed). One '(' level; a second subscript is
-//   ILLEGAL VARIABLE (no string tables, 4.4), anything else before ')'
-//   ILLEGAL FORMULA. Marks the list used.
-//   in:  w0 = letter
-//   out: w0 = temp of i
-//   clobbers: x0-x17, d0-d7
-//   callee-saved: w19 = letter, w20 = i
-//   frame: 32 bytes
-// ---------------------------------------------------------------------
-    .globl _fe_ssubscript
-    .p2align 2
-_fe_ssubscript:
-    stp x29, x30, [sp, #-32]!
-    mov x29, sp
-    stp x19, x20, [sp, #16]
-    mov w19, w0
-    bl _fe_paren_open
-    bl _fe_expr
-    mov w20, w0
-    bl _fe_next_op
-    cmp w0, #TK_RPAREN
-    b.eq 2f
-    cmp w0, #TK_COMMA
-    b.ne 1f
-    mov w0, #ERR_ILLEGAL_VARIABLE       // L$(1,2)
-    bl _fe_err
-1:
-    mov w0, #ERR_ILLEGAL_FORMULA
-    bl _fe_err
-2:
-    // ')' consumed: leave the nesting level
-    adrp x9, _fe_depth@PAGE
-    ldr w10, [x9, _fe_depth@PAGEOFF]
-    sub w10, w10, #1
-    str w10, [x9, _fe_depth@PAGEOFF]
-    mov w0, w19
-    bl _fe_sarray_use
-    mov w0, w20
-    ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #32
-    ret
-
-// ---------------------------------------------------------------------
-// _fe_sref_try -- if a string reference starts here, parse and lower it.
-//   An unterminated string constant is INCORRECT FORMAT.
+// _fe_sref_try -- if a string expression starts here, parse and lower
+//   it: a tail call of _fe_sexpr_try (fe_sexpr.s), which documents the
+//   rules (LANGUAGE.md 4.6).
 //   in:  scanner at operand position
 //   out: w0 = sref temp, or -1 with the scanner unchanged
-//   clobbers: x0-x17, d0-d7
-//   callee-saved: x19 = start position, w20 = letter / subscript temp
-//   frame: 80 bytes (frame record, x19-x20, 40-byte token at sp+32)
+//   clobbers: as _fe_sexpr_try   leaf branch, no frame
 // ---------------------------------------------------------------------
     .globl _fe_sref_try
     .p2align 2
 _fe_sref_try:
-    stp x29, x30, [sp, #-80]!
-    mov x29, sp
-    stp x19, x20, [sp, #16]
-    bl _fe_getpos
-    mov x19, x0
-    mov w0, #SCAN_OPERAND
-    add x1, sp, #32
-    bl _fe_scan
-    cmp w0, #TK_STRING
-    b.eq Lfe_sref_try_const
-    cmp w0, #TK_SVAR
-    b.eq Lfe_sref_try_svar
-    cmp w0, #TK_SARRAY
-    b.eq Lfe_sref_try_sarray
-    cmp w0, #TK_BAD
-    b.ne Lfe_sref_try_none
-    ldr x9, [sp, #(32 + TOK_PTR)]
-    ldrb w9, [x9]
-    cmp w9, #'"'
-    b.ne Lfe_sref_try_none
-    mov w0, #ERR_INCORRECT_FORMAT       // unterminated string constant
-    bl _fe_err
-Lfe_sref_try_none:
-    mov x0, x19
-    bl _fe_setpos
-    mov w0, #-1
-    b Lfe_sref_try_ret
-Lfe_sref_try_const:
-    // tN = slit sK
-    ldr x0, [sp, #(32 + TOK_PTR)]
-    ldr w1, [sp, #(32 + TOK_LEN)]
-    bl _fe_add_label
-    mov w9, w0
-    FE_NONE
-    mov w4, w9
-    mov w0, #OP_SLIT
-    bl _fe_emit_new
-    b Lfe_sref_try_ret
-Lfe_sref_try_svar:
-    // tN = svar V$
-    FE_NONE
-    ldr w4, [sp, #(32 + TOK_SLOT)]
-    mov w0, #OP_SVAR
-    bl _fe_emit_new
-    b Lfe_sref_try_ret
-Lfe_sref_try_sarray:
-    // i; tN = sald1 L$, ti
-    ldr w20, [sp, #(32 + TOK_INDEX)]
-    mov w0, w20
-    bl _fe_ssubscript
-    mov w9, w0
-    FE_NONE
-    mov w1, w9
-    mov w4, w20
-    mov w0, #OP_SALD1
-    bl _fe_emit_new
-Lfe_sref_try_ret:
-    ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #80
-    ret
+    b _fe_sexpr_try                     // a string expression (fe_sexpr.s)
 
 // ---------------------------------------------------------------------
-// _fe_sref_need -- a string reference is required here: a number (or
-//   anything else) is MISMATCHED STRING OPERATION; nothing at all (end
-//   of the line) is ILLEGAL FORMULA, as for a missing operand.
+// _fe_sref_need -- a string expression is required here: a tail call of
+//   _fe_sexpr_need (fe_sexpr.s; MISMATCHED STRING OPERATION or ILLEGAL
+//   FORMULA as LANGUAGE.md 5.2 decides).
 //   in:  scanner at operand position
 //   out: w0 = sref temp
-//   clobbers: x0-x17, d0-d7
-//   callee-saved: none used
-//   frame: 16 bytes
+//   clobbers: as _fe_sexpr_need   leaf branch, no frame
 // ---------------------------------------------------------------------
     .globl _fe_sref_need
     .p2align 2
 _fe_sref_need:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-    bl _fe_sref_try
-    tbz w0, #31, 2f
-    bl _fe_at_eol
-    mov w9, w0
-    mov w0, #ERR_MISMATCHED_STRING
-    cbz w9, 1f
-    mov w0, #ERR_ILLEGAL_FORMULA
-1:
-    bl _fe_err
-2:
-    ldp x29, x30, [sp], #16
-    ret
+    b _fe_sexpr_need                    // a string expression (fe_sexpr.s)
 
 // ---------------------------------------------------------------------
 // _fe_sref_end -- after a string reference outside PRINT, an arithmetic
@@ -334,6 +196,17 @@ Lfe_change_n2s:
     ldr w0, [sp, #(48 + TOK_ERR)]       // e.g. X1$( or an open quote
     bl _fe_err
 1:
+    // a function call is never a target: FNx$, STR$( -> ILLEGAL VARIABLE
+    cmp w0, #TK_SFN
+    b.eq Lfe_change_var
+    cmp w0, #TK_SFN0
+    b.eq Lfe_change_var
+    cmp w0, #TK_BUILTIN
+    b.ne 3f
+    ldr w9, [sp, #(48 + TOK_INDEX)]
+    cmp w9, #BI_STR
+    b.eq Lfe_change_var
+3:
     cmp w0, #TK_STRING
     b.eq Lfe_change_var
     cmp w0, #TK_EOL
@@ -341,6 +214,18 @@ Lfe_change_n2s:
     mov w0, #ERR_MISMATCHED_STRING      // a numeric target
     bl _fe_err
 Lfe_change_svar:
+    // a string parameter of the enclosing DEF: ts = sparam k
+    ldr w0, [sp, #(48 + TOK_SLOT)]
+    bl _fe_sparam_index
+    tbnz w0, #31, 3f
+    mov w9, w0
+    FE_NONE
+    mov x5, x9                          // IMM = parameter index k
+    mov w0, #OP_SPARAM
+    bl _fe_emit_new
+    mov w19, w0
+    b 2f
+3:
     // ts = svar V$
     FE_NONE
     ldr w4, [sp, #(48 + TOK_SLOT)]
@@ -349,12 +234,37 @@ Lfe_change_svar:
     mov w19, w0
     b 2f
 Lfe_change_sarray:
-    // i now; then `chgn2s L, L$, ti`: the runtime converts the list
-    // first and checks the subscript at the store (LANGUAGE.md 7.19)
+    // L$(i) or T$(i, j)
     ldr w22, [sp, #(48 + TOK_INDEX)]
     mov w0, w22
-    bl _fe_ssubscript
+    bl _fe_sarr_subscripts
     mov w19, w0
+    cmp w2, #1
+    b.eq Lfe_change_elem
+    // a table element: i; j; tC = scell; chgn2s L, tC; te = sald2 T$,
+    // ti, tj; sset te, tC (the subscripts are checked at the store)
+    str w1, [sp, #48]                   // j (the token is no longer needed)
+    bl _fe_expect_eol
+    bl _fe_new_scell
+    str w0, [sp, #52]                   // tC
+    FE_NONE
+    ldr w1, [sp, #52]
+    mov w4, w20
+    mov w0, #OP_CHGN2S
+    bl _fe_emit
+    FE_NONE
+    mov w1, w19
+    ldr w2, [sp, #48]
+    mov w4, w22
+    mov w0, #OP_SALD2
+    bl _fe_emit_new
+    mov w1, w0
+    FE_NONE_KEEP1
+    ldr w2, [sp, #52]
+    mov w0, #OP_SSET
+    bl _fe_emit
+    b Lfe_change_ret
+Lfe_change_elem:
     bl _fe_expect_eol
     FE_NONE
     mov w2, w19                         // B = subscript temp

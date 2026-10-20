@@ -16,12 +16,18 @@
 //   %a  %b        array letter in A / in B (MAT opcodes, IR.md 3.1)
 //   %P            MAT PRINT mode in IMM: "zoned" or "packed"
 //   %E            RESTORE variant in IMM: "all", "num" or "str"
+//   %c            string temp cell in X: "%s<n>" (Fifth Edition)
 // Six opcodes have a second template chosen by an operand: `matredim`
 // with B = IR_NONE, `param` with IMM = 0 ("param", not "param 0"),
 // `callfn` with A = IR_NONE (a call without arguments), and the element
-// form (A = IR_NONE) of `sread`, `insv` and `chgn2s` (IR.md 3.2).
+// form (A = IR_NONE) of `sread`, `insv` and `chgn2s` (IR.md 3.2). With
+// the Fifth Edition three more do: `sparam` with IMM = 0,
+// `scallfn` with A = IR_NONE and `smatredim` with a column temp in B
+// (a string table, IR.md 3.3).
 // The dump also has the `sarray` and `sdata` lines and the three FN
-// header forms (IR.md 5).
+// header forms (IR.md 5); the Fifth Edition adds the
+// `dims=2` sarray form, the `stemps` and `file` lines and the "$" of a
+// string function name and of a string parameter.
 // =====================================================================
 .include "baysick.inc"
 
@@ -138,7 +144,7 @@ Lird_array_next:
     add x21, x21, #1
     cmp x21, #NUM_LETTERS
     b.lo Lird_array_loop
-    // ---- string lists A$..Z$ (used ones only): always dims=1 ----
+    // ---- string arrays A$..Z$ (used ones only): lists, Fifth Edition tables ----
     mov x21, #0
 Lird_sarray_loop:
     mov x9, #IRA_SIZE
@@ -157,6 +163,14 @@ Lird_sarray_loop:
     IRD_PUTS Lird_s_b1
     ldr w9, [x22, #IRA_B1]
     IRD_PUTU x9
+    // a string table (Fifth Edition) also shows b2
+    ldr w9, [x22, #IRA_DIMS]
+    cmp w9, #1
+    b.eq 1f
+    IRD_PUTS Lird_s_b2
+    ldr w9, [x22, #IRA_B2]
+    IRD_PUTU x9
+1:
     IRD_PUTC '\n'
 Lird_sarray_next:
     add x21, x21, #1
@@ -221,6 +235,36 @@ Lird_sdata_loop:
     add x21, x21, #1
     b Lird_sdata_loop
 Lird_sdata_done:
+    // ---- stemps <n>, only if there are string temp cells ----
+    ldr w9, [x20, #IRM_NSTEMPS]
+    cbz w9, Lird_stemps_done
+    IRD_PUTS Lird_s_stemps
+    ldr w9, [x20, #IRM_NSTEMPS]
+    IRD_PUTU x9
+    IRD_PUTC '\n'
+Lird_stemps_done:
+    // ---- FILES names: file #<n> "<bytes>", n from 1 ----
+    mov x21, #0
+Lird_file_loop:
+    ldr w9, [x20, #IRM_NFILES]
+    cmp x21, x9
+    b.hs Lird_files_done
+    ldr x10, [x20, #IRM_FILES]
+    mov x11, #IRS_SIZE
+    madd x22, x21, x11, x10             // x22 = FILES entry
+    IRD_PUTS Lird_s_file
+    add x9, x21, #1                     // file number
+    IRD_PUTU x9
+    IRD_PUTS Lird_s_quote_open
+    // raw bytes of the name
+    mov x0, x19
+    ldr x1, [x22, #IRS_PTR]
+    ldr w2, [x22, #IRS_LEN]
+    bl _ob_putn
+    IRD_PUTS Lird_s_quote_close
+    add x21, x21, #1
+    b Lird_file_loop
+Lird_files_done:
     // ---- functions: main, then FNA..FNZ ----
     mov x21, #0
 Lird_func_loop:
@@ -239,6 +283,13 @@ Lird_func_loop:
     mov x0, x19
     mov w1, w9
     bl _ob_putc
+    // a string function FNx$ (FNK_STRING, IR.md 5 FNAME)
+    add x9, x20, #IRM_FNKINDS
+    ldr w9, [x9, x21, lsl #2]
+    tst w9, #FNK_STRING
+    b.eq 7f
+    IRD_PUTC '$'
+7:
     ldr w9, [x23, #IRF_KIND]
     cmp w9, #FUNC_KIND_FNML
     b.eq 5f
@@ -250,11 +301,19 @@ Lird_func_loop:
     mov x0, x19
     ldr w1, [x23, #IRF_PARAM]
     bl Lird_var
+    // "$" for a string parameter (bit 0 of the function's kind word)
+    add x9, x20, #IRM_FNKINDS
+    ldr w9, [x9, x21, lsl #2]
+    tbz w9, #0, 4f
+    IRD_PUTC '$'
     b 4f
 5:
     // multi-line: " params=<list> def=<n> fnend=<n>"
     mov x0, x19
     mov x1, x23
+    mov w2, #0
+    add x9, x20, #IRM_FNKINDS
+    ldr w2, [x9, x21, lsl #2]
     bl Lird_plist
     IRD_PUTS Lird_s_def
     ldr w9, [x23, #IRF_DEFLINE]
@@ -267,6 +326,9 @@ Lird_func_loop:
     // single-line with 0 or 2..8 parameters: " params=<list>"
     mov x0, x19
     mov x1, x23
+    mov w2, #0
+    add x9, x20, #IRM_FNKINDS
+    ldr w2, [x9, x21, lsl #2]
     bl Lird_plist
 4:
     IRD_PUTS Lird_s_temps
@@ -368,6 +430,29 @@ Lird_insn:
     b.ne 8f
     IRD_ADR x22, Lird_f_chgn2s_el
 8:
+    // `sparam` with k = 0 prints no index
+    cmp w9, #OP_SPARAM
+    b.ne 1f
+    ldr x11, [x21, #IRI_IMM]
+    cbnz x11, 1f
+    IRD_ADR x22, Lird_f_sparam0
+1:
+    // `scallfn` without arguments (A == IR_NONE)
+    cmp w9, #OP_SCALLFN
+    b.ne 2f
+    ldr w11, [x21, #IRI_A]
+    cmn w11, #1
+    b.ne 2f
+    IRD_ADR x22, Lird_f_scallfn0
+2:
+    // `smatredim` of a string table: the column temp in B
+    cmp w9, #OP_SMATREDIM
+    b.ne 3f
+    ldr w11, [x21, #IRI_B]
+    cmn w11, #1
+    b.eq 3f
+    IRD_ADR x22, Lird_f_smatredim2
+3:
 Lird_fmt_loop:
     ldrb w1, [x22], #1
     cbz w1, Lird_insn_ret
@@ -412,6 +497,8 @@ Lird_fmt_directive:
     b.eq Lird_fmt_E
     cmp w9, #'I'
     b.eq Lird_fmt_I
+    cmp w9, #'c'
+    b.eq Lird_fmt_c
     // only '%Q' is left (the templates are fixed)
     ldrh w1, [x21, #IRI_REL]
     mov x0, x19
@@ -493,6 +580,10 @@ Lird_fmt_E:
     mov x0, x19
     bl _ob_puts
     b Lird_fmt_loop
+Lird_fmt_c:
+    // string temp cell "%s<n>"
+    IRD_PUTC '%'
+    b Lird_fmt_S
 Lird_fmt_S:
     IRD_PUTC 's'
     ldr w9, [x21, #IRI_X]
@@ -520,22 +611,26 @@ Lird_insn_ret:
 
 // ---------------------------------------------------------------------
 // Lird_plist -- print " params=" and the parameter list of a function:
-// "-" without parameters, else the PARAMS slot names joined by ",".
-//   in:  x0 = OutBuf*, x1 = Function*
+// "-" without parameters, else the PARAMS slot names joined by ",", each
+// followed by "$" if it is a string parameter (bit k of the kind word).
+//   in:  x0 = OutBuf*, x1 = Function*, w2 = FNK_* kind word (0: all
+//        parameters numeric)
 //   out: none
 //   clobbers: x0-x17
 //   callee-saved: x19 = OutBuf*, x20 = Function*, x21 = index k,
-//                 x22 = NPARAMS
-//   frame: 48 bytes
+//                 x22 = NPARAMS, x23 = kind word
+//   frame: 64 bytes
 // ---------------------------------------------------------------------
     .p2align 2
 Lird_plist:
-    stp x29, x30, [sp, #-48]!
+    stp x29, x30, [sp, #-64]!
     mov x29, sp
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
+    str x23, [sp, #48]
     mov x19, x0
     mov x20, x1
+    mov w23, w2
     IRD_PUTS Lird_s_params
     ldr w22, [x20, #IRF_NPARAMS]
     cbnz w22, 1f
@@ -552,13 +647,19 @@ Lird_plist:
     ldr w1, [x9, #IRF_PARAMS]
     mov x0, x19
     bl Lird_var
+    // string parameter k: "$"
+    lsr w9, w23, w21
+    tbz w9, #0, 5f
+    IRD_PUTC '$'
+5:
     add x21, x21, #1
     cmp x21, x22
     b.lo 2b
 3:
+    ldr x23, [sp, #48]
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #48
+    ldp x29, x30, [sp], #64
     ret
 
 // ---------------------------------------------------------------------
@@ -740,6 +841,8 @@ Lird_s_rel:         .asciz "rel"
 Lird_s_badop:       .asciz "op "
 Lird_s_zoned:       .asciz "zoned"
 Lird_s_packed:      .asciz "packed"
+Lird_s_stemps:      .asciz "stemps "
+Lird_s_file:        .asciz "file #"
 
     .section __TEXT,__const
 Lird_relnames:      // REL_EQ .. REL_GE, 3 bytes each
@@ -849,6 +952,24 @@ Lird_f_stparam:   .asciz "stparam %N, %A"
 Lird_f_ldfv:      .asciz "%D = ldfv"
 Lird_f_stfv:      .asciz "stfv %A"
 
+Lird_f_scell:      .asciz "%D = scell %c"
+Lird_f_sstr:       .asciz "sstr %A, %B"
+Lird_f_len:        .asciz "%D = len %A"
+Lird_f_asc:        .asciz "%D = asc %A"
+Lird_f_val:        .asciz "%D = val %A"
+Lird_f_sald2:      .asciz "%D = sald2 %R$, %A, %B"
+Lird_f_sparam:     .asciz "%D = sparam %N"
+Lird_f_sparam0:    .asciz "%D = sparam"
+Lird_f_sfv:        .asciz "%D = sfv"
+Lird_f_scallfn:    .asciz "scallfn %B, %F, %A"
+Lird_f_scallfn0:   .asciz "scallfn %B, %F"
+Lird_f_sret:       .asciz "sret %A"
+Lird_f_fsel:       .asciz "fsel %A"
+Lird_f_jeof:       .asciz "jeof %A, %L"
+Lird_f_scratch:    .asciz "scratch %A"
+Lird_f_frestore:   .asciz "frestore %A"
+Lird_f_smatredim2: .asciz "smatredim %R$, %A, %B"
+
     .section __DATA,__const
     .p2align 3
 Lird_formats:
@@ -875,6 +996,11 @@ Lird_formats:
     .quad Lird_f_restore, Lird_f_randomize, Lird_f_sgn, Lird_f_cot
     .quad Lird_f_num, Lird_f_det, Lird_f_fnarg, Lird_f_stparam
     .quad Lird_f_ldfv, Lird_f_stfv
+    // Fifth Edition opcodes (IR.md 3.3)
+    .quad Lird_f_scell, Lird_f_sstr, Lird_f_len, Lird_f_asc
+    .quad Lird_f_val, Lird_f_sald2, Lird_f_sparam, Lird_f_sfv
+    .quad Lird_f_scallfn, Lird_f_sret, Lird_f_fsel, Lird_f_jeof
+    .quad Lird_f_scratch, Lird_f_frestore
 Lird_formats_end:
 
 // the template table must have exactly one entry per opcode

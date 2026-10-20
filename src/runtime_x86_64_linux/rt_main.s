@@ -41,7 +41,11 @@ main:
 
 # ---------------------------------------------------------------------
 # bsk_end -- END / STOP: normal termination.
-#   Purpose : write the pending-line newline (if col != 0), flush the
+#   Purpose : finish the files in write mode (bsk_rt_files_finish:
+#             pending newline, flush; DESIGN.md 6.8); if writing one of
+#             them failed, end as the run-time error CAN'T WRITE FILE
+#             (bsk_curline is still the END / STOP line). Otherwise write
+#             stdout's pending-line newline (if col != 0), flush the
 #             stdout buffer, exit with status EXIT_RUN_OK, or
 #             EXIT_RUN_ERROR if writing stdout failed (LANGUAGE.md 10).
 #   Inputs  : none
@@ -58,6 +62,12 @@ bsk_end:
     pushq %rbp
     movq %rsp, %rbp
     andq $-16, %rsp                 # noreturn: force 16-byte alignment
+    call bsk_rt_files_finish        # every file in write mode, in order
+    testl %eax, %eax
+    jz 1f
+    movl $ERR_CANT_WRITE_FILE, %edi # a file's last output was lost
+    call bsk_err                    # noreturn
+1:
     call bsk_rt_finish_output       # newline if mid-line, then flush
     movl $EXIT_RUN_OK, %edi         # END and STOP exit 0 ...
     movl $EXIT_RUN_ERROR, %ecx

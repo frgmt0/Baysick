@@ -255,8 +255,19 @@ Lfe_compile_sarr_loop:
     cmp w22, #NUM_LETTERS
     b.hs Lfe_compile_sarr_done
     add x10, x20, x22, lsl #4           // &sarrays[letter]
-    ldr w9, [x10]                       // dims (0 = unused, 1 = list)
+    ldr w9, [x10]                       // dims (0 = unused, 1 = list, 2 = table)
     cbz w9, 1f
+    cmp w9, #2
+    b.ne 2f
+    // a string table (Fifth Edition): b1, b2, flags
+    ldr w2, [x10, #4]
+    ldr w3, [x10, #8]
+    ldr w4, [x10, #12]
+    mov x0, x19
+    mov w1, w22
+    bl _ir_set_sarray2
+    b 1f
+2:
     ldr w2, [x10, #4]                   // b1
     ldr w3, [x10, #12]                  // flags
     mov x0, x19
@@ -496,6 +507,15 @@ Lfe_compile_state_tab:
     .quad _fe_undef_line, 8
     .quad _fe_xfer_line, 8
     .quad _fe_mat_names, 8
+    .quad _fe_ctx_skinds, 8
+    .quad _fe_ml_kinds, NUM_LETTERS * 4
+    .quad _fe_fn_kinds, NUM_LETTERS * 4
+    .quad _fe_smat_names, 8
+    .quad _fe_nfiles, 8
+    .quad _fe_cur_file, 8
+    .quad _fe_calllog, 8
+    .quad _fe_ncalls, 8
+    .quad _fe_capcalls, 8
     .quad _fe_err_code, 8
     .quad _fe_err_line, 8
 Lfe_compile_state_tab_end:
@@ -516,6 +536,8 @@ Lfe_compile_state_tab_end:
     .globl _fe_nfors, _fe_forsp, _fe_forbase, _fe_forstack
     .globl _fe_strbytes, _fe_ndata, _fe_nsdata, _fe_has_read, _fe_has_sread
     .globl _fe_has_end, _fe_undef_line, _fe_xfer_line, _fe_mat_names
+    .globl _fe_ctx_skinds, _fe_ml_kinds, _fe_fn_kinds, _fe_smat_names
+    .globl _fe_nfiles, _fe_cur_file, _fe_calllog, _fe_ncalls, _fe_capcalls
 // scanner window over the current line's compacted statement text
 .zerofill __DATA,__bss,_fe_pos,8,3          // ptr: next byte to scan
 .zerofill __DATA,__bss,_fe_end,8,3          // ptr: one past the last byte
@@ -577,6 +599,23 @@ Lfe_compile_state_tab_end:
 .zerofill __DATA,__bss,_fe_xfer_line,8,3    // u32 first line jumping across a body boundary
 // MAT: bit L set if letter L is named by a MAT statement (fe_mat.s)
 .zerofill __DATA,__bss,_fe_mat_names,8,3
+// Fifth Edition:
+// FNK_* bits of the DEF context function, of each multi-line function
+// (pre-scan) and of each DEFined letter (phase 2)
+.zerofill __DATA,__bss,_fe_ctx_skinds,8,3
+.zerofill __DATA,__bss,_fe_ml_kinds,NUM_LETTERS*4,3
+.zerofill __DATA,__bss,_fe_fn_kinds,NUM_LETTERS*4,3
+// bit L set if L$ is named bare by MAT READ / MAT PRINT (fe_mat.s)
+.zerofill __DATA,__bss,_fe_smat_names,8,3
+// FILES names declared so far (fe_files.s)
+.zerofill __DATA,__bss,_fe_nfiles,8,3
+// 1 + the designator temp of the PRINT # / INPUT # being lowered, 0 if none
+.zerofill __DATA,__bss,_fe_cur_file,8,3
+// FN call log for the phase-3 kind check (fe_sexpr.s): pointer to 8-byte
+// entries (u32 line, u16 FNK_* signature, u16 letter), count, capacity
+.zerofill __DATA,__bss,_fe_calllog,8,3
+.zerofill __DATA,__bss,_fe_ncalls,8,3
+.zerofill __DATA,__bss,_fe_capcalls,8,3
 // error unwinding
 .zerofill __DATA,__bss,_fe_unwind_sp,8,3    // sp of _fe_compile's frame
 .zerofill __DATA,__bss,_fe_err_code,8,3     // u32 ERR_* being reported

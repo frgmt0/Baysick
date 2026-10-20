@@ -14,6 +14,12 @@
 // requires: number or sref), REL, IMM and X per the opcode's field usage
 // (the element form of `sread` / `insv` / `chgn2s`, A = IR_NONE, has its
 // own field usage, Lirv_spec_el_*).
+// Fifth Edition: also IR.md 6 rule 8:
+// the FILES table and string tables (module), the FNK_* kind words
+// (records), string functions (`sfv`, `sret`, `ret`, `ldfv`, `stfv`,
+// the last instruction), `sparam` / `param` against the kind bits,
+// `callfn` / `scallfn` targets and argument kinds, `scallfn` B from a
+// `scell`, the `fsel` rule and the new X kinds (cells, string tables).
 // The reason names the function and instruction index when it has one.
 // =====================================================================
 .include "baysick.inc"
@@ -42,10 +48,14 @@
 .equ Lirv_X_ARRM,   8           // MAT target: array with either dimensionality
 .equ Lirv_X_SSLOT,  9           // string variable slot 0..285
 .equ Lirv_X_SLIST,  10          // string list letter (sarray DIMS = 1)
+.equ Lirv_X_CELL,   11          // string temp cell < NSTEMPS (Fifth Edition)
+.equ Lirv_X_STAB,   12          // string table letter (sarray DIMS = 2)
+.equ Lirv_X_SARR,   13          // string list or table (sarray DIMS 1 or 2)
 // flags above the low nibble of byte 1 (the X kind), MAT field kinds, IR.md 3.1
 .equ Lirv_XF_AARR,  0x10        // IRI_A holds an array letter, not a temp
 .equ Lirv_XF_BARR,  0x20        // IRI_B holds an array letter, not a temp
 .equ Lirv_XF_BOPT,  0x40        // IRI_B is a temp or IR_NONE (matredim)
+.equ Lirv_XF_AANY,  0x80        // the A temp may be a number or an sref (checked by the call)
 // byte 2: meaning of IMM (low nibble), flags in the high nibble
 .equ Lirv_I_ZERO,   0
 .equ Lirv_I_ANY,    1           // any bits (const; fnarg: the fnarg rule checks it)
@@ -56,6 +66,7 @@
 .equ Lirv_I_COUNT,  6           // >= 1 (onsel)
 .equ Lirv_I_PARAM,  7           // < NPARAMS of the function (param, stparam)
 .equ Lirv_I_SLIST,  8           // string list letter (sarray DIMS = 1): chgn2s element form
+.equ Lirv_I_SPARAM, 9           // < NPARAMS with the string-parameter bit set (sparam)
 .equ Lirv_I_REL,    0x10        // REL holds a relation code
 .equ Lirv_I_ADEST,  0x20        // the A sref is written: never a slit
 // byte 3: placement, the set of function kinds that may contain the opcode
@@ -65,10 +76,22 @@
 .equ Lirv_P_FNML,   (1 << FUNC_KIND_FNML)
 .equ Lirv_P_STMT,   (1 << FUNC_KIND_MAIN) | (1 << FUNC_KIND_FNML)
 .equ Lirv_P_ANY,    Lirv_P_STMT | Lirv_P_FN
+// byte 3 high bits (Fifth Edition): the function must / must not be a
+// string function (FNK_STRING in its kind word)
+.equ Lirv_P_STRFN,  0x40
+.equ Lirv_P_NUMFN,  0x80
+// S and X groups (IR.md 3): every function kind with the Fifth Edition
+.equ Lirv_P_SGRP,   Lirv_P_ANY
+// smatredim / smatread / smatprint accept a string table too
+.equ Lirv_X_SMAT,   Lirv_X_SARR
+.equ Lirv_XF_SMRB,  Lirv_XF_BOPT
+.equ Lirv_T_SMRB,   Lirv_T_B
+.equ Lirv_XF_ARG,   Lirv_XF_AANY
 // temp-kind bytes (x22 array): 0 = not yet defined
 .equ Lirv_K_NUM,    1           // a number
 .equ Lirv_K_SREF,   2           // sref to a variable or list element (svar, sald1)
 .equ Lirv_K_SLIT,   3           // sref to a string constant (slit)
+.equ Lirv_K_SCELL,  4           // sref to a string temp cell (scell, Fifth Edition)
 .equ Lirv_MSGBUF_SIZE, 192      // failure reason buffer
 // frame slot of the number of `fnarg` instructions waiting for their callfn
 .equ Lirv_FR_FNARGS, 96
@@ -186,6 +209,32 @@ _ir_verify:
     ldr x10, [x19, #IRM_SDATA]
     cbz x10, Lirv_e_nosdata
 3:
+    // ---- Fifth Edition: reserved word, FILES names (IR.md 6 rule 8) ----
+    ldr w9, [x19, #IRM_RESERVED5]
+    cbnz w9, Lirv_e_mreserved
+    ldr w9, [x19, #IRM_NFILES]
+    cbz w9, Lirv_files_done
+    cmp w9, #LIM_FILES
+    b.hi Lirv_e_nfiles
+    ldr x10, [x19, #IRM_FILES]
+    cbz x10, Lirv_e_nofiles
+Lirv_file_loop:
+    // 1..LIM_FILE_NAME bytes, none of them 0
+    ldr w11, [x10, #IRS_LEN]
+    cbz w11, Lirv_e_filename
+    cmp w11, #LIM_FILE_NAME
+    b.hi Lirv_e_filename
+    ldr x12, [x10, #IRS_PTR]
+    cbz x12, Lirv_e_filename
+1:
+    ldrb w13, [x12], #1
+    cbz w13, Lirv_e_filename
+    subs w11, w11, #1
+    b.ne 1b
+    add x10, x10, #IRS_SIZE
+    subs w9, w9, #1
+    b.ne Lirv_file_loop
+Lirv_files_done:
     // ---- arrays: dims 0..2, (B1+1)*(B2+1) <= LIM_ARRAY_ELEMS ----
     add x9, x19, #IRM_ARRAYS
     mov x10, #NUM_LETTERS
@@ -218,6 +267,22 @@ Lirv_array_next:
 Lirv_sarray_loop:
     ldr w11, [x9, #IRA_DIMS]
     cbz w11, Lirv_sarray_next
+    // a string table (Fifth Edition): (B1+1)*(B2+1) <= LIM_ARRAY_ELEMS
+    cmp w11, #2
+    b.ne 1f
+    ldr w12, [x9, #IRA_B1]
+    ldr w13, [x9, #IRA_B2]
+    cmp x12, x14
+    b.hs Lirv_e_stabsize
+    cmp x13, x14
+    b.hs Lirv_e_stabsize
+    add x12, x12, #1
+    add x13, x13, #1
+    mul x12, x12, x13
+    cmp x12, x14
+    b.hi Lirv_e_stabsize
+    b Lirv_sarray_next
+1:
     cmp w11, #1
     b.ne Lirv_e_sdims
     ldr w12, [x9, #IRA_B2]
@@ -303,6 +368,19 @@ Lirv_rec_loop:
     ldr w14, [x21, #IRF_PARAMS]
     cmp w11, w14
     b.ne Lirv_e_param0
+    // kind word (IR.md 6 rule 8): 0 for main, no bits above FNK_STRING,
+    // string-parameter bits only below NPARAMS (w12); PARAMS[k] of a
+    // string parameter is < 286, checked above for every parameter
+    add x13, x19, #IRM_FNKINDS
+    ldr w13, [x13, x20, lsl #2]
+    cbnz x20, 1f
+    cbnz w13, Lirv_e_fnkind
+1:
+    tst w13, #~(FNK_STRING | FNK_SPARAMS_MASK)
+    b.ne Lirv_e_fnkind
+    and w13, w13, #FNK_SPARAMS_MASK
+    lsr w13, w13, w12
+    cbnz w13, Lirv_e_fnkind
 Lirv_rec_next:
     add x20, x20, #1
     cmp x20, #NUM_FUNCS
@@ -326,6 +404,12 @@ Lirv_func_loop:
     ldrh w9, [x9, #IRI_OP]
     mov w10, #OP_END
     mov w11, #OP_RET
+    // a string function ends with sret
+    add x12, x19, #IRM_FNKINDS
+    ldr w12, [x12, x20, lsl #2]
+    mov w13, #OP_SRET
+    tst w12, #FNK_STRING
+    csel w11, w13, w11, ne
     cmp x20, #0
     csel w10, w10, w11, eq
     cmp w9, w10
@@ -428,12 +512,45 @@ Lirv_p2_loop:
     ldr w11, [x21, #IRF_KIND]
     lsr w10, w10, w11
     tbz w10, #0, Lirv_e_place
+    // string-function constraints (byte 3 bits 6 / 7): w12 = 1 if the
+    // current function is a string function
+    ubfx w10, w26, #30, #2
+    cbz w10, Lirv_strfn_done
+    add x11, x19, #IRM_FNKINDS
+    ldr w11, [x11, x20, lsl #2]
+    tst w11, #FNK_STRING
+    cset w12, ne
+    tbz w10, #0, 1f
+    cbz w12, Lirv_e_strfn               // sfv / sret outside a string function
+1:
+    tbz w10, #1, Lirv_strfn_done
+    cbnz w12, Lirv_e_numfn              // ret / ldfv / stfv in a string function
+Lirv_strfn_done:
+    // fsel rule (IR.md 3.3.2): the next instruction is a print or input opcode
+    cmp w9, #OP_FSEL
+    b.ne Lirv_fsel_done
+    add x10, x25, #1
+    cmp x10, x28
+    b.hs Lirv_e_fsel
+    add x10, x24, x10, lsl #IRI_SHIFT
+    ldrh w10, [x10, #IRI_OP]
+    // bit op of the 128-bit mask Lirv_fsel_ops (opcodes < 128)
+    cmp w10, #128
+    b.hs Lirv_e_fsel
+    IRV_ADR x11, Lirv_fsel_ops
+    lsr w12, w10, #6
+    ldr x11, [x11, x12, lsl #3]
+    lsr x11, x11, x10                   // shift by op mod 64
+    tbz x11, #0, Lirv_e_fsel
+Lirv_fsel_done:
     // fnarg rule (IR.md 3.2): fnarg 1, 2, ... immediately before a callfn
     ldr x13, [sp, #Lirv_FR_FNARGS]
     cmp w9, #OP_FNARG
     b.eq 50f
     cmp w9, #OP_CALLFN
     b.eq 11f                            // the count is checked with X
+    cmp w9, #OP_SCALLFN
+    b.eq 11f
     cbnz x13, Lirv_e_fnarg_seq
     b 11f
 50:
@@ -460,6 +577,18 @@ Lirv_p2_loop:
     cmn w9, #1
     b.eq 31f
 35:
+    // fnarg / callfn / scallfn A: a number or an sref (the call checks the
+    // kind against the callee's parameter bits)
+    ubfx w10, w26, #8, #8
+    tbz w10, #7, Lirv_a_typed
+    ldr w9, [x27, #IRI_A]
+    ldr w10, [x21, #IRF_NTEMPS]
+    cmp w9, w10
+    b.hs Lirv_e_temp_range
+    ldrb w10, [x22, x9]
+    cbz w10, Lirv_e_temp_undef
+    b 31f
+Lirv_a_typed:
     CHK_USE IRI_A, 1, 5
     // a written sref (sset / sread / insv / chgn2s) never names a constant
     ubfx w11, w26, #16, #8
@@ -480,6 +609,13 @@ Lirv_p2_loop:
     b.eq 34f
 33:
     CHK_USE IRI_B, 2, 6
+    // scallfn: B is the result cell, an sref defined by scell
+    ldrh w10, [x27, #IRI_OP]
+    cmp w10, #OP_SCALLFN
+    b.ne 34f
+    ldrb w10, [x22, x9]
+    cmp w10, #Lirv_K_SCELL
+    b.ne Lirv_e_scallfn_b
 34:
     // C is always a number (jfor, ast2)
     CHK_USE IRI_C, 3, -1
@@ -497,6 +633,9 @@ Lirv_p2_loop:
     mov w10, #Lirv_K_SREF
     mov w12, #Lirv_K_SLIT
     cmp w11, #OP_SLIT
+    csel w10, w12, w10, eq
+    mov w12, #Lirv_K_SCELL
+    cmp w11, #OP_SCELL
     csel w10, w12, w10, eq
 36:
     strb w10, [x22, x9]
@@ -569,11 +708,28 @@ Lirv_p2_loop:
     b.ne Lirv_e_slist
     b Lirv_imm_done
 29:
+    cmp w10, #Lirv_I_SPARAM
+    b.ne 1f
+    // sparam: k < NPARAMS and parameter k is a string parameter
+    ldr w11, [x21, #IRF_NPARAMS]
+    cmp x9, x11
+    b.hs Lirv_e_paramidx
+    add x11, x19, #IRM_FNKINDS
+    ldr w11, [x11, x20, lsl #2]
+    lsr w11, w11, w9
+    tbz w11, #0, Lirv_e_sparamkind
+    b Lirv_imm_done
+1:
     cmp w10, #Lirv_I_PARAM
     b.ne Lirv_imm_done                  // Lirv_I_ANY: any bits
     ldr w11, [x21, #IRF_NPARAMS]
     cmp x9, x11
     b.hs Lirv_e_paramidx
+    // param / stparam: parameter k is a numeric parameter
+    add x11, x19, #IRM_FNKINDS
+    ldr w11, [x11, x20, lsl #2]
+    lsr w11, w11, w9
+    tbnz w11, #0, Lirv_e_sparamkind
 Lirv_imm_done:
     // X (byte 1)
     ubfx w10, w26, #8, #4
@@ -646,13 +802,86 @@ Lirv_imm_done:
     ldr w12, [x11, #IRF_NPARAMS]
     cmp x13, x12
     b.ne Lirv_e_argcount
-    b Lirv_p2_next
+    // callfn calls numeric functions, scallfn string functions
+    add w14, w9, #FUNC_FN_BASE
+    add x12, x19, #IRM_FNKINDS
+    ldr w12, [x12, w14, uxtw #2]        // w12 = callee kind word
+    tst w12, #FNK_STRING
+    cset w15, ne
+    ldrh w14, [x27, #IRI_OP]
+    cmp w14, #OP_SCALLFN
+    cset w14, eq
+    cmp w14, w15
+    b.ne Lirv_e_callkind
+    // argument k (A for k = 0, fnarg k at index x25 - n + k) is an sref
+    // exactly when bit k of the callee's kind word is set; x13 = n
+    cbz x13, Lirv_p2_next
+    ldr w14, [x27, #IRI_A]
+    mov x10, #0
+Lirv_arg_loop:
+    ldrb w14, [x22, x14]
+    cmp w14, #Lirv_K_NUM
+    cset w14, ne                        // 1 if the argument is an sref
+    lsr w15, w12, w10
+    and w15, w15, #1
+    cmp w14, w15
+    b.ne Lirv_e_argkind
+    add x10, x10, #1
+    cmp x10, x13
+    b.hs Lirv_p2_next
+    // the temp of fnarg k = x10
+    sub x14, x25, x13
+    add x14, x14, x10
+    add x14, x24, x14, lsl #IRI_SHIFT
+    ldr w14, [x14, #IRI_A]
+    b Lirv_arg_loop
 23:
     cmp w10, #Lirv_X_SSLOT
     b.ne 38f
     // string variable slot
     cmp w9, #NUM_STRING_SLOTS
     b.hs Lirv_e_sslot
+    b Lirv_p2_next
+38:
+    cmp w10, #Lirv_X_CELL
+    b.ne 1f
+    // string temp cell < NSTEMPS
+    ldr w11, [x19, #IRM_NSTEMPS]
+    cmp w9, w11
+    b.hs Lirv_e_cell
+    b Lirv_p2_next
+1:
+    cmp w10, #Lirv_X_STAB
+    b.ne 2f
+    // string table letter (sarray DIMS = 2)
+    cmp w9, #NUM_LETTERS
+    b.hs Lirv_e_stab
+    mov w11, #IRA_SIZE
+    umaddl x11, w9, w11, x19
+    ldr w11, [x11, #(IRM_SARRAYS + IRA_DIMS)]
+    cmp w11, #2
+    b.ne Lirv_e_stab
+    b Lirv_p2_next
+2:
+    cmp w10, #Lirv_X_SARR
+    b.ne 38f
+    // string list or table; smatredim: B = IR_NONE for a list, a column
+    // temp (already checked as a number) for a table
+    cmp w9, #NUM_LETTERS
+    b.hs Lirv_e_slist
+    mov w11, #IRA_SIZE
+    umaddl x11, w9, w11, x19
+    ldr w11, [x11, #(IRM_SARRAYS + IRA_DIMS)]
+    cbz w11, Lirv_e_slist
+    ldrh w12, [x27, #IRI_OP]
+    cmp w12, #OP_SMATREDIM
+    b.ne Lirv_p2_next
+    ldr w12, [x27, #IRI_B]
+    cmn w12, #1
+    cset w12, ne                        // 1 if B holds a column temp
+    sub w11, w11, #1                    // 1 for a table
+    cmp w11, w12
+    b.ne Lirv_e_smatredim
     b Lirv_p2_next
 38:
     cmp w10, #Lirv_X_SLIST
@@ -709,6 +938,21 @@ Lirv_e_onsel:       FAIL_I Lirv_m_onsel
 Lirv_e_paramidx:    FAIL_I Lirv_m_paramidx
 Lirv_e_sslot:       FAIL_I Lirv_m_sslot
 Lirv_e_slist:       FAIL_I Lirv_m_slist
+Lirv_e_strfn:       FAIL_I Lirv_m_strfn
+Lirv_e_numfn:       FAIL_I Lirv_m_numfn
+Lirv_e_fsel:        FAIL_I Lirv_m_fsel
+Lirv_e_scallfn_b:   FAIL_I Lirv_m_scallfn_b
+Lirv_e_sparamkind:  FAIL_I Lirv_m_sparamkind
+Lirv_e_callkind:    FAIL_I Lirv_m_callkind
+Lirv_e_argkind:     FAIL_I Lirv_m_argkind
+Lirv_e_cell:        FAIL_I Lirv_m_cell
+Lirv_e_stab:        FAIL_I Lirv_m_stab
+Lirv_e_smatredim:   FAIL_I Lirv_m_smatredim
+Lirv_e_fnkind:      FAIL_F Lirv_m_fnkind
+Lirv_e_nfiles:      FAIL_M Lirv_m_nfiles
+Lirv_e_nofiles:     FAIL_M Lirv_m_nofiles
+Lirv_e_filename:    FAIL_M Lirv_m_filename
+Lirv_e_stabsize:    FAIL_M Lirv_m_stabsize
 // ---- function-level failures ----
 Lirv_e_present:     FAIL_F Lirv_m_present
 Lirv_e_kind:        FAIL_F Lirv_m_kind
@@ -827,9 +1071,9 @@ Lirv_spec:
     SPEC Lirv_T_D|Lirv_T_A|Lirv_T_B, Lirv_X_ARR2, Lirv_I_ZERO, Lirv_P_ANY  // ald2
     SPEC Lirv_T_A|Lirv_T_B, Lirv_X_ARR1, Lirv_I_ZERO, Lirv_P_STMT      // ast1
     SPEC Lirv_T_A|Lirv_T_B|Lirv_T_C, Lirv_X_ARR2, Lirv_I_ZERO, Lirv_P_STMT  // ast2
-    SPEC Lirv_T_D|Lirv_T_A|Lirv_T_AOPT, Lirv_X_FN, Lirv_I_ZERO, Lirv_P_ANY  // callfn
+    SPEC Lirv_T_D|Lirv_T_A|Lirv_T_AOPT, Lirv_X_FN|Lirv_XF_ARG, Lirv_I_ZERO, Lirv_P_ANY  // callfn
     SPEC Lirv_T_D, Lirv_X_NONE, Lirv_I_PARAM, Lirv_P_FN                // param
-    SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_FN                 // ret
+    SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_FN|Lirv_P_NUMFN    // ret
     SPEC 0, Lirv_X_LREF, Lirv_I_ZERO, Lirv_P_STMT                      // jmp
     SPEC Lirv_T_A|Lirv_T_B, Lirv_X_LREF, Lirv_I_ZERO|Lirv_I_REL, Lirv_P_STMT  // jcmp
     SPEC Lirv_T_A|Lirv_T_B|Lirv_T_C, Lirv_X_LREF, Lirv_I_ZERO, Lirv_P_STMT    // jfor
@@ -857,10 +1101,10 @@ Lirv_spec:
     SPEC 0, Lirv_X_ARRM|Lirv_XF_AARR, Lirv_I_ZERO, Lirv_P_STMT         // mattrn
     SPEC 0, Lirv_X_ARRM|Lirv_XF_AARR, Lirv_I_ZERO, Lirv_P_STMT         // matinv
     // Third and Fourth Edition opcodes (IR.md 3.2)
-    SPEC Lirv_T_D|Lirv_S_D, Lirv_X_STR, Lirv_I_ZERO, Lirv_P_STMT       // slit
-    SPEC Lirv_T_D|Lirv_S_D, Lirv_X_SSLOT, Lirv_I_ZERO, Lirv_P_STMT     // svar
-    SPEC Lirv_T_D|Lirv_S_D|Lirv_T_A, Lirv_X_SLIST, Lirv_I_ZERO, Lirv_P_STMT  // sald1
-    SPEC Lirv_T_A|Lirv_S_A|Lirv_T_B|Lirv_S_B, Lirv_X_NONE, Lirv_I_ZERO|Lirv_I_ADEST, Lirv_P_STMT  // sset
+    SPEC Lirv_T_D|Lirv_S_D, Lirv_X_STR, Lirv_I_ZERO, Lirv_P_SGRP       // slit
+    SPEC Lirv_T_D|Lirv_S_D, Lirv_X_SSLOT, Lirv_I_ZERO, Lirv_P_SGRP     // svar
+    SPEC Lirv_T_D|Lirv_S_D|Lirv_T_A, Lirv_X_SLIST, Lirv_I_ZERO, Lirv_P_SGRP  // sald1
+    SPEC Lirv_T_A|Lirv_S_A|Lirv_T_B|Lirv_S_B, Lirv_X_NONE, Lirv_I_ZERO|Lirv_I_ADEST, Lirv_P_SGRP  // sset
     SPEC Lirv_T_A|Lirv_S_A|Lirv_T_B|Lirv_S_B, Lirv_X_LREF, Lirv_I_ZERO|Lirv_I_REL, Lirv_P_STMT    // sjcmp
     SPEC Lirv_T_A|Lirv_S_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT      // prsv
     SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT               // prtab
@@ -871,9 +1115,9 @@ Lirv_spec:
     SPEC 0, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT                      // inend
     SPEC 0, Lirv_X_ARR1, Lirv_I_ZERO, Lirv_P_STMT                      // matinput
     SPEC 0, Lirv_X_SLIST, Lirv_I_ZERO, Lirv_P_STMT                     // smatinput
-    SPEC Lirv_T_A, Lirv_X_SLIST, Lirv_I_ZERO, Lirv_P_STMT              // smatredim
-    SPEC 0, Lirv_X_SLIST, Lirv_I_ZERO, Lirv_P_STMT                     // smatread
-    SPEC 0, Lirv_X_SLIST, Lirv_I_MODE, Lirv_P_STMT                     // smatprint
+    SPEC Lirv_T_A|Lirv_T_SMRB, Lirv_X_SMAT|Lirv_XF_SMRB, Lirv_I_ZERO, Lirv_P_STMT  // smatredim
+    SPEC 0, Lirv_X_SMAT, Lirv_I_ZERO, Lirv_P_STMT                      // smatread
+    SPEC 0, Lirv_X_SMAT, Lirv_I_MODE, Lirv_P_STMT                      // smatprint
     SPEC Lirv_T_A|Lirv_S_A, Lirv_X_ARR1, Lirv_I_ZERO, Lirv_P_STMT      // chgs2n
     SPEC Lirv_T_A|Lirv_S_A, Lirv_X_ARR1, Lirv_I_ZERO|Lirv_I_ADEST, Lirv_P_STMT  // chgn2s
     SPEC Lirv_T_D|Lirv_T_A, Lirv_X_NONE, Lirv_I_COUNT, Lirv_P_STMT     // onsel
@@ -883,16 +1127,37 @@ Lirv_spec:
     SPEC Lirv_T_D|Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_ANY       // cot
     SPEC Lirv_T_D, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_ANY                // num
     SPEC Lirv_T_D, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_ANY                // det
-    SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ANY, Lirv_P_ANY                 // fnarg
+    SPEC Lirv_T_A, Lirv_X_NONE|Lirv_XF_ARG, Lirv_I_ANY, Lirv_P_ANY     // fnarg
     SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_PARAM, Lirv_P_FNML              // stparam
-    SPEC Lirv_T_D, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_FNML               // ldfv
-    SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_FNML               // stfv
+    SPEC Lirv_T_D, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_FNML|Lirv_P_NUMFN  // ldfv
+    SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_FNML|Lirv_P_NUMFN  // stfv
+    // Fifth Edition opcodes (IR.md 3.3)
+    SPEC Lirv_T_D|Lirv_S_D, Lirv_X_CELL, Lirv_I_ZERO, Lirv_P_SGRP      // scell
+    SPEC Lirv_T_A|Lirv_S_A|Lirv_T_B, Lirv_X_NONE, Lirv_I_ZERO|Lirv_I_ADEST, Lirv_P_SGRP  // sstr
+    SPEC Lirv_T_D|Lirv_T_A|Lirv_S_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_ANY  // len
+    SPEC Lirv_T_D|Lirv_T_A|Lirv_S_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_ANY  // asc
+    SPEC Lirv_T_D|Lirv_T_A|Lirv_S_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_ANY  // val
+    SPEC Lirv_T_D|Lirv_S_D|Lirv_T_A|Lirv_T_B, Lirv_X_STAB, Lirv_I_ZERO, Lirv_P_SGRP  // sald2
+    SPEC Lirv_T_D|Lirv_S_D, Lirv_X_NONE, Lirv_I_SPARAM, Lirv_P_FN      // sparam
+    SPEC Lirv_T_D|Lirv_S_D, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_FNML|Lirv_P_STRFN  // sfv
+    SPEC Lirv_T_A|Lirv_T_AOPT|Lirv_T_B|Lirv_S_B, Lirv_X_FN|Lirv_XF_AANY, Lirv_I_ZERO, Lirv_P_SGRP  // scallfn
+    SPEC Lirv_T_A|Lirv_S_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_FN|Lirv_P_STRFN  // sret
+    SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT               // fsel
+    SPEC Lirv_T_A, Lirv_X_LREF, Lirv_I_ZERO, Lirv_P_STMT               // jeof
+    SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT               // scratch
+    SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT               // frestore
 Lirv_spec_end:
 // element forms (A = IR_NONE, IR.md 3.2): B = subscript (a number)
 Lirv_spec_el_s:
     SPEC Lirv_T_B, Lirv_X_SLIST, Lirv_I_ZERO, Lirv_P_STMT              // sread / insv L$, tB
 Lirv_spec_el_c:
     SPEC Lirv_T_B, Lirv_X_ARR1, Lirv_I_SLIST, Lirv_P_STMT              // chgn2s L, M$, tB
+
+// opcodes a `fsel` may select for (IR.md 3.3.2), one bit per opcode
+    .p2align 3
+Lirv_fsel_ops:
+    .quad (1 << OP_PRNUM) | (1 << OP_PRSTR) | (1 << OP_PRCOMMA) | (1 << OP_PRSEMI) | (1 << OP_PRNL) | (1 << OP_PRSV) | (1 << OP_PRTAB) | (1 << OP_INBEG)
+    .quad (1 << (OP_INNUM - 64)) | (1 << (OP_INSV - 64)) | (1 << (OP_INEND - 64))
 
 .if (Lirv_spec_end - Lirv_spec) != (4 * OP_COUNT)
 .error "ir_verify: spec table does not match OP_COUNT"
@@ -928,7 +1193,7 @@ Lirv_m_mainparam:   .asciz "main has a parameter"
 Lirv_m_maindef:     .asciz "main has a DEF line"
 Lirv_m_param:       .asciz "FN parameter is not a scalar slot"
 Lirv_m_empty:       .asciz "function has no instructions"
-Lirv_m_lastop:      .asciz "main must end with end, FN functions with ret"
+Lirv_m_lastop:      .asciz "main must end with end, FN functions with ret, string functions with sret"
 Lirv_m_nolabels:    .asciz "label table missing"
 Lirv_m_label_undef: .asciz "label never defined"
 Lirv_m_nslots:      .asciz "NSLOTS != 286 + 2*NFORS"
@@ -952,6 +1217,21 @@ Lirv_m_param0:      .asciz "PARAM is not PARAMS[0]"
 Lirv_m_nosdata:     .asciz "string data table missing"
 Lirv_m_sdims:       .asciz "string list that is not one-dimensional"
 Lirv_m_sarrsize:    .asciz "string list larger than 1000000 elements"
+Lirv_m_strfn:       .asciz "sfv / sret outside a string function"
+Lirv_m_numfn:       .asciz "ret / ldfv / stfv in a string function"
+Lirv_m_fsel:        .asciz "fsel not immediately followed by a print or input opcode"
+Lirv_m_scallfn_b:   .asciz "scallfn result is not a string temp cell"
+Lirv_m_sparamkind:  .asciz "parameter kind does not match param / sparam"
+Lirv_m_callkind:    .asciz "callfn / scallfn target has the wrong result kind"
+Lirv_m_argkind:     .asciz "argument kind differs from the callee's parameter kind"
+Lirv_m_cell:        .asciz "string temp cell out of range"
+Lirv_m_stab:        .asciz "string table not declared"
+Lirv_m_smatredim:   .asciz "smatredim column operand does not match the string array"
+Lirv_m_fnkind:      .asciz "invalid function kind word"
+Lirv_m_nfiles:      .asciz "more than 8 FILES names"
+Lirv_m_nofiles:     .asciz "FILES table missing"
+Lirv_m_filename:    .asciz "FILES name empty, too long or containing byte 0"
+Lirv_m_stabsize:    .asciz "string table larger than 1000000 elements"
 
     .section __DATA,__data
 Lirv_msgbuf:

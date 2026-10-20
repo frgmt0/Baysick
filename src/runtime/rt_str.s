@@ -3,12 +3,13 @@
 // 7.1, 7.7, 7.19, 8).
 //
 // Defines (global, runtime.inc):
-//   _bsk_str_set _bsk_str_cmp _bsk_print_sv
+//   _bsk_str_set _bsk_str_cmp
 //   _bsk_change_s2n _bsk_change_n2s _bsk_change_n2s_el
 // Defines (private to the runtime, .private_extern):
 //   _bsk_rt_str_reserve     make an SD own at least n bytes (OUT OF ROOM)
 //   _bsk_rt_str_setbytes    SD := a copy of a byte range (INPUT, DATA)
 // (_bsk_saref1 lives in rt_array.s, next to the subscript rule it shares.)
+// (_bsk_print_sv lives in rt_print.s, with the pending file selection.)
 //
 // String descriptor (SD_*, runtime.inc): LEN bytes at PTR. CAP > 0 means
 // PTR is a malloc'd buffer of CAP bytes owned by this descriptor; CAP = 0
@@ -182,22 +183,6 @@ Lrt_str_cmp_len:
     mov w9, #-1
     csel w0, w9, w0, lo             // shorter (a prefix of the other) is smaller
     ret
-
-// ---------------------------------------------------------------------
-// _bsk_print_sv -- PRINT a string variable or string list element: the
-//   §8 string item (each byte through the lazy-space column logic).
-//   Inputs  : x0 = SD
-//   Outputs : none
-//   Clobbers: x0-x17, d0-d7, d16-d31
-//   Callee-saved used: none
-//   Frame   : none (tail call)
-// ---------------------------------------------------------------------
-    .globl _bsk_print_sv
-    .p2align 2
-_bsk_print_sv:
-    ldr w1, [x0, #SD_LEN]
-    ldr x0, [x0, #SD_PTR]
-    b _bsk_print_str                // tail call (rt_print.s)
 
 // ---------------------------------------------------------------------
 // Lrt_str_round -- r = floor(x + 0.5), evaluated exactly (the subscript

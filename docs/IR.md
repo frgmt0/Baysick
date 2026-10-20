@@ -53,7 +53,7 @@ holds:
 | arrays | 26 entries `IRA_*` (letter A…Z): `DIMS` 0 (unused) / 1 / 2, bounds `B1`, `B2` (the initial bounds; they fix the storage `(B1+1)·(B2+1)`; MAT statements may change the run-time shape within it, LANGUAGE.md §7.14.3) |
 | funcs | 27 entries `IRF_*`: index 0 = `main`, index 1+L = `FN` letter L; `PRESENT` = 0 if absent |
 | sarrays | 26 entries `IRA_*` (letter A…Z) for the string arrays `A$( )` … `Z$( )`: `DIMS` 0 (unused), 1 (list: `B1`, default 10, storage `B1+1` strings, `B2` 0) or, Fifth Edition, 2 (table: `B1`, `B2`, default 10, 10, storage `(B1+1)·(B2+1)` strings) |
-| stemps | Fifth Edition (this and the next two rows exist only in a module built with `BSK_ED5_CONTRACT=1`, `IRM_SIZE` 3624; with the switch 0 no module touches them, DESIGN.md §2.2): `NSTEMPS`, the number of string temp cells `%s0 … %s(NSTEMPS−1)` (§2.1) |
+| stemps | Fifth Edition: `NSTEMPS`, the number of string temp cells `%s0 … %s(NSTEMPS−1)` (§2.1) |
 | files | Fifth Edition: `NFILES` (0…8) FILES names `IRS_*` in file-number order (entry 0 = `#1`), bytes as the frontend determined them (LANGUAGE.md §7.21) |
 | fnkinds | Fifth Edition: 27 u32 `FNK_*` words, one per function index: bit k (`FNK_SPARAM0 << k`) = parameter k is a string parameter; `FNK_STRING` = a string function `FNx$`; 0 for `main` and for numeric functions with numeric parameters |
 
@@ -246,8 +246,7 @@ verifier checks that the count, `1 + number of fnargs` (or 0), equals the callee
 
 ### 3.3 Fifth Edition opcodes
 
-Opcodes 85–98 (LANGUAGE.md §4.4–§4.6, §6.1, §7.10.1, §7.21–§7.26; staged behind
-`BSK_ED5_CONTRACT`, DESIGN.md §2.2). "file" fields hold a number temp, the designator value
+Opcodes 85–98 (LANGUAGE.md §4.4–§4.6, §6.1, §7.10.1, §7.21–§7.26). "file" fields hold a number temp, the designator value
 before truncation; the runtime truncates and checks it. Each opcode is one runtime call
 (DESIGN.md §6.8) except `scell`, `sparam`, `sfv`, which only form an address, and `scallfn`,
 which calls a generated function. Unused fields as in §2.1.
@@ -622,7 +621,8 @@ internal error (exit 4). Checks:
    those of its own FOR loops with `stv`); array letters refer to arrays with `DIMS` ≠ 0 and the
    right dimensionality (`ald1/ast1` ↔ 1, `ald2/ast2` ↔ 2; MAT opcodes accept either, in every
    array-kind field; `matinput`, `chgs2n`, `chgn2s` ↔ 1); string-list letters (in `X`, or in the
-   `IMM` of `chgn2s`'s element form) refer to sarrays with `DIMS` = 1; string slots are `< 286`; string ids `< NSTRINGS`; `callfn` targets are
+   `IMM` of `chgn2s`'s element form) refer to sarrays with `DIMS` = 1 (rule 8 lists the Fifth
+   Edition exceptions for string tables); string slots are `< 286`; string ids `< NSTRINGS`; `callfn` targets are
    present FN functions, and the number of arguments (`fnarg` rule, §3.2) equals the callee's
    `NPARAMS`.
 5. Placement rules of §3; `main` ends with `end`; each FN function ends with `ret`; `fnarg`
@@ -632,7 +632,7 @@ internal error (exit 4). Checks:
 7. Function records: `KIND` is `FUNC_KIND_FN` or `FUNC_KIND_FNML` for index ≥ 1; `NPARAMS ≤ 8`;
    `PARAMS[k]` `< 286` for `k < NPARAMS` and `IR_NONE` after; `PARAM` = `PARAMS[0]` or `IR_NONE`;
    `ENDLINE > DEFLINE` for `FUNC_KIND_FNML`, 0 otherwise.
-8. Fifth Edition (with `BSK_ED5_CONTRACT`):
+8. Fifth Edition:
    * `scell` X `< NSTEMPS`; `sald2` X a declared string table (sarray `DIMS` = 2), `sald1` and
      the element forms of `sread`/`insv`/`chgn2s` a declared string **list** (`DIMS` = 1);
      `smatinput` a string list; `smatredim` B = `IR_NONE` for a string list and a number temp for
@@ -653,6 +653,9 @@ internal error (exit 4). Checks:
      number temp in A (`jeof`: X a label, rule 3).
    * `NFILES ≤ LIM_FILES`; every file name has 1…`LIM_FILE_NAME` bytes and no byte 0.
    * every string table has `(B1+1)*(B2+1) <= 1 000 000`.
+   * Not checked: two properties of the canonical lowering (§4) are guaranteed by the frontend,
+     and the verifier does not check them — the `fnkinds` word of an absent function (0: only a
+     DEFined function gets one), and that no cell is shared by two `scell` instructions (§4.1).
 
 ## 7. Writing a new backend
 

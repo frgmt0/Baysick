@@ -6,7 +6,7 @@ status). Where this document and any other document disagree, this one wins for 
 behaviour; `docs/IR.md` wins for IR details; `docs/DESIGN.md` wins for module boundaries and ABI.
 
 Baysick implements **Dartmouth BASIC through the Fourth Edition (1968) and a scoped part of the
-Fifth Edition (1970)** (specified here; being implemented, DESIGN.md §2.4): the language of the
+Fifth Edition (1970)**, on both targets: the language of the
 manual of 1 October 1964 ([M64]) — the fifteen statements of the First Edition (first run 1 May
 1964), the Second Edition's zero-based subscripts and `;` packing and its **MAT** matrix
 statements (§7.14) — extended by the additions of the **Third Edition** (1966: `INPUT`,
@@ -618,10 +618,11 @@ value      := expression          (numeric targets)
 `LET X = Y3 = A(3,1) = 1`). Parsing: after `LET` (and after each `=`), if the text there is a
 target immediately followed by `=`, it is another target; otherwise the rest is the value. All
 targets must be of one kind; a string target among numeric ones, a numeric value for string
-targets or a string reference for numeric targets → `MISMATCHED STRING OPERATION`. A missing
-value for string targets (`LET A$ =` with nothing after the `=`) → `ILLEGAL FORMULA`; anything
-else that is not a string expression there (`LET A$ = 5`, `LET A$ = B`) →
-`MISMATCHED STRING OPERATION` (§4.5). Missing or illegal first target → `ILLEGAL VARIABLE`;
+targets or a string reference for numeric targets → `MISMATCHED STRING OPERATION`. A value for
+string targets that is not a string expression is diagnosed as §5.2 says for every place that
+requires one: `MISMATCHED STRING OPERATION` if the text starts a numeric operand (`LET A$ = 5`,
+`LET A$ = B`, `LET A$ = (1)`; §4.5), else `ILLEGAL FORMULA` (`LET A$ =` with nothing after the
+`=`, `LET A$ = )`). Missing or illegal first target → `ILLEGAL VARIABLE`;
 missing `=` → `INCORRECT FORMAT`; `LET FNA = …` outside the multi-line body of FNA →
 `ILLEGAL VARIABLE`, and so is `LET FNA$ = …` outside the multi-line body of FNA$ — in
 particular `LET FNA = …` inside the body of the string function FNA$ and `LET FNA$ = …` inside
@@ -889,7 +890,9 @@ rules above.
   place of `FNx`: it is the **empty string** at the start of every call, `LET FNx$ = s` (also one
   target of a multiple string LET) assigns it, `FNx$` in a string expression reads it, `READ FNx$`,
   `INPUT FNx$` and `CHANGE L TO FNx$` are `ILLEGAL VARIABLE` (only LET assigns a value
-  variable, as for numeric functions), and FNEND returns its value. Outside the body of FN*x*`$`,
+  variable; the numeric forms keep their Fourth Edition messages: `READ FNA` is
+  `INCORRECT FORMAT`, `CHANGE L TO FNA` is `MISMATCHED STRING OPERATION`), and FNEND returns its
+  value. Outside the body of FN*x*`$`,
   `LET FNx$ = …` → `ILLEGAL VARIABLE`.
 * **The other kind of the same letter inside a body.** The value variable belongs to one kind
   only. Inside the body of FN*x*`$`, `FNx` (no `$`) is not a variable but an ordinary call of the
@@ -1549,7 +1552,11 @@ needs a byte and holds no unread byte, it makes one `read` request of up to **65
 through another number therefore sees the bytes that had reached the host file at the moment of
 each of its chunk reads: bytes already in its chunk are kept even if the file is later
 truncated or rewritten, and bytes written later are seen only by a later chunk read (made when
-the reader has consumed every byte it holds; RESTORE # of the reading number empties its reader). A write that fails (any `write` error other than `EINTR`, or a write that
+the reader has consumed every byte it holds; RESTORE # and SCRATCH # of the reading number empty
+its reader). A reader never remembers end of input, standard input included: every request that
+needs a byte while the reader holds none makes a fresh `read` request, and a request that
+receives 0 bytes or an error is at the end of input for that request only (so a later INPUT,
+INPUT # or IF END # reads again, and a terminal user may type more after an end-of-file). A write that fails (any `write` error other than `EINTR`, or a write that
 transfers 0 bytes) → `CAN'T WRITE FILE IN n` (exit 1; [G70] p. 87), n = the line of the statement
 whose output or flush failed (at termination, §10).
 
@@ -1646,7 +1653,11 @@ but **without a prompt and without a dialogue**:
    line …, the next line will be accessed"); if there is no next line: `END OF FILE IN n`. A field
    that is not valid for the target → `INCORRECT FORMAT IN FILE IN n` (exit 1; [G70] p. 88).
    Otherwise the value is assigned (string array elements: the subscript is checked at the
-   store, after the field is taken, as in §7.15).
+   store, after the field is taken, as in §7.15). For k ≥ 1 every field (and the line read of
+   step 1 and the discard of step 3) rechecks the file as in step 1: it must still be in read
+   mode (else `ILLEGAL FILE COMMAND`) and is opened if necessary. So a function in a target's
+   subscript that executes `RESTORE #k` makes the next field reopen the file and read its first
+   line, and one that executes `SCRATCH #k` makes the next field `ILLEGAL FILE COMMAND`.
 3. After the last target the rest of the current line is discarded silently ([G70] p. 65: "The
    fifth data item will be ignored").
 
@@ -1682,7 +1693,8 @@ program jumps to the line if file k is **at its end**:
   file space" when writing; Baysick files have no fixed space.)
 * k = 0: standard input is at its end when no byte remains unread; to know, the runtime reads
   standard input (waiting for a terminal user to type a line or end-of-file); on a terminal
-  stdout is flushed first.
+  stdout is flushed first. IF END #0 does not reset the output column: only a line read by INPUT
+  (§7.15) or INPUT #0 (§7.25) sets `col = out = 0`.
 
 **Baysick decision:** IF END tests *before* reading (is there another line?), so the loop
 `10 IF END #1 THEN 90` / `20 INPUT #1, A$` / `30 … GOTO 10` reads every line and never fails.
@@ -2094,8 +2106,8 @@ a statement starting with `FILES` or `SCRATCH` (`ILLEGAL INSTRUCTION`), `PRINT #
 FORMULA`), `INPUT #` (`ILLEGAL VARIABLE`), `RESTORE #` (`INCORRECT FORMAT`), `IF END #`
 (`ILLEGAL RELATION`), `LEN(`, `ASC(`, `VAL(`, `STR$(`, `FNA$` (the letter followed by text that
 cannot continue an expression), a string parameter (`ILLEGAL VARIABLE`), and two subscripts on a
-string array. Two Fourth Edition error tests pin text that becomes legal; at integration
-(DESIGN.md §2.2) they are rewritten so that they test the same error class with text that stays
+string array. Two Fourth Edition error tests pinned text that became legal; at integration
+(DESIGN.md §2.2) they were rewritten so that they test the same error class with text that stays
 illegal:
 
 | Test | Fourth Edition text → message | Fifth Edition text → message |

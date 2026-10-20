@@ -21,11 +21,14 @@
 
 # ---------------------------------------------------------------------
 # bsk_err -- report a run-time error and terminate.
-#   Purpose : pending-line newline + flush of stdout, then write
+#   Purpose : finish the files in write mode not yet finished
+#             (bsk_rt_files_finish, DESIGN.md 6.8), pending-line
+#             newline + flush of stdout, then write
 #             "<MESSAGE> IN <bsk_curline>" + LF to fd 2 and exit.
 #             Exit status EXIT_RUN_OK (0) for ERR_OUT_OF_DATA and
 #             ERR_END_OF_INPUT, else EXIT_RUN_ERROR (1); also 1 for
-#             those two if writing stdout failed (LANGUAGE.md section 10).
+#             those two if writing stdout or a file failed (LANGUAGE.md
+#             section 10).
 #   Inputs  : %edi = ERR_* code; must be a run-time code
 #             (ERR_FIRST_RUNTIME..ERR_TABLE_SIZE-1). Any other code (a
 #             caller bug) prints nothing and exits with status 1
@@ -35,7 +38,7 @@
 #   Callee-saved used (not restored: the function never returns):
 #             %rbx = error code, %r12 = write cursor in the message
 #             buffer, %r13 = start of the message buffer,
-#             %r14 = 1 if stdout broke (output lost), else 0,
+#             %r14 = 1 if output was lost (stdout or a file), else 0,
 #             %rbp = frame pointer
 #   Frame   : 8 bytes (saved %rbp), then %rsp is rounded down to a
 #             multiple of 16 (callers may jump here from any depth) and
@@ -51,9 +54,13 @@ bsk_err:
     subq $RT_ERR_MSGBUF, %rsp       # message buffer at (%rsp)
     movl %edi, %ebx                 # keep the code across calls
 
-    # stdout first: the error text must appear after all output.
-    call bsk_rt_finish_output
-    movl %eax, %r14d                # 1 if stdout broke
+    # The files in write mode first (once; a failure only forces exit
+    # status 1), then stdout: the error text must appear after all
+    # output.
+    call bsk_rt_files_finish
+    movl %eax, %r14d                # 1 if a file's output was lost
+    call bsk_rt_finish_output       # %eax = 1 if stdout broke
+    orl %eax, %r14d                 # output lost anywhere: status 1
 
     # Look up the message; a code that is not a run-time error prints
     # nothing.
@@ -101,8 +108,8 @@ bsk_err:
 
 .Lrt_err_exit:
     # OUT OF DATA is the normal end of a 1964 program and END OF INPUT
-    # the normal end of a filter: exit 0, unless stdout broke (output
-    # was lost): then exit 1 like any error.
+    # the normal end of a filter: exit 0, unless stdout broke or a file
+    # write failed (output was lost): then exit 1 like any error.
     movl $EXIT_RUN_ERROR, %edi
     movl $EXIT_RUN_OK, %eax
     cmpl $ERR_OUT_OF_DATA, %ebx

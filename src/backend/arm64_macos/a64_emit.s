@@ -121,6 +121,25 @@ Lbk_em_sdb_loop:
     b Lbk_em_sdb_loop
 Lbk_em_sdb_done:
 
+    // ---- FILES names: Lfile_<k> (k = 1 ... NFILES) as .byte lists --------
+    ldr w23, [x19, #IRM_NFILES]
+    ldr x22, [x19, #IRM_FILES]
+    mov x21, #0
+Lbk_em_file_loop:
+    cmp x21, x23
+    b.hs Lbk_em_file_done
+    mov x0, x20
+    adrp x1, Lbk_em_file_label@PAGE
+    add x1, x1, Lbk_em_file_label@PAGEOFF
+    add x2, x21, #1
+    ldr x3, [x22, #IRS_PTR]
+    ldr w4, [x22, #IRS_LEN]
+    bl Lbk_em_bytes
+    add x22, x22, #IRS_SIZE
+    add x21, x21, #1
+    b Lbk_em_file_loop
+Lbk_em_file_done:
+
     // ---- DATA block -----------------------------------------------------
     mov x0, x20
     adrp x1, Lbk_em_data_head@PAGE
@@ -193,6 +212,33 @@ Lbk_em_sdata_done:
     mov x2, x23
     bl _bk_arm64_fmt
 
+    // ---- _bsk_files: one SD record per FILES name (entry k-1 = file #k) ---
+    mov x0, x20
+    adrp x1, Lbk_em_files_head@PAGE
+    add x1, x1, Lbk_em_files_head@PAGEOFF
+    bl _ob_puts
+    ldr w23, [x19, #IRM_NFILES]
+    ldr x22, [x19, #IRM_FILES]
+    mov x21, #0
+Lbk_em_files_loop:
+    cmp x21, x23
+    b.hs Lbk_em_files_done
+    mov x0, x20
+    adrp x1, Lbk_em_files_fmt@PAGE
+    add x1, x1, Lbk_em_files_fmt@PAGEOFF
+    add x2, x21, #1
+    ldr w3, [x22, #IRS_LEN]
+    bl _bk_arm64_fmt
+    add x22, x22, #IRS_SIZE
+    add x21, x21, #1
+    b Lbk_em_files_loop
+Lbk_em_files_done:
+    mov x0, x20
+    adrp x1, Lbk_em_files_count@PAGE
+    add x1, x1, Lbk_em_files_count@PAGEOFF
+    mov x2, x23
+    bl _bk_arm64_fmt
+
     // ---- array descriptors (RTA_*) in __DATA,__data ---------------------
     mov x0, x20
     adrp x1, Lbk_em_sec_data@PAGE
@@ -249,6 +295,8 @@ Lbk_em_sdesc_loop:
     add x22, x22, x21, lsl #4
     ldr w9, [x22, #IRA_DIMS]
     cbz w9, Lbk_em_sdesc_next
+    cmp w9, #2
+    b.eq Lbk_em_sdesc_table
     cmp w9, #1
     b.ne Lbk_em_bad_dims
     // "Lsdesc_<L>: .quad _bsk_sarr_<L> / .long 1, b1, 0, 1, letter, b1+1"
@@ -260,6 +308,27 @@ Lbk_em_sdesc_loop:
     ldr w4, [x22, #IRA_B1]
     mov x5, x21
     add x6, x4, #1
+    bl _bk_arm64_fmt
+    b Lbk_em_sdesc_next
+Lbk_em_sdesc_table:
+    // string table: ".long 2, b1, b2, " then "b2+1, letter, (b1+1)*(b2+1)"
+    mov x0, x20
+    adrp x1, Lbk_em_sdesc2_fmt@PAGE
+    add x1, x1, Lbk_em_sdesc2_fmt@PAGEOFF
+    mov x2, x21
+    mov x3, x21
+    ldr w4, [x22, #IRA_B1]
+    ldr w5, [x22, #IRA_B2]
+    bl _bk_arm64_fmt
+    ldr w4, [x22, #IRA_B1]
+    ldr w5, [x22, #IRA_B2]
+    add x2, x5, #1
+    mov x3, x21
+    add x4, x4, #1
+    mul x4, x4, x2
+    mov x0, x20
+    adrp x1, Lbk_em_desc_tail@PAGE
+    add x1, x1, Lbk_em_desc_tail@PAGEOFF
     bl _bk_arm64_fmt
 Lbk_em_sdesc_next:
     add x21, x21, #1
@@ -314,6 +383,9 @@ Lbk_em_sarr_loop:
     cbz w9, Lbk_em_sarr_next
     ldr w10, [x22, #IRA_B1]
     add x3, x10, #1
+    ldr w11, [x22, #IRA_B2]         // 0 for a list, so the product is b1 + 1
+    add x11, x11, #1
+    mul x3, x3, x11                 // elements (b1 + 1) * (b2 + 1)
 .if (SD_SIZE != 16)
     .error "a64_emit.s shifts the element count by 4: SD_SIZE must be 16"
 .endif
@@ -327,6 +399,16 @@ Lbk_em_sarr_next:
     add x21, x21, #1
     cmp x21, #NUM_LETTERS
     b.lo Lbk_em_sarr_loop
+
+    // ---- zero-filled string temp cells: NSTEMPS SD records ---------------
+    ldr w9, [x19, #IRM_NSTEMPS]
+    cbz w9, Lbk_em_scells_done
+    lsl x2, x9, #4                  // SD_SIZE = 16
+    mov x0, x20
+    adrp x1, Lbk_em_scells@PAGE
+    add x1, x1, Lbk_em_scells@PAGEOFF
+    bl _bk_arm64_fmt
+Lbk_em_scells_done:
 
     mov x0, #0
     b Lbk_em_return
@@ -437,6 +519,24 @@ Lbk_em_sdata_count:
     .ascii "    .globl _bsk_sdata_count\n"
     .ascii "_bsk_sdata_count:\n"
     .asciz "    .quad %u\n"
+Lbk_em_file_label:
+    .asciz "Lfile_%u:\n"
+Lbk_em_files_head:
+    .ascii "    .globl _bsk_files\n"
+    .asciz "_bsk_files:\n"
+Lbk_em_files_fmt:
+    .ascii "    .quad Lfile_%u\n"
+    .asciz "    .long %u, 0\n"
+Lbk_em_files_count:
+    .ascii "    .globl _bsk_files_count\n"
+    .ascii "_bsk_files_count:\n"
+    .asciz "    .quad %u\n"
+Lbk_em_sdesc2_fmt:
+    .ascii "Lsdesc_%L:\n"
+    .ascii "    .quad _bsk_sarr_%L\n"
+    .asciz "    .long 2, %u, %u, "
+Lbk_em_scells:
+    .asciz "    .zerofill __DATA,__bss,_bsk_scells,%u,3\n"
 Lbk_em_sec_data:
     .ascii "    .section __DATA,__data\n"
     .asciz "    .p2align 3\n"

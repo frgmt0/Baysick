@@ -2,7 +2,7 @@
 // src/ir/ir_build.s -- IR builder API (include/ir.inc, docs/IR.md).
 //
 // All memory comes from _drv_alloc and is never freed. Growable arrays
-// (instructions, labels, strings, data, string data) double their capacity by
+// (instructions, labels, strings, data, string data, FILES names) double their capacity by
 // allocating a new block and copying; the old block is abandoned.
 // Every function follows AAPCS64 and preserves x19-x28, d8-d15.
 // =====================================================================
@@ -241,8 +241,9 @@ _ir_emit:
     .globl _ir_add_string
     .p2align 2
 _ir_add_string:
-    // NSTRINGS / CAPSTRINGS pair and the STRINGS pointer
+    // NSTRINGS / CAPSTRINGS and the STRINGS pointer
     add x3, x0, #IRM_STRINGS
+    add x4, x0, #IRM_CAPSTRINGS
     add x0, x0, #IRM_NSTRINGS
     b Lir_add_bytes
 
@@ -255,21 +256,22 @@ _ir_add_string:
     .globl _ir_add_sdata
     .p2align 2
 _ir_add_sdata:
-    // NSDATA / CAPSDATA pair and the SDATA pointer
+    // NSDATA / CAPSDATA and the SDATA pointer
     add x3, x0, #IRM_SDATA
+    add x4, x0, #IRM_CAPSDATA
     add x0, x0, #IRM_NSDATA
     b Lir_add_bytes
 
 // ---------------------------------------------------------------------
 // Lir_add_bytes -- private helper: append an IRS_* entry {copy, len} to
 // a growable table of the module.
-//   in:  x0 = address of the table's u32 count, followed by its u32
-//             capacity (count + 4), x1 = bytes, w2 = length,
-//        x3 = address of the table's entry pointer
+//   in:  x0 = address of the table's u32 count, x1 = bytes, w2 = length,
+//        x3 = address of the table's entry pointer,
+//        x4 = address of the table's u32 capacity
 //   out: w0 = index of the new entry
 //   clobbers: x0-x17
 //   callee-saved: x19 = &count, x20 = bytes, x21 = length,
-//                 x22 = arena copy, x23 = &table pointer
+//                 x22 = arena copy, x23 = &table pointer, x24 = &capacity
 //   frame: 64 bytes
 // ---------------------------------------------------------------------
     .p2align 2
@@ -278,11 +280,12 @@ Lir_add_bytes:
     mov x29, sp
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
-    str x23, [sp, #48]
+    stp x23, x24, [sp, #48]
     mov x19, x0
     mov x20, x1
     mov w21, w2
     mov x23, x3
+    mov x24, x4
     // private copy of the bytes
     mov x0, x21
     bl _drv_alloc
@@ -292,7 +295,8 @@ Lir_add_bytes:
     mov x2, x21
     bl _memcpy
 1:
-    ldp w9, w10, [x19]                  // count, capacity
+    ldr w9, [x19]                       // count
+    ldr w10, [x24]                      // capacity
     cmp w9, w10
     b.lo 2f
     // full: double the table (first block Lir_INIT_STRINGS entries)
@@ -300,7 +304,7 @@ Lir_add_bytes:
     mov w12, #Lir_INIT_STRINGS
     cmp w10, #0
     csel w11, w12, w11, eq
-    str w11, [x19, #4]
+    str w11, [x24]
     ldr x0, [x23]
     mov x12, #IRS_SIZE
     mul x1, x9, x12
@@ -318,7 +322,7 @@ Lir_add_bytes:
     add w11, w9, #1
     str w11, [x19]
     mov w0, w9
-    ldr x23, [sp, #48]
+    ldp x23, x24, [sp, #48]
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
     ldp x29, x30, [sp], #64
@@ -466,6 +470,92 @@ _ir_func_set:
     ret
 Lir_func_set_bad:
     IR_ADR x0, Lir_m_badnparams
+    b _drv_fatal
+
+// ---------------------------------------------------------------------
+// _ir_new_stemp -- allocate the next string temp cell of the module
+// (Fifth Edition, IR.md 4.1: cells are numbered module-wide from 0).
+//   in:  x0 = Module*
+//   out: w0 = cell number (IRM_NSTEMPS before the increment)
+//   clobbers: x0, x9, x10 (leaf)
+// ---------------------------------------------------------------------
+    .globl _ir_new_stemp
+    .p2align 2
+_ir_new_stemp:
+    ldr w9, [x0, #IRM_NSTEMPS]
+    add w10, w9, #1
+    str w10, [x0, #IRM_NSTEMPS]
+    mov w0, w9
+    ret
+
+// ---------------------------------------------------------------------
+// _ir_add_file -- append one FILES name (Fifth Edition, IR.md 2); the
+// bytes are copied. The caller has checked LIM_FILES.
+//   in:  x0 = Module*, x1 = bytes, w2 = length
+//   out: w0 = file number (1 for the first name)
+//   clobbers: x0-x17
+//   callee-saved: none (frame record only)
+//   frame: 16 bytes
+// ---------------------------------------------------------------------
+    .globl _ir_add_file
+    .p2align 2
+_ir_add_file:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    // NFILES / CAPFILES and the FILES pointer
+    add x3, x0, #IRM_FILES
+    add x4, x0, #IRM_CAPFILES
+    add x0, x0, #IRM_NFILES
+    bl Lir_add_bytes
+    // table entry n is file number n + 1
+    add w0, w0, #1
+    ldp x29, x30, [sp], #16
+    ret
+
+// ---------------------------------------------------------------------
+// _ir_set_sarray2 -- declare string table letter$ (Fifth Edition):
+// DIMS = 2, B1, B2, FLAGS.
+//   in:  x0 = Module*, w1 = letter 0..25, w2 = b1, w3 = b2,
+//        w4 = flags (IRA_FLAG_*)
+//   out: none
+//   clobbers: x0, x9 (leaf except for the out-of-range fatal error)
+// ---------------------------------------------------------------------
+    .globl _ir_set_sarray2
+    .p2align 2
+_ir_set_sarray2:
+    cmp w1, #NUM_LETTERS
+    b.hs Lir_set_array_bad
+    // entry = module + IRM_SARRAYS + letter * IRA_SIZE
+    mov w9, #IRA_SIZE
+    umaddl x0, w1, w9, x0
+    add x0, x0, #IRM_SARRAYS
+    mov w9, #2                          // a string table is 2-D
+    str w9, [x0, #IRA_DIMS]
+    str w2, [x0, #IRA_B1]
+    str w3, [x0, #IRA_B2]
+    str w4, [x0, #IRA_FLAGS]
+    ret
+
+// ---------------------------------------------------------------------
+// _ir_set_fnkind -- set the FNK_* word of an FN function (Fifth
+// Edition): IRM_FNKINDS[index] := bits. The word of main stays 0, and
+// _ir_func_begin does not change it (a new module has every word 0).
+//   in:  x0 = Module*, w1 = function index 1..26, w2 = FNK_* bits
+//   out: none
+//   clobbers: x0 (leaf except for the out-of-range fatal error)
+// ---------------------------------------------------------------------
+    .globl _ir_set_fnkind
+    .p2align 2
+_ir_set_fnkind:
+    // only FN functions (index 1..26) have a kind word to set
+    cbz w1, Lir_set_fnkind_bad
+    cmp w1, #NUM_FUNCS
+    b.hs Lir_set_fnkind_bad
+    add x0, x0, #IRM_FNKINDS
+    str w2, [x0, w1, uxtw #2]
+    ret
+Lir_set_fnkind_bad:
+    IR_ADR x0, Lir_m_badfunc
     b _drv_fatal
 
     .section __TEXT,__cstring,cstring_literals

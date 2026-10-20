@@ -7,7 +7,7 @@
 #   bsk_mat_zer bsk_mat_con bsk_mat_idn
 #   bsk_mat_copy bsk_mat_trn bsk_mat_inv
 #   bsk_mat_add bsk_mat_sub bsk_mat_mul bsk_mat_scale
-#   bsk_smat_print (MAT PRINT of a string list)
+#   bsk_smat_print (MAT PRINT of a string list or string table)
 #
 # This file owns every BASIC rule of the MAT statements: shapes,
 # conformability, the storage ("fits") test, redimensioning, aliasing,
@@ -387,46 +387,71 @@ bsk_mat_print:
     .size bsk_mat_print, . - bsk_mat_print
 
 # ---------------------------------------------------------------------
-# bsk_smat_print -- one MAT PRINT item that is a string list
-#   (LANGUAGE.md 7.14.5 steps 2-3, DESIGN.md 6.5).
-#   Purpose : current bound 0 -> DIMENSION ERROR; newline if col != 0;
-#             one row of the string items X$(1) .. X$(n), each but the
-#             last followed by the ',' rule (zoned) or nothing (packed);
-#             then newline.
-#   Inputs  : %rdi = string-list descriptor, %esi = MATPR_ZONED /
-#             MATPR_PACKED
+# bsk_smat_print -- one MAT PRINT item that is a string list or, Fifth
+#   Edition, a string table (LANGUAGE.md 7.14.5 steps 2-3, DESIGN.md
+#   6.5, 6.8).
+#   Purpose : a zero dimension (list: current bound 0; table: B1 or B2
+#             0) -> DIMENSION ERROR; newline if col != 0; then each row
+#             -- a list is one row X$(1) .. X$(n), a table r rows
+#             X$(i,1) .. X$(i,c) -- as string items, each but the last
+#             of its row followed by the ',' rule (zoned) or nothing
+#             (packed); newline after each row (exactly the numeric
+#             layout of bsk_mat_print, with string items).
+#   Inputs  : %rdi = string-list or string-table descriptor, %esi =
+#             MATPR_ZONED / MATPR_PACKED
 #   Outputs : none
 #   Clobbers: all caller-saved registers
-#   Callee-saved used: %rbx = current element (SD*), %r12 = mode,
-#             %r13 = n, %r14 = element index; frame RT_MAT_ENTER
+#   Callee-saved used: %rbx = first element of the current row (SD*),
+#             %r12 = mode, %r13 = columns, %r14 = column index, %r15 =
+#             row stride in bytes; frame RT_MAT_ENTER (rows left in
+#             RT_MAT_SLOT)
 # ---------------------------------------------------------------------
     .globl bsk_smat_print
     .type bsk_smat_print, @function
     .p2align 4
 bsk_smat_print:
     RT_MAT_ENTER
-    movl RTA_B1(%rdi), %r13d        # current bound n
-    testq %r13, %r13
-    jz .Lrt_mat_dimerr              # a list of no elements
     movl %esi, %r12d                # layout mode
     movq RTA_DATA(%rdi), %rbx
+    movl RTA_B1(%rdi), %eax         # list: n; table: rows
+    testl %eax, %eax
+    jz .Lrt_mat_dimerr              # no element
+    cmpl $2, RTA_DIMS(%rdi)
+    je 1f
+    movq $1, RT_MAT_SLOT(%rsp)      # a list: one row ...
+    movq %rax, %r13                 # ... of n string items
     addq $SD_SIZE, %rbx             # element 1
-    movl $1, %r14d
-    call bsk_rt_print_fresh         # a matrix starts on a new line
-.Lrt_mat_sprint_loop:
-    movq %rbx, %rdi
-    call bsk_print_sv               # the string item
-    cmpq %r13, %r14
-    jae .Lrt_mat_sprint_end         # no separator after the last one
-    cmpl $MATPR_PACKED, %r12d
-    je 1f                           # packed: no movement at all
-    call bsk_print_comma            # zoned: next 15-column zone
+    xorl %r15d, %r15d               # (no second row)
+    jmp 2f
 1:
-    addq $SD_SIZE, %rbx
+    movq %rax, RT_MAT_SLOT(%rsp)    # rows
+    movl RTA_B2(%rdi), %r13d        # columns
+    testl %r13d, %r13d
+    jz .Lrt_mat_dimerr              # no column
+    movl RTA_ROWLEN(%rdi), %r15d
+    imulq $SD_SIZE, %r15, %r15      # row stride in bytes
+    leaq SD_SIZE(%rbx,%r15), %rbx   # element (1,1)
+2:
+    call bsk_rt_print_fresh         # a matrix starts on a new line
+.Lrt_mat_sprint_row:
+    xorl %r14d, %r14d               # column index
+.Lrt_mat_sprint_col:
+    movq %r14, %rdi
+    imulq $SD_SIZE, %rdi, %rdi
+    addq %rbx, %rdi                 # this element
+    call bsk_print_sv               # the string item
     addq $1, %r14
-    jmp .Lrt_mat_sprint_loop
-.Lrt_mat_sprint_end:
-    call bsk_print_nl               # newline after the row
+    cmpq %r13, %r14
+    jae .Lrt_mat_sprint_rowend      # no separator after the last one
+    cmpl $MATPR_PACKED, %r12d
+    je .Lrt_mat_sprint_col          # packed: no movement at all
+    call bsk_print_comma            # zoned: next 15-column zone
+    jmp .Lrt_mat_sprint_col
+.Lrt_mat_sprint_rowend:
+    call bsk_print_nl               # newline after each row
+    addq %r15, %rbx                 # next row
+    subq $1, RT_MAT_SLOT(%rsp)
+    jnz .Lrt_mat_sprint_row
     RT_MAT_LEAVE
     .size bsk_smat_print, . - bsk_smat_print
 

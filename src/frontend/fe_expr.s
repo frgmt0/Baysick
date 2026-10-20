@@ -13,6 +13,11 @@
 // value variable `ldfv` inside FNx's own multi-line body), SGN, COT, NUM,
 // DET; a parameter of the enclosing DEF is `param k`. A string reference
 // ("...", A$, A$( ) in operand position is MISMATCHED STRING OPERATION.
+// Fifth Edition (LANGUAGE.md 4.5-4.6, 6.1): STR$( and
+// FNx$ are string expressions (MISMATCHED STRING OPERATION here); LEN(,
+// ASC(, VAL( take a string expression (fe_sexpr.s) and give a number;
+// FNx( arguments may be string expressions (_fe_call, fe_sexpr.s); FNx
+// is the value variable only in the body of the *numeric* FNx.
 //
 // Grammar (left-associative at every level, sign only at the start):
 //   expression := [+|-] term { (+|-) term }
@@ -212,6 +217,10 @@ Lfe_expr_primary:
     b.eq Lfe_expr_primary_string
     cmp w0, #TK_BAD
     b.eq Lfe_expr_primary_bad
+    cmp w0, #TK_SFN                     // FNx$( : a string expression
+    b.eq Lfe_expr_primary_string
+    cmp w0, #TK_SFN0
+    b.eq Lfe_expr_primary_string
     // operator, ')', ',', end of line ...: no operand here
     mov w0, #ERR_ILLEGAL_FORMULA
     bl _fe_err
@@ -281,7 +290,8 @@ Lfe_expr_primary_array:
 Lfe_expr_primary_fn:
     // FNx(e0, ..., ek)
     ldr w0, [sp, #(48 + TOK_INDEX)]
-    bl Lfe_expr_call
+    mov w1, #0                          // a numeric call (fe_sexpr.s)
+    bl _fe_call
     b Lfe_expr_primary_ret
 
 Lfe_expr_primary_fn0:
@@ -295,6 +305,11 @@ Lfe_expr_primary_fn0:
     ldr w9, [x9, _fe_ctx_letter@PAGEOFF]
     cmp w9, w19
     b.ne 1f
+    // ... of the numeric FNx only (in FNx$'s body FNx is a call, 7.10.1)
+    adrp x9, _fe_ctx_skinds@PAGE
+    ldr w9, [x9, _fe_ctx_skinds@PAGEOFF]
+    tst w9, #FNK_STRING
+    b.ne 1f
     FE_NONE
     mov w0, #OP_LDFV
     bl _fe_emit_new
@@ -306,6 +321,9 @@ Lfe_expr_primary_fn0:
     mov w0, w19
     mov w1, #0
     bl _fe_record_call
+    mov w0, w19
+    mov w1, #0                          // numeric call, no arguments
+    bl _fe_record_kind
     FE_NONE
     mov w4, w19
     mov w0, #OP_CALLFN
@@ -314,6 +332,10 @@ Lfe_expr_primary_fn0:
 
 Lfe_expr_primary_builtin:
     ldr w19, [sp, #(48 + TOK_INDEX)]
+    cmp w19, #BI_STR                    // STR$( : a string expression
+    b.eq Lfe_expr_primary_string
+    cmp w19, #BI_LEN
+    b.hs Lfe_expr_primary_sfunc         // LEN( ASC( VAL(
     ldr w9, [sp, #(48 + TOK_LEN)]
     cmp w9, #4
     b.eq Lfe_expr_primary_call          // with '(' consumed
@@ -357,6 +379,22 @@ Lfe_expr_primary_rnd:
     bl _fe_emit_new
     b Lfe_expr_primary_ret
 
+Lfe_expr_primary_sfunc:
+    // LEN(s) / ASC(s) / VAL(s): s's string reference; tN = len|asc|val tS.
+    // A number there, or an arithmetic operator after s, is MISMATCHED
+    // STRING OPERATION (LANGUAGE.md 4.5).
+    bl _fe_paren_open
+    bl _fe_sexpr_need
+    mov w20, w0
+    bl _fe_sref_end
+    bl _fe_paren_close
+    FE_NONE
+    mov w1, w20
+    sub w0, w19, #BI_LEN
+    add w0, w0, #OP_LEN                 // BI_LEN..BI_VAL -> OP_LEN..OP_VAL
+    bl _fe_emit_new
+    b Lfe_expr_primary_ret
+
 Lfe_expr_primary_paren:
     // ( e ): nothing extra is emitted
     bl _fe_paren_open
@@ -369,89 +407,6 @@ Lfe_expr_primary_ret:
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
     ldp x29, x30, [sp], #96
-    ret
-
-// ---------------------------------------------------------------------
-// Lfe_expr_call -- a user function call "FNx(" e0 {, ek} ")" whose "FNx("
-//   the scanner already consumed (LANGUAGE.md 7.10, IR.md 4.2): the
-//   arguments left to right, then `fnarg 1, te1` ... `fnarg k, tek`, then
-//   `tN = callfn FNx, te0`. The argument count is recorded for the
-//   phase-3 INCORRECT NUMBER OF ARGUMENTS check (more than eight never
-//   match a DEF, so only the first eight temps are kept).
-//   in:  w0 = letter
-//   out: w0 = temp with the result
-//   clobbers: x0-x17, d0-d7
-//   callee-saved: w19 = letter, w20 = argument count, w21 = index
-//   frame: 80 bytes (frame record, x19-x22, 8 u32 argument temps at sp+48)
-// ---------------------------------------------------------------------
-    .p2align 2
-Lfe_expr_call:
-    stp x29, x30, [sp, #-80]!
-    mov x29, sp
-    stp x19, x20, [sp, #16]
-    stp x21, x22, [sp, #32]
-    mov w19, w0
-    bl _fe_note_fn_ref
-    bl _fe_paren_open
-    mov w20, #0
-Lfe_expr_call_arg:
-    bl _fe_expr
-    cmp w20, #LIM_FN_PARAMS
-    b.hs 1f
-    add x9, sp, #48
-    str w0, [x9, x20, lsl #2]
-1:
-    add w20, w20, #1
-    bl _fe_next_op
-    cmp w0, #TK_COMMA
-    b.eq Lfe_expr_call_arg
-    cmp w0, #TK_RPAREN
-    b.eq 2f
-    mov w0, #ERR_ILLEGAL_FORMULA        // anything else before ')'
-    bl _fe_err
-2:
-    // ')' consumed: leave the nesting level
-    adrp x9, _fe_depth@PAGE
-    ldr w10, [x9, _fe_depth@PAGEOFF]
-    sub w10, w10, #1
-    str w10, [x9, _fe_depth@PAGEOFF]
-    mov w0, w19
-    mov w1, w20
-    bl _fe_record_call
-    // fnarg k, tek for k = 1 .. min(count, 8) - 1
-    mov w22, w20
-    cmp w22, #LIM_FN_PARAMS
-    b.ls 3f
-    mov w22, #LIM_FN_PARAMS
-3:
-    mov w21, #1
-4:
-    cmp w21, w22
-    b.hs 5f
-    add x9, sp, #48
-    ldr w1, [x9, x21, lsl #2]
-    mov w2, #IR_NONE
-    mov w3, #IR_NONE
-    mov w4, #IR_NONE
-    mov w5, w21                         // IMM = argument index k
-    mov w6, #REL_NONE
-    mov w0, #OP_FNARG
-    bl _fe_emit
-    add w21, w21, #1
-    b 4b
-5:
-    // tN = callfn FNx, te0
-    ldr w1, [sp, #48]
-    mov w2, #IR_NONE
-    mov w3, #IR_NONE
-    mov w4, w19
-    mov x5, #0
-    mov w6, #REL_NONE
-    mov w0, #OP_CALLFN
-    bl _fe_emit_new
-    ldp x21, x22, [sp, #32]
-    ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #80
     ret
 
 // ---------------------------------------------------------------------

@@ -38,9 +38,12 @@ _main:
 
 // ---------------------------------------------------------------------
 // _bsk_end -- END / STOP: normal termination.
-//   Purpose : write the pending-line newline (if col != 0), flush the
-//             stdout buffer, exit with status EXIT_RUN_OK, or
-//             EXIT_RUN_ERROR if writing stdout failed (LANGUAGE.md 10).
+//   Purpose : Fifth Edition: finish the files in write mode first
+//             (_bsk_rt_files_finish, DESIGN.md 6.8); if that fails, the
+//             run ends as the error CAN'T WRITE FILE. Then write the
+//             pending-line newline (if col != 0), flush the stdout
+//             buffer, exit with status EXIT_RUN_OK, or EXIT_RUN_ERROR if
+//             writing stdout failed (LANGUAGE.md 10).
 //   Inputs  : none
 //   Outputs : never returns
 //   Clobbers: everything
@@ -52,6 +55,14 @@ _main:
 _bsk_end:
     stp x29, x30, [sp, #-16]!       // frame record (keeps sp aligned)
     mov x29, sp
+    // The files in write mode first, in ascending order; a failure
+    // ends the run as CAN'T WRITE FILE at this END / STOP line (the
+    // remaining files were still finished; stdout follows in _bsk_err).
+    bl _bsk_rt_files_finish
+    cbz w0, 1f
+    mov w0, #ERR_CANT_WRITE_FILE
+    bl _bsk_err                     // noreturn
+1:
     bl _bsk_rt_finish_output        // newline if mid-line, then flush
     cmp w0, #0                      // w0 = 1 if stdout broke
     mov w0, #EXIT_RUN_OK            // END and STOP exit 0 ...

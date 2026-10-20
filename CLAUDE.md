@@ -1,10 +1,9 @@
 # Baysick — notes for agents
 
 Dartmouth BASIC compiler in arm64 assembly (Apple `as` syntax), macOS/arm64. Implemented: the
-Second, Third and Fourth Editions (Oct 1964 incl. MAT matrix statements; 1966/1968: strings,
-INPUT, ON, TAB, CHANGE, multi-line DEF, MAT INPUT, …; LANGUAGE.md §3–§14). Specified, being
-implemented: the Fifth Edition (1970: sequential files, `LEN ASC STR$ VAL`, string DEF, string
-tables; LANGUAGE.md §4.6, §6.1, §7.10.1, §7.21–§7.26; work packages DESIGN.md §2.4). Two targets:
+Second through Fifth Editions (Oct 1964 incl. MAT matrix statements; 1966/1968: strings, INPUT,
+ON, TAB, CHANGE, multi-line DEF, MAT INPUT, …; 1970: sequential files, `LEN ASC STR$ VAL`,
+string DEF, string tables; LANGUAGE.md §3–§14). Two targets:
 `arm64-macos` (default, full pipeline) and `x86_64-linux` (cross: emits GNU `as` x86_64 text;
 assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, §6.4, §8).
 
@@ -25,16 +24,9 @@ assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, 
   `src/runtime_x86_64_linux/`, cross testing (`Makefile.linux`, `tests/cross*.sh`, CI),
   benchmarks (`bench/`). Do not edit another module's files. MAT work split: DESIGN.md §2.1;
   Third/Fourth Edition split: DESIGN.md §2.3; Fifth Edition split: DESIGN.md §2.4.
-- **Staging switch:** the Fifth Edition contract counts and record sizes (`OP_COUNT`,
-  `KW_COUNT`, `TK_COUNT`, `BI_COUNT`, `IRM_SIZE`) depend on `BSK_ED5_CONTRACT` (default 0 = the
-  current modules). Work on the new features with `make clean; make BSK_ED5=1 test`; plain
-  `make test` must keep passing every test that passed before (DESIGN.md §2.2). Integration
-  removes the switch in one commit. Until then `tests/run.sh` and `make cross` exit 1 by
-  design: the expected-failure set is exactly `ed5_*`, `manual5_*`, `c_ed5_*`, `r_ed5_*`,
-  `tests/ir/ed5_*` (plus, with the switch 1, the two `c_ed4_*` tests of LANGUAGE.md §14.1).
-  Fifth Edition design and implementation commits stay local (not pushed) until the
-  integration commit, so CI stays green; there is no expected-failure mechanism and no switch-1
-  CI step. Order of work: DESIGN.md §2.4 (step 0 first).
+- Contract counts and record sizes (`OP_COUNT`, `KW_COUNT`, `TK_COUNT`, `BI_COUNT`, `IRF_SIZE`,
+  `IRM_SIZE`) are plain constants (DESIGN.md §2.2). A future contract change that many modules
+  must follow may be staged behind a temporary switch, removed at integration in one commit.
 - Matrix kernels: GEMM may reassociate/use FMA (class R); every other MAT result must be
   bit-identical across targets and kernel variants (class E, DESIGN.md §6.6.4). Test products use
   exact data only. Never use undocumented CPU instructions; vendor BLAS is for `bench/` only.
@@ -49,14 +41,12 @@ assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, 
   that must exist afterwards, byte-exact) directories (DESIGN.md §8.5).
   Tests named `ed4_*`, `manual4_*`, `text_*`, `c_ed4_*`, `r_ed4_*` and `tests/ir/ed4_*` cover
   the Third/Fourth Edition; `ed5_*`, `manual5_*`, `c_ed5_*`, `r_ed5_*` and `tests/ir/ed5_*`
-  cover the Fifth Edition and fail until it is implemented.
+  cover the Fifth Edition.
 - No TODOs, stubs or placeholder values.
 
 ## Commands
 - Build: `make`   Test: `make test` (or `sh tests/run.sh [-v] [pattern]`)
-- Fifth Edition contract: `make clean; make BSK_ED5=1 test` (`make clean` when switching)
-- Include check: `make check-includes` (Mac, both switch values); `make -f Makefile.linux
-  check-includes` (Linux)
+- Include check: `make check-includes` (Mac); `make -f Makefile.linux check-includes` (Linux)
 - Kernel variant: `BAYSICK_KERNELS=<variant|baseline> sh tests/run.sh`
 - Benchmarks: `make bench` (Mac, vs Accelerate), `make bench-cross` (Linux host, vs OpenBLAS)
 - x86_64 cross test: `make cross` / `sh tests/cross.sh [-v] [-H host] [pattern]` (ssh host,

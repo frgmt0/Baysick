@@ -30,6 +30,15 @@
 // of a multi-line body; _fe_ctx_letter, _fe_ctx_nparams, _fe_ctx_params
 // describe the function. Inside either, a parameter name denotes the
 // function's own copy (`param k` / `stparam k`).
+//
+// Fifth Edition (LANGUAGE.md 7.10.1): DEF FNx$ defines
+// a string function and a parameter may be a string parameter X$. Their
+// FNK_* bits (FNK_STRING, FNK_SPARAM0 << k) are kept per multi-line
+// function (_fe_ml_kinds), per DEFined letter (_fe_fn_kinds) and for the
+// DEF context (_fe_ctx_skinds), and published with _ir_set_fnkind. A
+// string parameter is read with `sparam k` (fe_sexpr.s); a string
+// function's single-line body is a string expression returned by
+// `sret`, its FNEND is `tN = sfv; sret tN`.
 // =====================================================================
 .include "baysick.inc"
 
@@ -154,6 +163,8 @@ Lfe_prescan_a_main:
     str w21, [x10, x25, lsl #2]
     FE_ADR x10, _fe_ml_nparams
     str w26, [x10, x25, lsl #2]
+    FE_ADR x10, _fe_ml_kinds
+    str w4, [x10, x25, lsl #2]          // FNK_* bits (0: all numeric)
     // parameters: _fe_ml_params[letter][0..7], unused entries IR_NONE
     FE_ADR x10, _fe_ml_params
     add x10, x10, x25, lsl #5           // 8 u32 per letter
@@ -251,6 +262,15 @@ Lfe_prescan_c_loop:
     FE_ADR x3, _fe_ml_params
     add x3, x3, x25, lsl #5
     bl _ir_func_set
+    // a string function or string parameters: _ir_set_fnkind (IR.md 4.4)
+    FE_ADR x10, _fe_ml_kinds
+    ldr w2, [x10, x25, lsl #2]
+    cbz w2, 2f
+    adrp x9, _fe_module@PAGE
+    ldr x0, [x9, _fe_module@PAGEOFF]
+    add w1, w25, #FUNC_FN_BASE
+    bl _ir_set_fnkind
+2:
     // line labels of the body: DEF line + 1 .. FNEND line
     FE_ADR x10, _fe_ml_endidx
     ldr w27, [x10, x25, lsl #2]
@@ -309,6 +329,8 @@ _fe_enter_line:
     adrp x9, _fe_curfn@PAGE
     str x13, [x9, _fe_curfn@PAGEOFF]
     str wzr, [x12, _fe_ctx_kind@PAGEOFF]
+    adrp x9, _fe_ctx_skinds@PAGE
+    str wzr, [x9, _fe_ctx_skinds@PAGEOFF]
     adrp x9, _fe_forbase@PAGE
     str wzr, [x9, _fe_forbase@PAGEOFF]
     ret
@@ -326,6 +348,10 @@ Lfe_enter_line_body:
     ldr w14, [x9, x13, lsl #2]
     adrp x9, _fe_ctx_nparams@PAGE
     str w14, [x9, _fe_ctx_nparams@PAGEOFF]
+    FE_ADR x9, _fe_ml_kinds
+    ldr w14, [x9, x13, lsl #2]
+    adrp x9, _fe_ctx_skinds@PAGE
+    str w14, [x9, _fe_ctx_skinds@PAGEOFF]
     // copy the eight parameter slots
     FE_ADR x9, _fe_ml_params
     add x9, x9, x13, lsl #5
@@ -348,7 +374,9 @@ Lfe_enter_line_body:
 // _fe_def_header -- parse a DEF header after the keyword, without
 //   reporting errors (the pre-scan uses it silently, phase 2 reports the
 //   code it returns):
-//     "FN" letter [ "(" parameter { "," parameter } ")" ] ( "=" | EOL )
+//     "FN" letter [ "$" ] [ "(" parameter { "," parameter } ")" ] ( "=" | EOL )
+//   ("$" after the letter makes a string function, X$ a string parameter,
+//   LANGUAGE.md 7.10; parameters are distinct as (name, kind) pairs)
 //   Errors, left to right: no FN letter -> INCORRECT FORMAT; the letter
 //   already DEFined -> DUPLICATE FUNCTION; a parameter that is missing,
 //   not a simple variable (string, array) or repeated -> ILLEGAL VARIABLE;
@@ -362,24 +390,28 @@ Lfe_enter_line_body:
 //        with a DEF line already compiled), x1 = u32[LIM_FN_PARAMS] for
 //        the parameter slots
 //   out: w0 = ERR_* or 0, w1 = letter or -1 if none was parsed,
-//        w2 = FE_DEF_SINGLE / FE_DEF_MULTI, w3 = parameter count
+//        w2 = FE_DEF_SINGLE / FE_DEF_MULTI, w3 = parameter count,
+//        w4 = FNK_* bits (FNK_STRING, string parameters)
 //   clobbers: x0-x17
 //   callee-saved: x19 = parameter buffer, w20 = mode, w21 = letter,
-//        w22 = parameter count, w23 = slot, w24 = name length / kind
-//   frame: 64 bytes
+//        w22 = parameter count, w23 = slot, w24 = name length / kind,
+//        w25 = FNK_* bits, w26 = 1 for a string parameter
+//   frame: 80 bytes
 // ---------------------------------------------------------------------
     .globl _fe_def_header
     .p2align 2
 _fe_def_header:
-    stp x29, x30, [sp, #-64]!
+    stp x29, x30, [sp, #-80]!
     mov x29, sp
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
     stp x23, x24, [sp, #48]
+    stp x25, x26, [sp, #64]
     mov x19, x1
     mov w20, w0
     mov w21, #-1
     mov w22, #0
+    mov w25, #0
     // "FN" letter
     mov w0, #0
     bl _fe_peek
@@ -397,6 +429,15 @@ _fe_def_header:
     mov w21, w9
     mov w0, #3
     bl _fe_advance
+    // FNx$: a string function
+    mov w0, #0
+    bl _fe_peek
+    cmp w0, #'$'
+    b.ne 1f
+    mov w25, #FNK_STRING
+    mov w0, #1
+    bl _fe_advance
+1:
     // a second DEF of the same letter
     cmp w20, #FE_HDR_PRESCAN
     b.ne 1f
@@ -443,25 +484,45 @@ Lfe_def_header_param:
     add w23, w23, #1                    // letter*11 + digit + 1
     mov w24, #2
 3:
-    // not followed by '$' (string) or '(' (array)
+    mov w26, #0                         // numeric parameter
     mov w0, w24
     bl _fe_peek
+    // X$: a string parameter (X$( is not a parameter)
+    cmp w0, #'$'
+    b.ne 7f
+    add w0, w24, #1
+    bl _fe_peek
+    cmp w0, #'('
+    b.eq Lfe_def_header_var
+    add w24, w24, #1                    // the '$' belongs to the name
+    mov w26, #1
+    b 8f
+7:
+    // not followed by '$' (string) or '(' (array)
     cmp w0, #'$'
     b.eq Lfe_def_header_var
     cmp w0, #'('
     b.eq Lfe_def_header_var
-    // parameters must be distinct
+8:
+    // parameters must be distinct (X and X$ are distinct)
     mov x9, #0
 4:
     cmp w9, w22
     b.hs 5f
     ldr w10, [x19, x9, lsl #2]
     cmp w10, w23
+    b.ne 9f
+    lsr w11, w25, w9
+    and w11, w11, #1                    // kind of parameter i
+    cmp w11, w26
     b.eq Lfe_def_header_var
+9:
     add x9, x9, #1
     b 4b
 5:
     str w23, [x19, x22, lsl #2]
+    lsl w9, w26, w22
+    orr w25, w25, w9                    // FNK_SPARAM0 << k for X$
     add w22, w22, #1
     mov w0, w24
     bl _fe_advance
@@ -505,10 +566,12 @@ Lfe_def_header_ret:
     mov w1, w21
     mov w2, w24
     mov w3, w22
+    mov w4, w25
+    ldp x25, x26, [sp, #64]
     ldp x23, x24, [sp, #48]
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #64
+    ldp x29, x30, [sp], #80
     ret
 
 // ---------------------------------------------------------------------
@@ -523,18 +586,23 @@ Lfe_def_header_ret:
 //   in:  scanner after "DEF"
 //   out: none
 //   clobbers: x0-x17, d0-d7
+//   Fifth Edition: the FNK_* bits are recorded (_fe_fn_kinds) and, for a
+//   single-line function, published (_ir_set_fnkind); a string function's
+//   body is a string expression (a number there is MISMATCHED STRING
+//   OPERATION), lowered followed by `sret tS`.
 //   callee-saved: w19 = letter, w20 = header kind, w21 = parameter count,
-//        x22 = Function* / line index
-//   frame: 80 bytes (frame record, x19-x22, 32-byte parameter buffer at
+//        x22 = Function* / line index, w23 = FNK_* bits
+//   frame: 96 bytes (frame record, x19-x24, 32-byte parameter buffer at
 //        sp+48)
 // ---------------------------------------------------------------------
     .globl _fe_def
     .p2align 2
 _fe_def:
-    stp x29, x30, [sp, #-80]!
+    stp x29, x30, [sp, #-96]!
     mov x29, sp
     stp x19, x20, [sp, #16]
     stp x21, x22, [sp, #32]
+    stp x23, x24, [sp, #80]
     // no DEF inside a multi-line body
     adrp x9, _fe_ctx_kind@PAGE
     ldr w9, [x9, _fe_ctx_kind@PAGEOFF]
@@ -552,6 +620,9 @@ _fe_def:
     mov w19, w1
     mov w20, w2
     mov w21, w3
+    mov w23, w4
+    FE_ADR x9, _fe_fn_kinds
+    str w23, [x9, x19, lsl #2]
     // the letter is DEFined here, with this many parameters
     adrp x9, _fe_line@PAGE
     ldr w10, [x9, _fe_line@PAGEOFF]
@@ -583,7 +654,16 @@ _fe_def:
     bl _ir_func_set
     adrp x9, _fe_curfn@PAGE
     str x22, [x9, _fe_curfn@PAGEOFF]
-    // the expression sees the parameters as `param k`
+    cbz w23, 5f
+    adrp x9, _fe_module@PAGE
+    ldr x0, [x9, _fe_module@PAGEOFF]
+    add w1, w19, #FUNC_FN_BASE
+    mov w2, w23
+    bl _ir_set_fnkind
+5:
+    adrp x9, _fe_ctx_skinds@PAGE
+    str w23, [x9, _fe_ctx_skinds@PAGEOFF]
+    // the expression sees the parameters as `param k` / `sparam k`
     adrp x9, _fe_ctx_letter@PAGE
     str w19, [x9, _fe_ctx_letter@PAGEOFF]
     adrp x9, _fe_ctx_nparams@PAGE
@@ -596,21 +676,34 @@ _fe_def:
     adrp x9, _fe_ctx_kind@PAGE
     mov w10, #FE_CTX_SL
     str w10, [x9, _fe_ctx_kind@PAGEOFF]
+    mov w24, #OP_RET
+    tst w23, #FNK_STRING
+    b.eq 6f
+    // a string function: s; sret tS
+    bl _fe_sexpr_need
+    mov w22, w0
+    bl _fe_sref_end
+    mov w24, #OP_SRET
+    b 7f
+6:
     bl _fe_expr
     mov w22, w0
+7:
     bl _fe_expect_eol
-    // ret te
+    // ret te / sret tS
     mov w1, w22
     mov w2, #IR_NONE
     mov w3, #IR_NONE
     mov w4, #IR_NONE
     mov x5, #0
     mov w6, #REL_NONE
-    mov w0, #OP_RET
+    mov w0, w24
     bl _fe_emit
     // back to main
     adrp x9, _fe_ctx_kind@PAGE
     str wzr, [x9, _fe_ctx_kind@PAGEOFF]
+    adrp x9, _fe_ctx_skinds@PAGE
+    str wzr, [x9, _fe_ctx_skinds@PAGEOFF]
     adrp x9, _fe_main@PAGE
     ldr x10, [x9, _fe_main@PAGEOFF]
     adrp x9, _fe_curfn@PAGE
@@ -644,16 +737,17 @@ Lfe_def_multi:
     mov w6, #REL_NONE
     bl _fe_emit
 Lfe_def_ret:
+    ldp x23, x24, [sp, #80]
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #80
+    ldp x29, x30, [sp], #96
     ret
 
 // ---------------------------------------------------------------------
 // _fe_fnend -- FNEND (LANGUAGE.md 7.10): only as the last line of a
 //   multi-line body (else ILLEGAL INSTRUCTION); nothing may follow; a FOR
 //   of the body still open -> UNFINISHED DEF at this line. Lowering:
-//   `tN = ldfv; ret tN`.
+//   `tN = ldfv; ret tN`; for a string function `tN = sfv; sret tN`.
 //   in:  scanner after "FNEND"
 //   out: none
 //   clobbers: x0-x17
@@ -683,6 +777,23 @@ _fe_fnend:
     mov w0, #ERR_UNFINISHED_DEF
     bl _fe_err
 2:
+    adrp x9, _fe_ctx_skinds@PAGE
+    ldr w9, [x9, _fe_ctx_skinds@PAGEOFF]
+    tst w9, #FNK_STRING
+    b.eq 3f
+    // tN = sfv ; sret tN
+    mov w0, #OP_SFV
+    mov w1, #IR_NONE
+    mov w2, #IR_NONE
+    mov w3, #IR_NONE
+    mov w4, #IR_NONE
+    mov x5, #0
+    mov w6, #REL_NONE
+    bl _fe_emit_new
+    mov w1, w0
+    mov w0, #OP_SRET
+    b 4f
+3:
     // tN = ldfv ; ret tN
     mov w0, #OP_LDFV
     mov w1, #IR_NONE
@@ -694,6 +805,7 @@ _fe_fnend:
     bl _fe_emit_new
     mov w1, w0
     mov w0, #OP_RET
+4:
     mov w2, #IR_NONE
     mov w3, #IR_NONE
     mov w4, #IR_NONE
@@ -707,8 +819,9 @@ _fe_fnend:
 // _fe_param_index -- is a scalar slot a parameter of the function whose
 //   expression or body is being lowered?
 //   in:  w0 = scalar slot
-//   out: w0 = parameter index k, or -1 (not in a DEF, or not a parameter)
-//   clobbers: x0, x9-x12   leaf, no frame
+//   out: w0 = parameter index k, or -1 (not in a DEF, or not a numeric
+//        parameter: a string parameter X$ has the same slot number as X)
+//   clobbers: x0, x9-x13   leaf, no frame
 // ---------------------------------------------------------------------
     .globl _fe_param_index
     .p2align 2
@@ -718,14 +831,19 @@ _fe_param_index:
     cbz w9, Lfe_param_index_none
     adrp x9, _fe_ctx_nparams@PAGE
     ldr w10, [x9, _fe_ctx_nparams@PAGEOFF]
+    adrp x9, _fe_ctx_skinds@PAGE
+    ldr w13, [x9, _fe_ctx_skinds@PAGEOFF]
     FE_ADR x11, _fe_ctx_params
     mov w9, #0
 1:
     cmp w9, w10
     b.hs Lfe_param_index_none
+    lsr w12, w13, w9
+    tbnz w12, #0, 3f                    // a string parameter
     ldr w12, [x11, x9, lsl #2]
     cmp w12, w0
     b.eq 2f
+3:
     add w9, w9, #1
     b 1b
 2:
@@ -767,6 +885,7 @@ _fe_record_call:
 //   recorded in ascending line order, so the first one is the minimum).
 //   INCORRECT NUMBER OF ARGUMENTS: the lowest line of a call whose
 //   argument count differs from its DEF's parameter count.
+//   MISMATCHED STRING OPERATION (Fifth Edition): _fe_check_kinds.
 //   RECURSIVE FUNCTION: lowest letter A..Z that can reach itself through
 //   the call graph (bit masks in _fe_fn_calls), reported at its DEF line.
 //   in: none   out: returns only if all checks pass
@@ -842,9 +961,12 @@ Lfe_check_fns_args_next:
     add w22, w22, #1
     b Lfe_check_fns_args_letter
 Lfe_check_fns_args_done:
-    cbz w1, Lfe_check_fns_rec_start
+    cbz w1, Lfe_check_fns_kinds
     mov w0, #ERR_WRONG_NUM_ARGS
     bl _fe_fail
+Lfe_check_fns_kinds:
+    // MISMATCHED STRING OPERATION: a call of the wrong kind (fe_sexpr.s)
+    bl _fe_check_kinds
 Lfe_check_fns_rec_start:
     // --- recursion: transitive closure of each letter's callee set ---
     mov w22, #0

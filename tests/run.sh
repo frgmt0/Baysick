@@ -15,7 +15,13 @@
 #   NAME.out   REQUIRED  exact expected stdout bytes
 #   NAME.err   optional  exact expected stderr bytes (absent = stderr must be empty)
 #   NAME.in    optional  the program's standard input (absent = /dev/null)
+#   NAME.files/   optional  fixtures: copied into the program's working directory first
+#   NAME.expect/  optional  expected files: each must exist after the run, byte-identical
 #   exit status of the program must be 0.
+#   Every program runs in a fresh empty working directory (docs/DESIGN.md 8.5); afterwards it
+#   may hold only the expected files and unchanged fixtures (else "unexpected file R" /
+#   "fixture R changed"). The same holds for run-phase tests/errors cases. A compile-phase or
+#   tests/ir case with .files/.expect is a corpus mistake: exit 2.
 #
 # tests/errors/NAME.bas     a program with a compile-time or run-time error
 #   NAME.meta  REQUIRED  two lines:  phase=compile|run   and   exit=<status>
@@ -50,6 +56,25 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/baysick-tests.XXXXXX") || exit 2
 trap 'rm -rf "$TMP"' EXIT INT TERM
 : > "$TMP/empty"
 
+# Misplaced file-test directories are a corpus mistake (docs/DESIGN.md section 8.5): compile-phase
+# error tests and IR tests never run a program. Checked for every case, before running anything.
+for bas in "$ROOT"/tests/errors/*.bas "$ROOT"/tests/ir/*.bas; do
+    [ -e "$bas" ] || continue
+    base=${bas%.bas}
+    [ -d "$base.files" ] || [ -d "$base.expect" ] || continue
+    case "$bas" in
+    */tests/errors/*)
+        phase=
+        [ -f "$base.meta" ] && phase=$(sed -n 's/^phase=//p' "$base.meta" | head -1)
+        [ "$phase" = compile ] || continue
+        echo "run.sh: errors/$(basename "$base"): .files/.expect only for program and run-phase tests" >&2
+        exit 2 ;;
+    *)
+        echo "run.sh: ir/$(basename "$base"): .files/.expect only for program and run-phase tests" >&2
+        exit 2 ;;
+    esac
+done
+
 PASS=0
 FAIL=0
 FAILED=""
@@ -64,11 +89,12 @@ selected() {
     return 1
 }
 
-# run_limited SECONDS INFILE CMD... : run CMD with stdin from INFILE, kill it
-# after SECONDS; returns CMD's exit status (137 if killed). Caller redirects output.
+# run_limited SECONDS INFILE WORKDIR CMD... : run CMD in directory WORKDIR with stdin from
+# INFILE, kill it after SECONDS; returns CMD's exit status (137 if killed). Caller redirects
+# output. The exec makes the subshell become CMD, so the kill reaches the program itself.
 run_limited() {
-    _t=$1; _in=$2; shift 2
-    "$@" <"$_in" &
+    _t=$1; _in=$2; _wd=$3; shift 3
+    (cd "$_wd" && exec "$@" <"$_in") &
     _cpid=$!
     (
         _i=0
@@ -111,6 +137,41 @@ meta_get() { # meta_get FILE KEY
     sed -n "s/^$2=//p" "$1" | head -1
 }
 
+# newwork BASE : make the case's fresh, empty working directory $WORK below $TMP and copy the
+# fixtures BASE.files/ into it (docs/DESIGN.md section 8.5). Returns 1 on failure.
+newwork() {
+    WORK=$(mktemp -d "$TMP/work.XXXXXX") || return 1
+    if [ -d "$1.files" ]; then cp -R "$1.files/." "$WORK/" || return 1; fi
+    return 0
+}
+
+# relfiles DIR : sorted relative paths (no leading ./) of the regular files under DIR.
+# Names have no blanks or glob characters (the corpus rule), so callers may word-split.
+relfiles() {
+    (cd "$1" && find . -type f | sed 's|^\./||' | sort)
+}
+
+# check_files NAME BASE : section 8.5 checks 1 and 2 of the files left in $WORK. Records one
+# failure and returns 1 on the first problem.
+check_files() {
+    _n=$1; _b=$2
+    if [ -d "$_b.expect" ]; then
+        for _r in $(relfiles "$_b.expect"); do
+            if [ ! -f "$WORK/$_r" ]; then fail "$_n" "missing file $_r"; return 1; fi
+            same "$_b.expect/$_r" "$WORK/$_r" "file $_r" "$_n" || return 1
+        done
+    fi
+    for _r in $(relfiles "$WORK"); do
+        if [ -f "$_b.expect/$_r" ]; then continue; fi
+        if [ -f "$_b.files/$_r" ]; then
+            if cmp -s "$_b.files/$_r" "$WORK/$_r"; then continue; fi
+            fail "$_n" "fixture $_r changed"; return 1
+        fi
+        fail "$_n" "unexpected file $_r"; return 1
+    done
+    return 0
+}
+
 # ---- tests/programs ---------------------------------------------------------
 for bas in "$ROOT"/tests/programs/*.bas; do
     [ -e "$bas" ] || continue
@@ -126,7 +187,8 @@ for bas in "$ROOT"/tests/programs/*.bas; do
         fail "$name" "compile failed (status $st): $(head -3 "$TMP/c.err" | tr '\n' ' ')"
         continue
     fi
-    run_limited "$TIMEOUT" "$(stdin_for "$base")" "$exe" >"$TMP/r.out" 2>"$TMP/r.err"
+    if ! newwork "$base"; then fail "$name" "cannot prepare the work directory"; rm -rf "$WORK"; continue; fi
+    run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$exe" >"$TMP/r.out" 2>"$TMP/r.err"
     st=$?
     experr=$TMP/empty
     [ -f "$base.err" ] && experr=$base.err
@@ -134,6 +196,8 @@ for bas in "$ROOT"/tests/programs/*.bas; do
     [ $st -eq 0 ] || { fail "$name" "exit status $st, expected 0"; ok=0; }
     [ $ok = 1 ] && { same "$base.out" "$TMP/r.out" "stdout" "$name" || ok=0; }
     [ $ok = 1 ] && { same "$experr" "$TMP/r.err" "stderr" "$name" || ok=0; }
+    [ $ok = 1 ] && { check_files "$name" "$base" || ok=0; }
+    rm -rf "$WORK"
     [ $ok = 1 ] && pass
 done
 
@@ -166,7 +230,8 @@ for bas in "$ROOT"/tests/errors/*.bas; do
             fail "$name" "compile failed (status $st): $(head -3 "$TMP/c.err" | tr '\n' ' ')"
             continue
         fi
-        run_limited "$TIMEOUT" "$(stdin_for "$base")" "$exe" >"$TMP/r.out" 2>"$TMP/r.err"
+        if ! newwork "$base"; then fail "$name" "cannot prepare the work directory"; rm -rf "$WORK"; continue; fi
+        run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$exe" >"$TMP/r.out" 2>"$TMP/r.err"
         st=$?
         expout=$TMP/empty
         [ -f "$base.out" ] && expout=$base.out
@@ -174,6 +239,8 @@ for bas in "$ROOT"/tests/errors/*.bas; do
         [ "$st" = "$want" ] || { fail "$name" "program exit status $st, expected $want"; ok=0; }
         [ $ok = 1 ] && { same "$base.err" "$TMP/r.err" "stderr" "$name" || ok=0; }
         [ $ok = 1 ] && { same "$expout" "$TMP/r.out" "stdout" "$name" || ok=0; }
+        [ $ok = 1 ] && { check_files "$name" "$base" || ok=0; }
+        rm -rf "$WORK"
         [ $ok = 1 ] && pass
         ;;
     *)

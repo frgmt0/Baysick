@@ -16,7 +16,10 @@
 // number of bytes consumed (for TK_STRING the content length). A
 // TK_BUILTIN with TOK_LEN = 4 consumed its '('; bare RND, NUM and DET have
 // TOK_LEN = 3. TK_VAR and TK_SVAR also set TOK_INDEX = their letter and
-// TOK_SLOT = the (string) slot; TK_FN0 sets TOK_INDEX = the FN letter. A
+// TOK_SLOT = the (string) slot; TK_FN0 sets TOK_INDEX = the FN letter.
+// Fifth Edition: LEN( ASC( VAL( are TK_BUILTIN with
+// TOK_LEN = 4, STR$( is TK_BUILTIN BI_STR with TOK_LEN = 5 ('(' consumed);
+// FNx$( is TK_SFN ('(' consumed), FNx$ without '(' TK_SFN0. A
 // TK_BAD token consumes nothing. Operand-mode TK_BAD codes: ILLEGAL
 // CONSTANT (bad number), ILLEGAL VARIABLE (letter+digit+'(', or
 // letter+digit+'$('), ILLEGAL FORMULA (NUM( / DET(, or an unexpected
@@ -341,12 +344,30 @@ Lfe_scan_bi_loop:
     str w15, [x19, #TOK_INDEX]
     mov w0, #TK_BUILTIN
     cmp w15, #BI_NUM
-    b.hs Lfe_scan_bi_noarg              // NUM, DET: never an argument
+    b.eq Lfe_scan_bi_noarg              // NUM, DET: never an argument
+    cmp w15, #BI_DET
+    b.eq Lfe_scan_bi_noarg
+    // STR$( (LANGUAGE.md 5.2 rule 3.1): "STR" must be followed by '$' and
+    // '('; otherwise the text is the variable S followed by more text
+    cmp w15, #BI_STR
+    b.ne 2f
+    FE_PEEK w16, 4
+    cmp w13, #'$'
+    b.ne 3f
+    cmp w16, #'('
+    b.ne 3f
+    add x23, x20, #5                    // "STR$(" consumed
+    b Lfe_scan_finish
+3:
+    str wzr, [x19, #TOK_INDEX]
+    b Lfe_scan_fn
+2:
     // builtin call if '(' follows
     add x23, x20, #4
     cmp w13, #'('
     b.eq Lfe_scan_finish
-    // without '(' only RND is still a builtin (bare RND)
+    // without '(' only RND is still a builtin (bare RND; LEN, ASC, VAL
+    // always need their argument)
     add x23, x20, #3
     cmp w15, #BI_RND
     b.eq Lfe_scan_finish
@@ -372,6 +393,19 @@ Lfe_scan_fn:
     cmp w14, #25
     b.hi Lfe_scan_var
     str w14, [x19, #TOK_INDEX]
+    // F N letter '$': a string function FNx$ (LANGUAGE.md 5.2 rule 3.4),
+    // TK_SFN with '(' (consumed), else TK_SFN0
+    cmp w13, #'$'
+    b.ne 4f
+    FE_PEEK w16, 4
+    add x23, x20, #4
+    mov w0, #TK_SFN0
+    cmp w16, #'('
+    b.ne Lfe_scan_finish
+    add x23, x20, #5
+    mov w0, #TK_SFN
+    b Lfe_scan_finish
+4:
     cmp w13, #'('
     b.ne 1f
     add x23, x20, #4
@@ -699,3 +733,12 @@ Lfe_scan_builtins:
     .ascii "COT", "\0"
     .ascii "NUM", "\0"
     .ascii "DET", "\0"
+    .ascii "LEN", "\0"                 // Fifth Edition: string argument
+    .ascii "ASC", "\0"
+    .ascii "VAL", "\0"
+    .ascii "STR", "\0"                 // STR$( : the '$' is checked by the scanner
+Lfe_scan_builtins_end:
+// the table must have exactly BI_COUNT names (DESIGN.md 2.4)
+.if ((Lfe_scan_builtins_end - Lfe_scan_builtins) != (BI_COUNT * 4))
+    .error "fe_scan.s: the builtin name table does not have BI_COUNT entries"
+.endif
