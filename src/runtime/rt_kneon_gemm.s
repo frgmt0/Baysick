@@ -1,9 +1,16 @@
 // =====================================================================
-// src/runtime/rt_kneon_gemm.s -- `neon` matrix product C = A * B
-// (DESIGN.md 6.6.1, 6.6.5; determinism class R, 6.6.4).
+// src/runtime/rt_kneon_gemm.s -- `neon` matrix products C = A * B and
+// C = C - A * B (DESIGN.md 6.6.1, 6.6.5; determinism class R and IEEE
+// propagation, 6.6.4).
 //
 // Defines (runtime-private, .private_extern):
-//   _bsk_kneon_gemm (x0 C, x1 A, x2 B) -> x0 KS_*
+//   _bsk_kneon_gemm     (x0 C, x1 A, x2 B) -> x0 KS_*   C = A * B
+//   _bsk_kneon_gemm_sub (x0 C, x1 A, x2 B) -> x0 KS_*   C = C - A * B
+// Both entries run the same code (Lrt_kg_common) on a sign mask: 0 for
+// gemm, the sign bit for gemm_sub. gemm_sub packs the A panels negated
+// (an exact XOR of the sign bit) and starts every tile from C, so the
+// shared micro-kernel computes C + (-A)*B with fmla, which is bit for bit
+// C - A*B by fmls.
 //
 // Goto/BLIS structure:
 //   for jc in steps of NC over the columns of C:
@@ -16,11 +23,19 @@
 //           48 doubles) stays in registers for the whole kc loop; each k
 //           step loads 8 A values (4 q) and 6 B values (3 q) and issues 24
 //           fmla (by element). The block starts at 0 for pc = 0 and is
-//           loaded from C for later pc blocks (C += A*B).
+//           loaded from C for later pc blocks (C += A*B); for gemm_sub it is
+//           loaded from C for every pc block.
 // Edge tiles (fewer than 8 rows or 6 columns left) run the same
 // micro-kernel on a static 8 x 6 tile, copying the valid part of C in
-// (pc > 0) and out; padding contributes exact zeros.
-// Tiny products (m*n*k <= RT_KG_SMALL) use an unpacked row-axpy loop.
+// (gemm: pc > 0; gemm_sub: every pc block) and only the valid part out:
+// padding lanes (zero rows of A, zero columns of B, the unused part of
+// the tile) are never stored and never reach the finite check.
+// Tiny products (m*n*k <= RT_KG_SMALL) use an unpacked row-axpy loop:
+// gemm starts each row of C from zero, gemm_sub from C, and adds
+// (sign-masked A value) * B row.
+// IEEE propagation (6.6.4): no path tests a factor for zero or skips a
+// block, every product with p < k enters its element, and nothing
+// outside the views is read into a result or written.
 // Finally _bsk_kneon_chkview reports KS_NONFINITE exactly when a stored
 // element is +-inf or NaN.
 //
@@ -105,7 +120,7 @@
 //             tile starts at zero; 1: the tile is loaded from C first
 //   Outputs : the 8 x 6 tile of C (stored)
 //   Clobbers: x0-x2, x6, v0-v31 (v8-v15 included: the caller,
-//             _bsk_kneon_gemm, saved d8-d15 on entry)
+//             Lrt_kg_common, saved d8-d15 on entry)
 //   Callee-saved used: none (see above)
 //   Frame   : none (leaf)
 // ---------------------------------------------------------------------
@@ -180,10 +195,13 @@ Lrt_kg_micro_store:
 // ---------------------------------------------------------------------
 // Lrt_kg_packa -- pack an mc x kc block of A into MR-high micro-panels.
 //   Purpose : panel q holds, for k = 0..kc-1, the 8 doubles
-//             A(8q+0..8q+7, k) contiguously; rows past mc read the zero
-//             row, so they are packed as exact zeros.
+//             A(8q+0..8q+7, k) contiguously, each XORed with the sign
+//             mask (gemm: 0, an exact copy; gemm_sub: the sign bit, an
+//             exact negation); rows past mc read the zero row, so they
+//             are packed as zeros (+0 or -0).
 //   Inputs  : x0 = &A(ic, pc), x1 = A row stride (bytes), x2 = mc,
-//             x3 = kc (<= RT_KG_KC), x4 = destination (packed A buffer)
+//             x3 = kc (<= RT_KG_KC), x4 = destination (packed A buffer),
+//             v7 = sign mask in both lanes (not modified)
 //   Outputs : none
 //   Clobbers: x0, x2, x4-x17, v16-v31
 //   Callee-saved used: none
@@ -229,6 +247,14 @@ Lrt_kg_packa_pair:
     zip2 v29.2d, v18.2d, v19.2d
     zip2 v30.2d, v20.2d, v21.2d
     zip2 v31.2d, v22.2d, v23.2d
+    eor v24.16b, v24.16b, v7.16b    // apply the sign mask (exact)
+    eor v25.16b, v25.16b, v7.16b
+    eor v26.16b, v26.16b, v7.16b
+    eor v27.16b, v27.16b, v7.16b
+    eor v28.16b, v28.16b, v7.16b
+    eor v29.16b, v29.16b, v7.16b
+    eor v30.16b, v30.16b, v7.16b
+    eor v31.16b, v31.16b, v7.16b
     stp q24, q25, [x4], #32
     stp q26, q27, [x4], #32
     stp q28, q29, [x4], #32
@@ -245,6 +271,14 @@ Lrt_kg_packa_odd:
     ldr d21, [x10]
     ldr d22, [x11]
     ldr d23, [x12]
+    eor v16.8b, v16.8b, v7.8b       // apply the sign mask (exact)
+    eor v17.8b, v17.8b, v7.8b
+    eor v18.8b, v18.8b, v7.8b
+    eor v19.8b, v19.8b, v7.8b
+    eor v20.8b, v20.8b, v7.8b
+    eor v21.8b, v21.8b, v7.8b
+    eor v22.8b, v22.8b, v7.8b
+    eor v23.8b, v23.8b, v7.8b
     stp d16, d17, [x4], #16
     stp d18, d19, [x4], #16
     stp d20, d21, [x4], #16
@@ -331,10 +365,11 @@ Lrt_kg_packb_done:
 // ---------------------------------------------------------------------
 // Lrt_kg_macro -- macro-kernel over one packed A block and B block.
 //   Inputs  : x0 = mc, x1 = nc, x2 = kc, x3 = &C(ic, jc), x4 = C row
-//             stride (bytes), w5 = load flag (pc > 0), x6 = packed A,
+//             stride (bytes), w5 = load flag (gemm: pc > 0; gemm_sub:
+//             always 1), x6 = packed A,
 //             x7 = packed B
 //   Outputs : C(ic.., jc..) updated
-//   Clobbers: x0-x17, v0-v31 (d8-d15 saved by _bsk_kneon_gemm)
+//   Clobbers: x0-x17, v0-v31 (d8-d15 saved by Lrt_kg_common)
 //   Callee-saved used: x19 = mc, x20 = nc, x21 = kc, x22 = C block,
 //             x23 = C stride, x24 = load flag
 //   Frame   : 64 bytes (frame record + x19..x24)
@@ -455,9 +490,15 @@ Lrt_kg_macro_done:
     ret
 
 // ---------------------------------------------------------------------
-// _bsk_kneon_gemm -- C = A * B.
+// _bsk_kneon_gemm -- C = A * B (C's previous contents are ignored).
+// _bsk_kneon_gemm_sub -- C = C - A * B (C is input and output).
+//   Purpose : the two entries set the sign mask x3 (gemm: 0; gemm_sub:
+//             the sign bit) and run Lrt_kg_common, which packs A XORed
+//             with the mask, starts tiles from C for every pc block when
+//             the mask is set, and starts the unpacked rows from C.
 //   Inputs  : x0 = C view (m x n), x1 = A view (m x k), x2 = B view
-//             (k x n); C overlaps neither A nor B; inputs finite
+//             (k x n); C overlaps neither A nor B; elements may be
+//             +-inf or NaN (IEEE propagation, DESIGN.md 6.6.4)
 //   Outputs : x0 = KS_OK, or KS_NONFINITE if a stored element of C is
 //             +-inf or NaN
 //   Clobbers: x0-x17, v0-v7, v16-v31
@@ -467,11 +508,19 @@ Lrt_kg_macro_done:
 //             saved because the micro-kernel uses v8-v15 as accumulators
 //   Frame   : 208 bytes: frame record, x19-x28, d8-d15, and the loop
 //             variables jc [sp,#160], pc [sp,#168], ic [sp,#176],
-//             nc [sp,#184], kc [sp,#192]
+//             nc [sp,#184], kc [sp,#192], and the sign mask [sp,#200]
 // ---------------------------------------------------------------------
+    .private_extern _bsk_kneon_gemm_sub
+    .p2align 2
+_bsk_kneon_gemm_sub:
+    movz x3, #0x8000, lsl #48       // sign mask: negate A, C -= A*B
+    b Lrt_kg_common
+
     .private_extern _bsk_kneon_gemm
     .p2align 2
 _bsk_kneon_gemm:
+    mov x3, #0                      // sign mask: A as is, C = A*B
+Lrt_kg_common:
     stp x29, x30, [sp, #-208]!
     mov x29, sp
     stp x19, x20, [sp, #16]
@@ -483,6 +532,7 @@ _bsk_kneon_gemm:
     stp d10, d11, [sp, #112]
     stp d12, d13, [sp, #128]
     stp d14, d15, [sp, #144]
+    str x3, [sp, #200]              // sign mask for packing and the tiny path
     mov x19, x0
     ldr x20, [x1, #MV_ROWS]         // m
     ldr x22, [x1, #MV_COLS]         // k
@@ -549,6 +599,8 @@ Lrt_kg_ic:
     ldr x3, [sp, #192]              // kc
     adrp x4, _bsk_rt_kg_apack@PAGE
     add x4, x4, _bsk_rt_kg_apack@PAGEOFF
+    ldr x5, [sp, #200]
+    dup v7.2d, x5                   // sign mask in both lanes
     bl Lrt_kg_packa
     // Macro-kernel on C(ic.., jc..).
     ldr x9, [sp, #176]              // ic
@@ -562,9 +614,11 @@ Lrt_kg_ic:
     ldr x1, [sp, #184]              // nc
     ldr x2, [sp, #192]              // kc
     mov x4, x24
-    ldr x5, [sp, #168]
+    ldr x5, [sp, #168]              // pc
+    ldr x6, [sp, #200]              // sign mask (nonzero: gemm_sub)
+    orr x5, x5, x6
     cmp x5, #0
-    cset w5, ne                     // load C unless this is the first pc block
+    cset w5, ne                     // load C unless gemm's first pc block
     adrp x6, _bsk_rt_kg_apack@PAGE
     add x6, x6, _bsk_rt_kg_apack@PAGEOFF
     adrp x7, _bsk_rt_kg_bpack@PAGE
@@ -586,27 +640,35 @@ Lrt_kg_jc_next:
     b Lrt_kg_jc
 
     // ---------------- tiny products: row axpy ----------------
-    // For each row i of C: C(i,:) := 0, then for each k:
-    // C(i,:) += A(i,k) * B(k,:) (fmla, 2-wide, scalar tail).
+    // For each row i of C: gemm: C(i,:) := 0; gemm_sub: C(i,:) as is;
+    // then for each k: C(i,:) += (A(i,k) XOR mask) * B(k,:) (fmla,
+    // 2-wide, scalar fmadd tail): for gemm_sub that is C(i,:) - A(i,k) *
+    // B(k,:), fused, exactly as fmls / fmsub would compute it.
     // Registers: x9 = i, x10 = &C(i,0), x11 = &A(i,k), x12 = k left,
-    // x13 = &B(k,0), x14/x15 = cursors in C/B, x16 = count.
+    // x13 = &B(k,0), x14/x15 = cursors in C/B, x16 = count, x6 = mask;
+    // v7 = mask in both lanes.
 Lrt_kg_small:
+    ldr x6, [sp, #200]              // sign mask (nonzero: gemm_sub)
+    dup v7.2d, x6
     mov x9, #0
 Lrt_kg_small_row:
     cmp x9, x20
     b.hs Lrt_kg_check
     madd x10, x9, x24, x23          // &C(i,0)
     madd x11, x9, x26, x25          // &A(i,0)
-    mov x14, x10                    // C(i,:) := 0
+    cbnz x6, 4f                     // gemm_sub: the row starts from C
+    mov x14, x10                    // gemm: C(i,:) := 0
     mov x16, x21
 1:
     str xzr, [x14], #8
     subs x16, x16, #1
     b.ne 1b
+4:
     mov x12, x22
     mov x13, x27
 Lrt_kg_small_k:
     ld1r {v0.2d}, [x11], #8         // a = A(i,k) in both lanes
+    eor v0.16b, v0.16b, v7.16b      // gemm_sub: -a (exact)
     mov x14, x10
     mov x15, x13
     lsr x16, x21, #1

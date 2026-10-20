@@ -38,12 +38,21 @@ value `= (s >> 11) · 2⁻⁵² − 1`, seed 1964, filled row by row (A first, t
 | Kernel | Baysick entry | Sizes | Vendor (macOS / Linux) | Rate unit (work) |
 |--------|---------------|-------|------------------------|------------------|
 | GEMM `C = A·B` | `_bsk_kern_gemm` | n = 64, 128, 256, 512, 1024, 2048; odd n = 127, 255, 1023 | `cblas_dgemm` (α = 1, β = 0) / same | GFLOP/s (`2n³`) |
+| GEMM update `C = C − A·B` | `_bsk_kern_gemm_sub` | same as GEMM | `cblas_dgemm` (α = −1, β = 1) / same | GFLOP/s (`2n³`; the `n²` subtractions are not counted, as for BLAS) |
 | add `C = A + B` | `_bsk_kern_add` | n = 64, 256, 1024, 2048 | `vDSP_vaddD` / `cblas_dcopy` + `cblas_daxpy` (proxy, labelled) | GB/s (`24n²` bytes) |
 | sub `C = A − B` | `_bsk_kern_sub` | same | `vDSP_vsubD` / same proxy with α = −1 | GB/s (`24n²`) |
 | scale `C = k·A` | `_bsk_kern_scale` | same | `vDSP_vsmulD` / `cblas_dcopy` + `cblas_dscal` | GB/s (`16n²`) |
 | transpose | `_bsk_kern_trn` | n = 64, 256, 1024, 2048 | `vDSP_mtransD` / `cblas_domatcopy` (`CblasTrans`) | GB/s (`16n²`) |
 | INV | `_bsk_kern_inv` | n = 100, 250, 500, 1000 | LAPACK `dgetrf` + `dgetri` (Accelerate's LAPACK / OpenBLAS's) | GFLOP/s (nominal `2n³` for both) |
 | end-to-end | compiled BASIC programs `bench/programs/e2e_*.bas` | as written | none | wall seconds |
+
+gemm_sub inputs are GEMM's A and B, then the initial C₀ from the same generator (filled after
+B). The kernel updates C in place, so its repetitions (§3.1) are not identical: each subtracts
+A·B once more from the C left by the previous one. The harness does not restore C inside the
+timed region; the cost does not depend on the values, which stay finite and normal (after r
+calls `|c| ≤ |c₀| + r·n`, at most about 2·10¹¹ for 10⁵ batched calls × 1000 repetitions at
+n = 2048). The vendor call is timed the same way on its own copy. Validation (§3.2) runs on fresh
+copies of C₀.
 
 INV inputs are the random matrix plus `n·I` (diagonally dominant, well conditioned), so every
 implementation succeeds and the comparison measures speed only. The nominal `2n³` count is the
@@ -77,7 +86,8 @@ BASIC user experiences, including the scalar fill loops.
   fresh input before every call).
 * Rate = work / median time (GFLOP/s or GB/s, 10⁹ units).
 * The output matrix is fully overwritten each repetition (GEMM: β = 0), so repetitions are
-  independent; inputs are not modified (INV works on a copy for the vendor call, whose `dgetrf`
+  independent (gemm_sub is the exception: it updates C in place, §2, and its repetitions differ
+  only in values, which do not change its cost); inputs are not modified (INV works on a copy for the vendor call, whose `dgetrf`
   destroys its input: the copy is made outside the timed region).
 * Process placement: on macOS the harness sets `pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)`
   so it runs on performance cores; on Linux it pins itself to CPU 1 with `sched_setaffinity`.
@@ -92,6 +102,12 @@ kernel, variant and size):
 * GEMM: every element `|c − c_ref| ≤ 2·k·2⁻⁵³·Σ|a||b|` against the vendor result (the `Σ|a||b|`
   term is computed by a plain C loop for n ≤ 512; above that the bound
   `2·k·2⁻⁵³·k·max|a|·max|b|` is used).
+* gemm_sub (fresh copies of C₀ for the kernel and the vendor): every element
+  `|c − c_ref| ≤ 2·(k+1)·2⁻⁵³·(|c₀| + Σ|a||b|)` against the vendor result `cblas_dgemm` with
+  α = −1, β = 1 (the `Σ|a||b|` term as for GEMM: a plain C loop for n ≤ 512, above that
+  `k·max|a|·max|b|`); every non-baseline variant also within that bound of the baseline. The
+  harness does not validate IEEE propagation (its data are finite): that is the conformance
+  test's job, `tests/kern` (DESIGN.md §8.7), which runs in `make test` and the cross run.
 * add, sub, scale, transpose: **bit-for-bit** equality with a plain C reference loop compiled
   with `-ffp-contract=off` (class E, DESIGN.md §6.6.4); the vendor result must agree too. The scale
   kernel uses the factor k = 0.1 (inexact in binary, so the multiplication rounds).
@@ -100,7 +116,7 @@ kernel, variant and size):
   unspecified, LANGUAGE.md §7.14.6, DESIGN.md §6.6.4); and `max|X − X_ref| ≤ 10⁻⁸·max|X_ref|`
   against the vendor inverse.
 * Every non-baseline variant is additionally compared with the baseline: bit-identical for the
-  class-E kernels, within the GEMM bound for GEMM.
+  class-E kernels, within the GEMM bound for GEMM, within the gemm_sub bound for gemm_sub.
 * End-to-end programs: their stdout must equal `bench/programs/NAME.out` (derived like any test
   output, from LANGUAGE.md; the checksums are exact by construction).
 
@@ -172,7 +188,7 @@ to 0.2 s, for a smoke run. Exit status: 0 measured and validated; 1 a validation
   runtime (`-DBENCH_VENDOR_ONLY`; no archive or compiler needed) and runs only the peak loops, the
   Accelerate calls and the vendor-versus-C-reference validation, as a self-test of the measuring
   instrument. Without it the script needs `build/libbaysickrt.a` and `build/baysick` (run `make`
-  first) and checks that the archive exports the `_bsk_kern_*` API.
+  first) and checks that the archive exports the `_bsk_kern_*` API, including `_bsk_kern_gemm_sub`.
 * `sh bench/run_linux.sh BUNDLE_DIR` is the Linux half, run by `bench/cross.sh` on the host from
   the unpacked bundle. It probes for OpenBLAS (status 42 if missing), builds the runtime with
   `Makefile.linux`, builds and runs the harness and the e2e programs, and, only when the harness
@@ -185,7 +201,7 @@ to 0.2 s, for a smoke run. Exit status: 0 measured and validated; 1 a validation
   the compiled programs `DIR/e2e_gemm`, `e2e_inv`, `e2e_mixed` for every usable variant (3
   repetitions each, the median is reported; 1 repetition in quick mode, `BENCH_QUICK=1`), checking
   the stdout of every repetition against `DIR/NAME.out`; `--only LIST` restricts the run to a comma-separated subset
-  of `peak gemm add sub scale trn inv e2e`.
+  of `peak gemm gemm_sub add sub scale trn inv e2e`.
 
 `make bench` is never part of `make test` or CI (timings on shared CI machines are meaningless).
 
@@ -209,7 +225,7 @@ TSV file (`build/bench/<target>.tsv`), one row per measurement, tab-separated, h
 target  cpu  kernel  variant  m  n  k  reps  median_s  min_s  max_s  unit  baysick_rate  vendor_rate  pct_vendor  peak_rate  pct_peak
 ```
 
-(`k` = inner dimension for GEMM, 0 otherwise; `vendor_rate`/`pct_vendor` empty for end-to-end
+(`k` = inner dimension for GEMM and gemm_sub, 0 otherwise; `vendor_rate`/`pct_vendor` empty for end-to-end
 rows; `peak_rate`/`pct_peak` empty for GB/s rows.)
 
 ## 6. Initial goals (stated honestly)
@@ -222,6 +238,7 @@ kernels and any later variant. "Peak" is the §3.4 measurement on the same machi
 | GEMM, n ≥ 512 | **≥ 70 %** of peak (stretch 85 %) | Mac: well below Accelerate on M1–M3 (matrix hardware); Linux: ≤ about 25 % of OpenBLAS (AVX2+FMA vs SSE2) |
 | GEMM, n = 64–256 | ≥ 50 % of peak | — |
 | GEMM, odd n | within 10 % of the neighbouring even size's rate | — |
+| gemm_sub | ≥ 95 % of the same variant's GEMM rate at the same n, n ≥ 256 (the extra work is one load of C per tile, DESIGN.md §6.6.5) | as GEMM |
 | add, sub, scale | ≥ 80 % of the vendor GB/s at every size | — |
 | transpose | ≥ 50 % of the vendor GB/s, n ≥ 256 | — |
 | INV | correct; ≥ 25 % of vendor at n = 100 | unblocked Gauss–Jordan (pinned for bit-reproducibility, LANGUAGE.md §7.14.6) is matrix-vector bound; blocked LU (vendor) pulls ahead as n grows — expect 3–10× slower at n = 1000 |

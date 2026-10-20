@@ -38,7 +38,9 @@ built on Linux with `make -f Makefile.linux` (§8).
 Implementers work in parallel. **Each owns only its directory or files**; it may add, split or
 rename files *inside* its directory (the Makefiles glob `*.s`). Nobody edits another module's
 files. The shared files are `include/*.inc` and `tests/include_asserts.inc` (read-only for
-implementers; changed only by the architect together with the docs).
+implementers; changed only by the architect together with the docs). Expected test results —
+the corpus sidecars and the kernel conformance test `tests/kern/kern_check.c` (§8.7) — are
+derived from the specification by the architect, never from an implementation.
 
 | Module | Owner | Directory / files | Exports |
 |--------|-------|-------------------|---------|
@@ -48,7 +50,7 @@ implementers; changed only by the architect together with the docs).
 | Runtime arm64-macos | implementer R | `src/runtime/` | everything in runtime.inc "defined by the runtime" (Mach-O names) |
 | Backend x86_64-linux | implementer BX | `src/backend/x86_64_linux/`, plus the line `.quad _bk_x86_64_linux_desc` in `src/driver/targets.s` | `_bk_x86_64_linux_desc` (Mach-O symbol inside the compiler) |
 | Runtime x86_64-linux | implementer RX | `src/runtime_x86_64_linux/` | the §6.4 ELF symbols (`main`, `bsk_*`) |
-| Cross testing + CI | implementer T | `Makefile.linux`, `tests/cross_pack.sh`, `tests/cross_run.sh`, `tests/cross.sh`, the `cross`/`cross-pack` targets and `COMPILER_DIRS` entry in `Makefile`, `.github/workflows/ci.yml` | — |
+| Cross testing + CI | implementer T | `Makefile.linux`, `tests/cross_pack.sh`, `tests/cross_run.sh`, `tests/cross.sh`, `tests/kern/kern_run.sh`, the `cross`/`cross-pack`/`kern-check` targets, the kernel-test line of `test` and the `COMPILER_DIRS` entry in `Makefile`, `.github/workflows/ci.yml` | — |
 | Benchmarks | implementer BENCH | `bench/` (everything in it), the `bench` and `bench-cross` targets in `Makefile` | — (a measuring tool, `docs/BENCH.md`) |
 
 BX writes arm64 assembly for Apple `as` (it is part of the compiler, §3); RX writes x86_64
@@ -222,6 +224,21 @@ diagnostics ending a pending standard-error line; the line reader called by `_bs
 `rt_main.s` (`_bsk_end` sharing `_bsk_exit`'s termination, the standard-error newline);
 `rt_error.s` (code 62, the standard-error newline before the message) — in both runtimes.
 
+Files added for `_bsk_kern_gemm_sub` and IEEE propagation (§2.7; owners may refine the split
+inside their directory):
+
+```
+tests/kern/kern_check.c     kernel conformance test of gemm and gemm_sub (8.7), C, links
+                            libbaysickrt.a with its own main
+tests/kern/kern_run.sh      its driver (skip check, constants header, compile, run), used by
+                            `make test` / `make kern-check` and by tests/cross_run.sh
+```
+
+Existing files gain: `rt_kneon_gemm.s` (`_bsk_kneon_gemm_sub`), `rt_ksse2_gemm.s`
+(`bsk_rt_ksse2_gemm_sub`), `rt_kavx2_gemm.s` (`bsk_rt_kavx2_gemm_sub`), each sharing its
+variant's packing and micro-kernel; both `rt_kinit.s` (the `KV_GEMM_SUB` slots and the
+`_bsk_kern_gemm_sub` / `bsk_kern_gemm_sub` trampoline).
+
 Dependencies (who calls whom): driver → frontend, ir, backend (via descriptor); frontend → ir
 builder, `_drv_alloc`, libc `_strtod`; backends → `_ob_*`, `_drv_alloc` (read the Module
 directly through `ir.inc` offsets); ir → `_drv_alloc`, `_ob_*`; runtime → libSystem only;
@@ -355,8 +372,22 @@ whole of `fe_ext.s`) and Makefile lines, and the code only the switch-0 build us
 requiring the end of the line, the verifier's input-group mask without `linput`); the order assert
 of `a64_insn.s` now requires `OP_COUNT == OP_EXIT + 1`; `tests/include_asserts.inc` kept the
 switch-1 assertions; `--version` and the help line changed (§4.1). No earlier test's text became
-legal (LANGUAGE.md §14.1), so no earlier test was rewritten. No staging switch is left: every
-count and record size above is a plain constant.
+legal (LANGUAGE.md §14.1), so no earlier test was rewritten. No staging switch was left: every
+count and record size above became a plain constant.
+
+**How `_bsk_kern_gemm_sub` was staged** (history; §2.7). This contract changed no count above
+but one record size: `KV_SIZE` 80 → 88 (the `KV_GEMM_SUB` slot at 80, appended after
+`KV_INV`). Both runtimes size their variant tables by `KV_SIZE` and assert it, so the change was
+staged exactly as the earlier contracts were: a temporary assembler switch, defined in
+`include/runtime.inc` with default 0, selected only `KV_SIZE`, and the runtime was the only code
+under it (each `rt_kinit.s` kept its `KV_GEMM_SUB` slots and its `_bsk_kern_gemm_sub`
+trampoline, which loads offset 80, in conditional blocks); the Makefiles passed the switch on
+and checked the includes with both values, and `cross_pack.sh` recorded it in a bundle marker
+that `cross_run.sh` honoured. Integration removed it in one commit: `KV_SIZE` is a plain 88,
+`tests/include_asserts.inc` keeps only the `(KV_GEMM_SUB + 8) == KV_SIZE` assertion, the
+conditional blocks, the Makefile lines, the second include check, the bundle marker and the
+staging skip of the kernel test are gone. No staging switch is left: every count and record
+size is a plain constant.
 
 ### 2.3 Third and Fourth Edition work packages
 
@@ -546,6 +577,53 @@ Order (history; the packages are implemented and integrated, §2.2):
 
 The extension tests are `tests/programs/ext_*`, `tests/errors/c_ext_*`, `tests/errors/r_ext_*` and
 `tests/ir/ext_*`.
+
+### 2.7 Kernel contract: `_bsk_kern_gemm_sub` and IEEE propagation (implemented)
+
+Sea (`sea/docs/DESIGN.md` §15.3, §18.2) links `libbaysickrt.a` and uses Baysick's GEMM for the
+trailing updates of blocked LU and Cholesky, on arrays that may hold ±∞ and NaN. That needed two
+**runtime contract** changes — no language change, no compiler or MAT-layer change:
+
+1. a new kernel entry `_bsk_kern_gemm_sub(C, A, B)`: `C ← C − A·B`, with the view, overlap,
+   status, blocking and class-R rules of `_bsk_kern_gemm`, in every variant (`neon`, `sse2`,
+   `avx2`) (§6.6.1, §6.6.3, §6.6.5);
+2. **IEEE propagation**: the finite-input precondition of `_bsk_kern_gemm` and
+   `_bsk_kern_gemm_sub` was replaced by the four rules of §6.6.4; every other kernel keeps it.
+
+The contracts were complete in `include/runtime.inc` (`KV_GEMM_SUB`, `KV_SIZE`), §6.6 and the
+conformance test (`tests/kern`, §8.7) before the packages started, so they needed no other
+agreement. Item 2 needed no new GEMM code: the design commit ran `tests/kern/kern_check.c` with
+a naive reference `gemm_sub` (scratch only, never committed) against the existing `gemm` of all
+three variants, and every check passed; the same test, with mutated reference stubs, caught a
+skipped zero factor, a write into C's row padding, a read of B's padding into a result, a wrong
+status and an alignment-dependent result.
+
+| Owner | Files | Work |
+|-------|-------|------|
+| R | `src/runtime/rt_kneon_gemm.s`, `src/runtime/rt_kinit.s` | `_bsk_kneon_gemm_sub` (`.private_extern`) sharing `_bsk_kneon_gemm`'s packing (`Lrt_kg_packa`, `Lrt_kg_packb`), macro-kernel and 8 × 6 micro-kernel: the A panel negated in `Lrt_kg_packa` by XOR with a sign mask (exact), and the micro-kernel loading C at every pc block (`w5 = 1` for every block, not only `pc > 0`); the edge tile copies C in for every pc block; the unpacked path (`m·n·k ≤ RT_KG_SMALL`) starts each row from C and negates A by XOR with the sign mask, then uses `fmla`/`fmadd` (bit-identical to `fmls`); the finite check `_bsk_kneon_chkview` as before. Keep §6.6.4's requirements for both entries (no zero test, padding lanes never stored, nothing read outside the views). `rt_kinit.s`: `.quad _bsk_kneon_gemm_sub` as the `neon` record's `KV_GEMM_SUB` slot and the trampoline `RT_KTRAMP _bsk_kern_gemm_sub, KV_GEMM_SUB` (§6.6.3). Header comments (§3.4) name gemm_sub and §6.6.4. |
+| RX | `src/runtime_x86_64_linux/rt_ksse2_gemm.s`, `rt_kavx2_gemm.s`, `rt_kinit.s` | `bsk_rt_ksse2_gemm_sub` (`.hidden`; accumulates −A·B from zero with `mulpd` then `subpd`, and adds C when storing at every pc block) and `bsk_rt_kavx2_gemm_sub` (the same with `vfnmadd231pd`; `vzeroupper` on every exit), each sharing its variant's packing, blocking and staging tile; `rt_kinit.s`: the `KV_GEMM_SUB` slots (`avx2` → `bsk_rt_kavx2_gemm_sub`, `sse2` → `bsk_rt_ksse2_gemm_sub`) and the trampoline `bsk_kern_gemm_sub` |
+| BENCH | `bench/bench.c`, `bench/run_mac.sh`, `bench/run_linux.sh` | after integration: the `gemm_sub` workload, its validation and report rows (BENCH.md §2, §3.2, §5, §6), `--only gemm_sub`, `gemm_sub` in both drivers' exported-symbol check |
+| T | `Makefile`, `Makefile.linux`, `tests/cross_pack.sh`, `tests/cross_run.sh`, `tests/kern/kern_run.sh` | done in the design commit (the switch in both Makefiles and in the include checks, `make kern-check`, the kernel test in `make test` and in `cross_run.sh`, the bundle's `tests/kern/`); the switch and the staging skip were removed at integration. CI needed nothing (§8.4) |
+
+Order, as it went:
+
+1. **Feature work.** R and RX started at once and were independent. Each verified with the
+   switch on (`make clean; make test` for R, `make cross` for RX), plus `BAYSICK_KERNELS=<variant>`
+   runs of the corpus (GEMM unchanged), and with the switch off that the plain targets still
+   passed with a `SKIP kern/kern_check` line.
+2. **Integration commit** (the coordinator, after R and RX passed): the switch deleted —
+   `KV_SIZE` 88 a plain constant, `tests/include_asserts.inc` keeping only the
+   `(KV_GEMM_SUB + 8) == KV_SIZE` assertion, the conditional blocks in both `rt_kinit.s`, the
+   switch lines of `Makefile` and `Makefile.linux` and their second include check, its passing by
+   the `cross`/`cross-pack` targets, the marker in `cross_pack.sh` and `cross_run.sh` — and the
+   staging skip: the symbol check of `kern_run.sh` (§8.7), the exit-77 tolerance of the two
+   Makefile recipes and the `77)` case of `cross_run.sh`, so that a missing entry is a failure.
+   Docs: this section and the §2.2 paragraph became history; CLAUDE.md, README.md and
+   SEA_BOOTSTRAP.md say "implemented". Counts at integration: Mac 463 plus `kern/kern_check`
+   (`make test`), cross 268 (267 plus `kern/kern_check`).
+3. **BENCH**: done (the `gemm_sub` workload, validation and report rows, `--only gemm_sub`, and the exported-symbol check in both drivers).
+
+The kernel tests are `tests/kern/kern_check.c` (§8.7).
 
 ## 3. Conventions inside the compiler and runtime
 
@@ -1769,7 +1847,10 @@ Rules every implementation follows:
 ### 6.6 Matrix kernels and CPU-feature dispatch (`rt_kinit.s`, `rt_k*.s`, both targets)
 
 The heavy arithmetic lives in **kernels**: plain routines on matrix views with no BASIC
-semantics, reached through one dispatch point chosen once at startup from the CPU's features. A
+semantics, reached through one dispatch point chosen once at startup from the CPU's features.
+They are also a library for other programs that link `libbaysickrt.a` (the benchmark harness,
+the conformance test of §8.7, and Sea, `sea/docs/DESIGN.md` §15.3, which uses GEMM and
+gemm_sub). A
 **variant** is a set of kernels for one instruction-set level. Required now: **`neon`**
 (arm64-macos baseline, Advanced SIMD) and **`sse2`** (x86_64-linux baseline). Implemented beyond the baselines:
 **`avx2`** (x86_64 with AVX2 and FMA3). Documented future example: **`sme`** (Apple M4 and later:
@@ -1779,11 +1860,16 @@ SME with FEAT_SME_F64F64). Adding a variant touches only the runtime directory o
 
 All views are `MV_*` records (runtime.inc). Preconditions: `MV_ROWS, MV_COLS ≥ 1`,
 `MV_LD ≥ MV_COLS` (any `MV_LD` when `MV_COLS = 1`), any 8-byte-aligned `MV_DATA` (results must
-not depend on alignment), every input element finite.
+not depend on alignment), every input element finite — **except** for `_bsk_kern_gemm` and
+`_bsk_kern_gemm_sub`, whose input elements may be ±∞ or NaN: they propagate them by the IEEE
+rules of §6.6.4. Memory outside a view (the row padding beyond `MV_COLS`, and everything before
+and after) is never written by any kernel; for gemm and gemm_sub it also never influences a
+result (§6.6.4).
 
 | Kernel (exported trampoline) | Arguments | Result | Shapes / overlap |
 |-----------------------------|-----------|--------|------------------|
-| `_bsk_kern_gemm` | x0 C, x1 A, x2 B | x0 `KS_*` | A `m×k`, B `k×n`, C `m×n`; C must not overlap A or B |
+| `_bsk_kern_gemm` | x0 C, x1 A, x2 B | x0 `KS_*` | A `m×k`, B `k×n`, C `m×n`, `C := A·B` (C's previous contents are ignored, even if not finite); C must not overlap A or B |
+| `_bsk_kern_gemm_sub` | x0 C, x1 A, x2 B | x0 `KS_*` | A `m×k`, B `k×n`, C `m×n`, `C := C − A·B` (C is input and output); C must not overlap A or B. Not called by the MAT layer: it serves the trailing updates of Sea's blocked LU and Cholesky (`sea/docs/DESIGN.md` §15.3, §18.2) and is tested by `tests/kern` (§8.7). |
 | `_bsk_kern_add` `_bsk_kern_sub` | x0 C, x1 A, x2 B | x0 `KS_*` | all `m×n`; C may be A or B exactly (same `MV_DATA`, `MV_LD`), no other overlap |
 | `_bsk_kern_scale` | x0 C, x1 A, d0 k | x0 `KS_*` | `m×n`; C may be A exactly |
 | `_bsk_kern_trn` | x0 C, x1 A | — | A `m×n`, C `n×m`; no overlap |
@@ -1792,7 +1878,10 @@ not depend on alignment), every input element finite.
 | `_bsk_kern_inv` | x0 X, x1 A | x0 `KS_*` | A, X `n×n`, `n ≤ RT_KERN_INV_MAXN`; no overlap; LANGUAGE.md §7.14.6 exactly (incl. `KS_SINGULAR`, and `KS_NONFINITE` for a non-finite pivot or result); also stores the determinant of §7.14.6 (DET) into the runtime-private double `_bsk_rt_kinv_det` (ELF `bsk_rt_kinv_det`, defined in `rt_kinit.s`, so link isolation holds) — after a `KS_OK` or `KS_NONFINITE` return it holds the pinned product of the pivots (class E: bit-identical across variants) |
 
 `KS_NONFINITE` is returned when any stored result element is ±infinity or NaN (fused into the
-kernel or as a separate vectorised pass). Kernels never print, never call `_bsk_err`, never
+kernel or as a separate vectorised pass); `KS_OK` otherwise. For gemm and gemm_sub that includes
+a non-finite result propagated from a non-finite input (§6.6.4): the MAT layer turns it into
+OVERFLOW as before, and it can only arise there from an overflow, since BASIC values are finite.
+Kernels never print, never call `_bsk_err`, never
 allocate, never change FPCR/MXCSR (round-to-nearest, no flush-to-zero, no default-NaN changes),
 and use only the static buffers of §6.6.6 (not reentrant: programs are single-threaded). They
 follow the target ABI (AAPCS64: `d8–d15` low halves callee-saved, `v16–v31` free; System V: all
@@ -1832,9 +1921,10 @@ function. The table is the only registration point. Selection in `_bsk_kern_init
    record; anything else → as `auto` (silently: programs never print diagnostics of their own).
 3. Store the chosen record's address in the runtime-private current-variant pointer.
 
-The exported `_bsk_kern_gemm` … `_bsk_kern_inv` are trampolines: load the current record, load
-the slot, branch to it (arm64 `ldr x16, [x16, #KV_GEMM]` / `br x16`; x86_64 `jmp *KV_GEMM(%rax)`),
-arguments untouched. `_bsk_kern_use(name)` re-selects by name (only the names of usable variants and `baseline` are
+The exported `_bsk_kern_gemm` … `_bsk_kern_inv` and `_bsk_kern_gemm_sub` are trampolines: load
+the current record, load the slot, branch to it (arm64 `ldr x16, [x16, #KV_GEMM]` / `br x16`;
+x86_64 `jmp *KV_GEMM(%rax)`), arguments untouched. `KV_GEMM_SUB` is the last slot of the record,
+appended after `KV_INV` so that no earlier offset moved (§2.7). `_bsk_kern_use(name)` re-selects by name (only the names of usable variants and `baseline` are
 accepted; `auto` is not a name here, it returns −1 like any unknown name; 0 on success, −1 and no
 change if the name is unknown or not usable); `_bsk_kern_name()` returns the current
 `KV_NAME`; `_bsk_kern_variants()` returns a static NULL-terminated array of the usable names, in
@@ -1842,26 +1932,72 @@ table order. The MAT layer calls only the trampolines (or reads the current reco
 
 | Variant | Target | `KV_REQUIRES` | Status | Specialises |
 |---------|--------|---------------|--------|-------------|
-| `avx2` | x86_64-linux | `KF_X64_AVX2 \| KF_X64_FMA` | implemented | GEMM (FMA, class R); copy, fill, trn (256-bit, class E); inv (4-wide, class E). add, sub, scale use the `sse2` kernels: Haswell lowers the core clock while 256-bit FP arithmetic runs, which costs the memory-bound 256-bit versions more than the width gains |
+| `avx2` | x86_64-linux | `KF_X64_AVX2 \| KF_X64_FMA` | implemented (gemm_sub: §2.7) | GEMM and gemm_sub (FMA, class R); copy, fill, trn (256-bit, class E); inv (4-wide, class E). add, sub, scale use the `sse2` kernels: Haswell lowers the core clock while 256-bit FP arithmetic runs, which costs the memory-bound 256-bit versions more than the width gains |
 | `neon` | arm64-macos | 0 | **required now** (baseline) | all |
-| `sme` | arm64-macos | `KF_A64_SME \| KF_A64_SME_F64F64` | future | GEMM (FMOPA outer products into ZA tiles) |
+| `sme` | arm64-macos | `KF_A64_SME \| KF_A64_SME_F64F64` | future | GEMM and gemm_sub (FMOPA / FMOPS outer products into ZA tiles) |
 | `sse2` | x86_64-linux | 0 | **required now** (baseline) | all |
 
 #### 6.6.4 Determinism rules (all variants)
 
-* **Class R — GEMM only.** Any summation order, blocking and fused multiply-add are allowed
-  (LANGUAGE.md §7.14.7); the result must be a deterministic function of the variant, the shapes
-  and the values (no dependence on addresses, alignment, timing, earlier calls; no threads).
+* **Class R — GEMM and gemm_sub only.** Any summation order, blocking and fused multiply-add are
+  allowed (LANGUAGE.md §7.14.7; gemm_sub sums k + 1 terms, below); the result must be a
+  deterministic function of the variant, the shapes and the values (no dependence on addresses,
+  alignment, row strides, timing, earlier calls, or — for GEMM — C's previous contents; no
+  threads). gemm_sub need not equal "GEMM, then subtract": it is its own class-R result.
 * **Class E — everything else** (add, sub, scale, trn, copy, fill, inv): the result must be
   **bit-identical to the baseline variant** — one IEEE operation per element for add/sub/scale,
   exact copies for trn/copy/fill, and LANGUAGE.md §7.14.6 exactly for inv (no FMA, true division;
   only the sign of zero elements may differ). A variant may vectorise wider, never reassociate.
 * The status result (`KS_*`) is part of the result: class-E kernels report the same status as the
-  baseline; GEMM reports `KS_NONFINITE` exactly when an element it stored is not finite.
+  baseline; GEMM and gemm_sub report `KS_NONFINITE` exactly when an element they stored is not
+  finite, and `KS_OK` otherwise.
+
+**IEEE propagation (GEMM and gemm_sub).** Their inputs may hold ±∞, NaN, ±0 and subnormals. For
+an element `(i, j)` of the result, its **terms** are: for GEMM the k products
+`t_p = A(i,p)·B(p,j)`, `p = 0 … k−1`; for gemm_sub the value `C₀(i,j)` that C held before the
+call and the k negated products `−t_p`. A product is classified **exactly, without rounding**: NaN
+if a factor is NaN, or if one factor is ±0 and the other ±∞; ±∞ if a factor is infinite and the
+other nonzero (sign: the product of the signs, inverted for `−t_p`); otherwise the exact real
+product (finite, possibly far beyond the double range). Let **S** be the sum of the magnitudes of
+the finite terms. The stored element is:
+
+1. **NaN** if some term is NaN, or the terms include both +∞ and −∞ — whatever S;
+2. otherwise, if `S ≤ 2¹⁰²³` and some term is +∞ (−∞): **+∞** (−∞);
+3. otherwise, if `S ≤ 2¹⁰²³` (every term finite): **finite** — the class-R value: the exact sum
+   of the terms rounded with at most k (GEMM) or k + 1 (gemm_sub) roundings in an unspecified
+   order, fused or not, so `|ĉ − c| ≤ γ_k·S` (GEMM) or `γ_{k+1}·S` (gemm_sub), LANGUAGE.md
+   §7.14.7; in particular exact, and the same in every variant, when every partial sum in every
+   order is exactly representable (for example integers with `S ≤ 2⁵³`);
+4. otherwise (`S > 2¹⁰²³`, rule 1 not met): **unspecified** — finite, ±∞ or NaN, and it may
+   differ between variants.
+
+The sign and payload of a NaN result are unspecified, and so is the sign of a zero result. Why
+`2¹⁰²³`: every rounded product and partial sum is then at most `(1 + γ_{k+1})·S`, far below the
+round-to-nearest overflow threshold `2¹⁰²⁴ − 2⁹⁷⁰` for any `k < 2³¹`, so a finite partial result
+can neither overflow nor cancel an infinity. **Finite overflow** (rule 4, and the only way a MAT
+product can become non-finite, since BASIC values are finite): whether it happens is unspecified
+beyond rule 3, exactly as LANGUAGE.md §7.14.7 leaves OVERFLOW of a product near the threshold
+open; when it happens the status reports it like any other non-finite stored element. The rules
+are variant-independent, so they are tested as such (`tests/kern`, §8.7). They require of every
+path (packed, unpacked, edge tiles, every variant):
+
+* every product `A(i,p)·B(p,j)` with `p < k` enters element `(i, j)`: no path tests a factor for
+  zero or skips a zero block (`0·∞` must give NaN);
+* zero padding (the rows of a packed A panel beyond m, the columns of a packed B panel beyond n,
+  the unused part of an edge tile) never meets a real value in a lane that is stored, added into a
+  stored element or fed to the finite check: padding × real lanes (which may be NaN) are
+  discarded;
+* memory outside the views never reaches a stored element (§6.6.1), and GEMM never reads C's
+  previous contents into a result;
+* negating while packing (exact) and fused negated forms (`fmls`, `vfnmadd231pd`) are allowed,
+  since negation is exact and keeps every rule above.
+
+Every other kernel keeps the finite-input precondition (§6.6.1); the MAT layer is unchanged.
 * The test corpus is target- and variant-independent because its products are exact
   (LANGUAGE.md §7.14.7) and everything else is class E. Run it per variant with
   `BAYSICK_KERNELS=<name> sh tests/run.sh` (and the same variable in the environment of
-  `tests/cross_run.sh` on Linux).
+  `tests/cross_run.sh` on Linux). The kernel conformance test (`tests/kern`, §8.7) runs every
+  usable variant itself and checks GEMM and gemm_sub against the rules below.
 
 #### 6.6.5 Performance contract (baseline variants, required now)
 
@@ -1881,6 +2017,15 @@ table order. The MAT layer calls only the trampolines (or reads the current reco
     micro-panel), A values broadcast with `vbroadcastsd`, `vfmadd231pd` (FMA, class R);
     KC = 256, MC = 72, NC = 2048.
   * For tiny products (`m·n·k ≤ 32768`) an unpacked, still vectorised path is allowed.
+* **gemm_sub** — the same performance contract as GEMM (the same structure, block sizes, buffers
+  and BENCH.md goals), sharing GEMM's packing routines, macro-kernel and micro-kernel: the
+  result is `C − A·B` accumulated in either of two orders (class R allows any), and the extra work
+  over GEMM is one load of C per tile (`O(m·n)` per pc block), so gemm_sub should run within a few
+  percent of GEMM's rate (BENCH.md §6). `neon` negates the packed A panel by XOR with a sign mask
+  (exact) and its micro-kernel loads C at every pc block (GEMM: zero for the first), with edge
+  tiles copying the valid part of C into the staging tile and the unpacked path starting each row
+  from C; `sse2` and `avx2` accumulate −A·B from zero (`mulpd` then `subpd`; `vfnmadd231pd`) and
+  add C when storing the tile, at every pc block.
 * **add, sub, scale, copy, fill** — row loop × contiguous inner loop of 2-wide vectors, unrolled
   to at least 4 vectors per iteration, scalar tail; the finite check fused into the same pass.
 * **trn** — cache-blocked (e.g. 32 × 32 element blocks) with in-register tile transposes
@@ -1912,8 +2057,8 @@ pages cost nothing:
 | `avx2` INV workspace W | `RT_KERN_INV_MAXN²` doubles (8 MiB), separate from the `sse2` one; only touched by an `avx2` INV | `rt_kavx2_inv.s` |
 | `avx2` INV multiplier buffer | `NB` × 128 bytes = 2 KiB (the packed multipliers of one 4-row block) | `rt_kavx2_inv.s` |
 | INV index buffer `_bsk_rt_kinv_idx` (arm64) | 3 × `RT_KERN_INV_MAXN` u32 (12 KiB): row-of, unit-position and column-of bookkeeping for the column order of X | `rt_kneon_inv.s` |
-| `sse2` / `neon` GEMM packing buffers | runtime-private, at most 8 MiB per variant | the baseline gemm kernel |
-| `avx2` GEMM packing (separate from the `sse2` buffers; at most 8 MiB per variant, about 4.14 MiB here) | Ap: `MC·KC` doubles (144 KiB); Bp: `KC·NC` doubles (4 MiB); 6 × 8 staging tile for partial C tiles (384 bytes) | `rt_kavx2_gemm.s` |
+| `sse2` / `neon` GEMM packing buffers (shared by gemm and gemm_sub: no new buffer) | runtime-private, at most 8 MiB per variant | the baseline gemm kernel |
+| `avx2` GEMM packing (separate from the `sse2` buffers; at most 8 MiB per variant, about 4.14 MiB here; shared by gemm and gemm_sub) | Ap: `MC·KC` doubles (144 KiB); Bp: `KC·NC` doubles (4 MiB); 6 × 8 staging tile for partial C tiles (384 bytes) | `rt_kavx2_gemm.s` |
 
 #### 6.6.7 Adding a kernel
 
@@ -1931,10 +2076,12 @@ To add a variant (for example `sme` or `avx2`) or to specialise one kernel of an
 3. **Registration.** One `KV_*` record in the variant table, ahead of the baseline (order =
    preference), `KV_REQUIRES` = the bits it needs, unspecialised slots pointing at the baseline
    functions.
-4. **Determinism.** GEMM: class R; everything else: bit-identical to the baseline (§6.6.4).
-   Verify with `BAYSICK_KERNELS=<variant> sh tests/run.sh` (and on Linux through
-   `tests/cross_run.sh`), plus the harness's own validation (BENCH.md), which compares every
-   kernel against the baseline and the vendor library.
+4. **Determinism.** GEMM and gemm_sub: class R with IEEE propagation; everything else:
+   bit-identical to the baseline (§6.6.4). Verify with `BAYSICK_KERNELS=<variant> sh
+   tests/run.sh` (and on Linux through `tests/cross_run.sh`), with the kernel conformance test
+   (`tests/kern`, §8.7: it runs every usable variant by itself, so a new variant is covered once
+   it is registered), plus the harness's own validation (BENCH.md), which compares every kernel
+   against the baseline and the vendor library.
 5. **Benchmark.** `make bench` / `make bench-cross` measure every usable variant
    (`_bsk_kern_variants`); report the new rows as BENCH.md describes. A variant that is slower
    than the one below it in the table on its target hardware is not registered.
@@ -2287,8 +2434,14 @@ under that platform's ABI, and its own section here.
   `ld` options as user programs (§5.2), without the runtime. The macOS `Makefile` never touches
   `src/runtime_x86_64_linux/` (x86_64 sources cannot be assembled by Apple `as`).
 * `make test` runs `tests/run.sh` (it builds nothing; it requires `build/baysick` and
-  `build/libbaysickrt.a`). It tests the default target only.
+  `build/libbaysickrt.a`), then the kernel conformance test
+  `sh tests/kern/kern_run.sh build/libbaysickrt.a` (§8.7; any failure, including a missing
+  `_bsk_kern_gemm_sub`, fails the target). It tests the default target only. `make kern-check` runs only the conformance
+  test.
 * `make check-includes`: §3.4 (trailing-comment grep + `tests/include_check.s`).
+* Tools: `as`, `ld`, `ar`, `xcrun`; `xcrun cc` compiles only the two C programs that link the
+  runtime archive — the conformance test (`tests/kern`, §8.7) and the benchmark harness
+  (`bench/`, BENCH.md). Neither the compiler nor the runtime contains C.
 * `make cross-pack` (depends on `all`): `sh tests/cross_pack.sh -o build/x86_64-linux-bundle`.
 * `make cross` (depends on `all`): `sh tests/cross.sh` (default host `desktop`).
 * `make bench` / `make bench-cross`: BENCH.md (owned by BENCH).
@@ -2305,7 +2458,7 @@ under that platform's ABI, and its own section here.
 ### 8.2 Linux runtime build (`Makefile.linux`)
 
 Run on x86_64 Linux with GNU make, GNU `as` ≥ 2.38 and `ar` (no compiler is needed to build the
-runtime; `gcc` only links test programs):
+runtime; `gcc` only links test programs and compiles the conformance test of §8.7):
 
 ```
 make -f Makefile.linux                  build-x86_64-linux/libbaysickrt.a
@@ -2313,13 +2466,14 @@ make -f Makefile.linux check-includes   assemble tests/include_check_x86_64.s
 make -f Makefile.linux clean            rm -rf build-x86_64-linux
 ```
 
-* Variables (overridable on the command line or from the environment): `AS ?= as`, `AR ?= ar`;
-  fixed `ASFLAGS := --64 --fatal-warnings -I include`; build directory `build-x86_64-linux`.
+* Variables (overridable on the command line or from the environment): `AS ?= as`, `AR ?= ar`,
+  fixed `ASFLAGS_BASE := --64 --fatal-warnings -I include`; build directory `build-x86_64-linux`.
 * Objects: `src/runtime_x86_64_linux/<name>.s` → `build-x86_64-linux/obj/<name>.o` (depend on
   every `include/*.inc`); archive `build-x86_64-linux/libbaysickrt.a` via `rm -f $@` +
   `$(AR) rcs $@ <objs>`; `.DEFAULT_GOAL := all`; `all clean check-includes` are `.PHONY`.
-* `check-includes`: `$(AS) $(ASFLAGS) -I tests -o build-x86_64-linux/include_check.o
-  tests/include_check_x86_64.s`, then prints `include files assemble and layout assertions hold`.
+* `check-includes`: `$(AS) $(ASFLAGS_BASE) -I tests -o build-x86_64-linux/include_check.o
+  tests/include_check_x86_64.s`, then prints `include files assemble and
+  layout assertions hold`.
 * If `src/runtime_x86_64_linux/` has no `*.s` files, `all` fails with
   `make: no assembly sources in: src/runtime_x86_64_linux` (like the macOS `check-sources`).
 * If `uname -sm` is not `Linux x86_64`, every target fails at once with
@@ -2342,6 +2496,8 @@ covered by `make test`.
 <bundle>/tests/cross_run.sh
 <bundle>/tests/include_check_x86_64.s
 <bundle>/tests/include_asserts.inc
+<bundle>/tests/kern/kern_check.c         the conformance test (§8.7) and its driver, when no
+<bundle>/tests/kern/kern_run.sh          PATTERN is given or one matches "kern/kern_check"
 <bundle>/cases/programs/NAME.s NAME.out [NAME.err] [NAME.in]            from tests/programs/NAME.*
 <bundle>/cases/errors/NAME.s NAME.meta NAME.err [NAME.out] [NAME.in]    run-phase tests/errors/NAME.*
 <bundle>/cases/<kind>/NAME.files/ NAME.expect/  copies of the §8.5 directories, when present
@@ -2359,6 +2515,8 @@ sh tests/cross_pack.sh -o BUNDLE_DIR [PATTERN...]
   PATTERN selects tests whose name (`programs/NAME`, `errors/NAME`) contains a pattern, as in
   `tests/run.sh`.
 * Environment: `BAYSICK` (compiler, default `build/baysick`).
+* Copies `tests/kern/kern_check.c` and `tests/kern/kern_run.sh` into `<bundle>/tests/kern/`
+  when no PATTERN is given or one matches `kern/kern_check` (§8.7).
 * For each selected case: `"$BAYSICK" --target x86_64-linux -S NAME.bas -o
   BUNDLE_DIR/cases/<kind>/NAME.s`. It must exit 0 with empty stdout and stderr; otherwise the
   `.s` is removed and `NAME.packfail` written. Sidecars (`.out`, `.err`, `.meta` and the
@@ -2389,6 +2547,10 @@ sh tests/cross_run.sh [-v] [BUNDLE_DIR]
   `tests/run.sh`: programs: exit 0,
   stdout = `.out`, stderr = `.err` or empty; run-phase errors: exit = `exit=` of `.meta`,
   stderr = `.err`, stdout = `.out` or empty.
+* Last, when the bundle has `tests/kern/kern_check.c`: `CC="$CC" sh
+  BUNDLE_DIR/tests/kern/kern_run.sh [-v] BUNDLE_DIR/build-x86_64-linux/libbaysickrt.a` (§8.7)
+  is one case, `kern/kern_check`: exit 0 → passed; anything else (including a missing `bsk_kern_gemm_sub`, a link failure) → FAIL with the
+  driver's reason, followed by its indented failure lines.
 * Output format and exit status identical to `tests/run.sh` (`FAIL <name>: <reason>` lines, then
   `----` and `passed: P  failed: F`, `failed tests: …`); exit 0 all passed, 1 any failed,
   2 setup error.
@@ -2433,6 +2595,10 @@ sh tests/cross.sh [-v] [-H HOST] [PATTERN...]
   (`uname -m`, `as --version | head -1`, `gcc --version | head -1`); `Cross tests`:
   `sh bundle/tests/cross_run.sh bundle`; on failure, upload `bundle/build-x86_64-linux/` as
   artifact `build-x86_64-linux` (`if-no-files-found: ignore`).
+* The kernel conformance test (§8.7) needs no CI change: the Mac job's `make test` runs it with
+  `xcrun cc` (the runner's Xcode command line tools), and the Linux job's `cross_run.sh` runs it
+  from the bundle with the runner's `gcc`. The test checks every variant the runner lists in
+  `_bsk_kern_variants()` (GitHub's x86_64 runners normally have AVX2 and FMA, so `avx2` and `sse2`).
 
 ### 8.5 File tests (Fifth Edition; implementer T)
 
@@ -2555,3 +2721,80 @@ leaves unwritten — `r.err` for `merged`, `r.out` for `no-stdout` — so the ex
 apply). `tests/cross_pack.sh` already copies `NAME.meta`
 unchanged; CI needs nothing. The header comment of `tests/run.sh` documents the key with the
 other sidecar formats.
+
+### 8.7 Kernel conformance test (`tests/kern/`)
+
+`_bsk_kern_gemm_sub` is not reachable from BASIC, and the IEEE propagation of §6.6.4 needs ±∞
+and NaN inputs, which BASIC values never are; the BASIC corpus can test neither. They are tested
+by one C program that links the runtime archive directly, like the benchmark harness (link
+isolation, §6.6.1: it defines its own `main`, so `rt_main.o` is never pulled in):
+
+| Path | Content |
+|------|---------|
+| `tests/kern/kern_check.c` | the test: C11, no Baysick logic; written by the architect from §6.6.1 and §6.6.4 (like expected test outputs, never from what an implementation prints) |
+| `tests/kern/kern_run.sh` | the driver (POSIX sh; macOS and Linux): constants header, compile, run, report |
+
+The test kinds are therefore: `tests/programs` and `tests/errors` (BASIC programs, both targets),
+`tests/ir` (golden IR, Mac), `tests/kern` (the kernel API, both targets, every usable variant).
+
+**What `kern_check` checks** (every case on every variant listed by `_bsk_kern_variants()`,
+selected with `_bsk_kern_use`, and for both `_bsk_kern_gemm` and `_bsk_kern_gemm_sub`):
+
+* **Exact data** (integers in [−3, 3]; C₀ in [−50, 50]; so every partial sum in every order is
+  exact): each element equals the exact value (rule 3; `+0 = −0`). Shapes: every
+  `m, n ∈ 1…9` with `k ∈ {1, 2, 3, 7}` (all edge residues of `MR × NR` = 8 × 6, 4 × 6, 6 × 8;
+  the `neon` unpacked path), every `m ∈ 8…15`, `n ∈ 6…13` with `k = 700` (all residues on the
+  packed path, three KC blocks), the KC boundaries (`k` = 255, 256, 257, 511, 512, 513), the MC
+  boundaries (`m` = 47–49, 71–73, 127–130), the NC boundaries (`n` = 2045–2049 and 4100), the
+  `neon` unpacked threshold (`m·n·k` = 32768 and just above), row and column vectors, a
+  40000-term dot product and non-square shapes.
+* **IEEE propagation**: ten scenarios on shapes from 1 × 1 × 1 to 130 × 50 × 7 and 3 × 2049 × 7:
+  +∞ in A's last row and last k (edge tile, last KC block) against zeros and both signs in B;
+  −∞ in B's last column; NaN in A; NaN in B with a zero column of A; zero columns and rows of A
+  against infinities in B (`0·∞` must give NaN: no zero skipping); +∞ and −∞ in one row of A
+  (NaN where they meet, ∞ elsewhere); C₀ specials for gemm_sub (NaN, ±∞, and a C₀ of +∞ against
+  a −∞ product); −0 against +∞; infinities and NaN in columns 2045–2048 (the NC boundaries); and
+  one finite term of 2¹²⁰⁰ (rule 4: that element is unchecked, the others are exact). Each
+  element's expected class — exact value, NaN, +∞, −∞, any finite value, or anything (rule 4) —
+  is computed from the definition in §6.6.4, term by term, independent of order. The oracle uses
+  `2¹⁰⁰⁰` instead of `2¹⁰²³` as its rule-4 bound, which only leaves more elements unchecked.
+* **Status**: `KS_NONFINITE` exactly when a stored element is not finite, else `KS_OK`.
+* **Memory**: every matrix lives in a region whose guard zones (16 doubles before and after) and
+  row padding (`MV_LD − MV_COLS` = 0, 1, 2 or 9) hold a sentinel quiet NaN, with `MV_DATA` 0–7
+  doubles past a 64-byte boundary (so also 8- but not 16-byte aligned). After the call nothing
+  outside C's view has changed, A's and B's regions are bit-identical to before (their sentinels
+  also prove that padding never reaches a result), and GEMM's C view held garbage (±∞, NaN, a
+  large finite value) before the call, which must not matter.
+* **Class R determinism**: on random inexact data, three runs per variant and entry — the first
+  layout, a second layout with other `MV_LD` and alignment (and, for GEMM, other previous
+  contents of C), the first layout again — must give bit-identical results and `KS_OK`.
+
+**Output and exit status** of `kern_check`: on success one line on stdout,
+`kern_check: <N> runs passed (variants: …)`, exit 0; on failure one line per failed check on
+stderr (`kern_check: <variant> <entry> <case>/<scenario> m=… n=… k=…: <what>`, at most 8 per case,
+variant and entry, then a count of the rest), a final count line, exit 1; exit 2 if no variant is
+listed or memory runs out. It runs in well under a second (0.5 s on the M2 Pro with one variant,
+0.6 s on the i7-4790 with two).
+
+**`tests/kern/kern_run.sh`**:
+
+```
+sh tests/kern/kern_run.sh [-v] ARCHIVE
+```
+
+1. Derive `runtime_consts.h` (`#define` of every `MV_*` and `KS_*` constant) from
+   `include/runtime.inc` with the same `grep`/`sed` as the benchmark drivers, so no constant
+   that has a name in an include file is repeated in C.
+2. Compile and link: `$CC -std=c11 -O2 -Wall -Wextra -ffp-contract=off -I <tmp> -o <tmp>/kern_check
+   tests/kern/kern_check.c ARCHIVE` plus `-no-pie -lm` on Linux (the §5.4.1 link flags). `CC`
+   defaults to `xcrun cc` on macOS and `gcc` elsewhere. It must exit 0 with empty stdout and
+   stderr (a warning is a failure, as for programs in §8.3), else `FAIL kern/kern_check: build
+   failed (status <n>)` and the first 20 lines, exit 1.
+3. Run with a watchdog (`BAYSICK_KERN_TIMEOUT` seconds, default 120). Exit 0 with empty stderr →
+   `kern/kern_check: passed (<N> runs passed (variants: …))`, exit 0; otherwise
+   `FAIL kern/kern_check: <reason>` and the test's stderr indented (the first 20 lines; all with
+   `-v`), exit 1. Setup errors (no archive, no temporary directory) exit 2.
+
+It finds `include/runtime.inc` and `kern_check.c` relative to its own location, so it runs
+unchanged from the repository (Mac: `make test`, `make kern-check`) and from the cross bundle
+(`cross_run.sh`, §8.3).

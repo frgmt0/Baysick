@@ -47,13 +47,13 @@ by CPU feature, and are benchmarked against Apple Accelerate and OpenBLAS (`docs
 Version **0.6.0** (`baysick --version`: `baysick 0.6.0 (Dartmouth BASIC, Sixth Edition 1971,
 with Baysick extensions)`). Two targets:
 
-* **`arm64-macos`** (default) — complete: `make test` passes the whole corpus (463 tests).
+* **`arm64-macos`** (default) — complete: `make test` passes the whole corpus (463 tests) and the kernel conformance test.
 * **`x86_64-linux`** — cross target: the compiler, still running on the Mac, emits GNU `as`
   x86_64 assembly; it is assembled and linked on an x86_64 Linux machine against an x86_64
   runtime (also hand-written assembly). Specified in `docs/DESIGN.md` §5.4, §6.4 and §8; the
   backend (`src/backend/x86_64_linux/`) and runtime (`src/runtime_x86_64_linux/`) are
   implemented and cross-tested with `make cross` against all program and run-phase error tests
-  (267 tests; module split: `docs/DESIGN.md` §2).
+  (268 tests, the kernel conformance test among them; module split: `docs/DESIGN.md` §2).
 
 Third and Fourth Edition: implemented on both targets. Specified in `docs/LANGUAGE.md` (§3–§14,
 with page references to the 1968 manual), `docs/IR.md` and `docs/DESIGN.md` (§2.2–§2.3,
@@ -123,7 +123,7 @@ The compiler looks for its runtime next to itself (`build/libbaysickrt.a`) unles
 
 Tests live in `tests/programs` (`NAME.bas`, expected `NAME.out`, optional `NAME.err`),
 `tests/errors` (`NAME.meta` with phase and exit status, `NAME.err`, optional `NAME.out`) and
-`tests/ir` (`NAME.ir`, the expected `--emit-ir` dump). A program or error test may have a
+`tests/ir` (`NAME.ir`, the expected `--emit-ir` dump) and `tests/kern` (`kern_check.c`, a C program that links the runtime archive and checks the matrix kernel API, GEMM and gemm_sub, on every usable variant, including ±∞ and NaN inputs; `make kern-check`, `docs/DESIGN.md` §8.7). A program or error test may have a
 `NAME.in` file, which becomes the program's standard input (otherwise `/dev/null`), on both
 targets, and `NAME.files/` (fixtures copied into its fresh working directory) and `NAME.expect/`
 (files that must exist afterwards) directories. A run-phase `.meta` may add `streams=merged`

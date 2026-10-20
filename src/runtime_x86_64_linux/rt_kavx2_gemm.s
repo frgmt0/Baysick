@@ -1,12 +1,22 @@
 # =====================================================================
-# src/runtime_x86_64_linux/rt_kavx2_gemm.s -- AVX2/FMA matrix product of
-# the "avx2" variant (docs/DESIGN.md 6.6.1, 6.6.5, 6.6.7;
-# LANGUAGE.md 7.14.7). Reached only through the variant table, whose
-# record requires KF_X64_AVX2 | KF_X64_FMA (OS YMM state included).
+# src/runtime_x86_64_linux/rt_kavx2_gemm.s -- AVX2/FMA matrix product and
+# product update of the "avx2" variant (docs/DESIGN.md 6.6.1, 6.6.4,
+# 6.6.5, 6.6.7; LANGUAGE.md 7.14.7). Reached only through the variant
+# table, whose record requires KF_X64_AVX2 | KF_X64_FMA (OS YMM state included).
 #
 # Defines (private to the runtime, .globl + .hidden):
-#   bsk_rt_kavx2_gemm   C = A * B  (A m x k, B k x n, C m x n)
-#                       -> %rax KS_OK / KS_NONFINITE
+#   bsk_rt_kavx2_gemm     C = A * B      (A m x k, B k x n, C m x n)
+#                         -> %rax KS_OK / KS_NONFINITE
+#   bsk_rt_kavx2_gemm_sub C = C - A * B  (same shapes; C in and out)
+#                         -> %rax KS_OK / KS_NONFINITE
+#
+# Both entries run one driver (.Lrt_kavx2_gemm_drv) with the same
+# packing, blocking and staging tile; they differ only in the
+# micro-kernel (RT_KAVX2_GEMM_MICRO instantiated twice: GEMM with
+# vfmadd231pd, gemm_sub with vfnmadd231pd) and in when C is read: GEMM
+# stores the first pc block and adds the later ones, gemm_sub adds the
+# tile to C for EVERY pc block, so each element is C0 - sum of the
+# products (class R, k + 1 terms, DESIGN.md 6.6.4).
 #
 # Goto/BLIS structure (as rt_ksse2_gemm.s):
 #   for jc (columns, step NC):
@@ -16,7 +26,8 @@
 #         pack A(ic.., pc..) into MR-high micro-panels (Ap, k-major)
 #         for jr (step NR): for ir (step MR):
 #           micro-kernel: the MR x NR block of C stays in registers for
-#           the whole kc loop; stored (pc = 0) or added to C (pc > 0)
+#           the whole kc loop; stored (pc = 0) or added to C (pc > 0;
+#           gemm_sub: every pc)
 #
 # Micro-kernel MR x NR = 6 x 8 (the BLIS Haswell shape). Each row of the
 # C tile is 8 contiguous doubles = two ymm accumulators, so 12
@@ -35,8 +46,15 @@
 #   MC = 72:  the packed A block (MC x KC = 144 KiB) stays in L2;
 #   NC = 2048: the packed B block (KC x NC = 4 MiB) stays in L3.
 #
-# Edges: zero-padded packing (padding contributes exact zeros, inputs
-# are finite) and a partial store through a 6 x 8 staging tile.
+# Edges: zero-padded packing and a partial store through a 6 x 8
+# staging tile. IEEE propagation (DESIGN.md 6.6.4): inputs may hold
+# +-inf and NaN. No path tests a factor for zero, so 0 * inf reaches
+# its element as NaN. A padding lane (a zero row of Ap or column of Bp)
+# may hold 0 * inf = NaN, but such lanes are only in the staged part
+# that is never copied out; full tiles have no padding lanes. Nothing
+# outside the views is read into a result (packing copies only the
+# mc x kc / kc x nc blocks; the C prefetches load no register) or
+# written (partial tiles store only the valid part).
 # Class R (DESIGN.md 6.6.4): the summation order depends only on the
 # shapes (fixed blocking, fixed micro-kernel order), never on addresses
 # or alignment (C is accessed with vmovupd/vaddpd on unaligned memory;
@@ -85,7 +103,9 @@
 .equ RT_KAVX2_GEMM_KCUR,  80        # current kc
 .equ RT_KAVX2_GEMM_MCUR,  88        # current mc
 .equ RT_KAVX2_GEMM_CVIEW, 96        # C view pointer
-.equ RT_KAVX2_GEMM_FRAME, 104
+.equ RT_KAVX2_GEMM_SUB,   104       # 1 for gemm_sub, 0 for GEMM
+.equ RT_KAVX2_GEMM_UKER,  112       # micro-kernel of the entry
+.equ RT_KAVX2_GEMM_FRAME, 120       # 56 + 120 = 0 (mod 16)
 
     .text
 
@@ -211,30 +231,32 @@
     popq %rbx
     ret
 
-# RT_KAVX2_GEMM_KSTEP kk -- the whole 6 x 8 update for k step \kk of an
-#   unrolled group (A at 48 kk, B at 64 kk):
-#   acc(r, 0..3) += a_r * b(0..3), acc(r, 4..7) += a_r * b(4..7).
-.macro RT_KAVX2_GEMM_KSTEP kk
+# RT_KAVX2_GEMM_KSTEP kk, op -- the whole 6 x 8 update for k step \kk of
+#   an unrolled group (A at 48 kk, B at 64 kk), with op = vfmadd231pd
+#   (GEMM: acc += a_r * b) or vfnmadd231pd (gemm_sub: acc -= a_r * b,
+#   one fused rounding either way; never a zero test):
+#   acc(r, 0..3) op= a_r * b(0..3), acc(r, 4..7) op= a_r * b(4..7).
+.macro RT_KAVX2_GEMM_KSTEP kk, op
     vmovapd 64*\kk(%rsi), %ymm0             # b(k, 0..3)
     vmovapd 64*\kk+32(%rsi), %ymm1          # b(k, 4..7)
     vbroadcastsd 48*\kk(%rdi), %ymm2        # a(0, k) in all lanes
-    vfmadd231pd %ymm0, %ymm2, %ymm4
-    vfmadd231pd %ymm1, %ymm2, %ymm5
+    \op %ymm0, %ymm2, %ymm4
+    \op %ymm1, %ymm2, %ymm5
     vbroadcastsd 48*\kk+8(%rdi), %ymm3      # a(1, k)
-    vfmadd231pd %ymm0, %ymm3, %ymm6
-    vfmadd231pd %ymm1, %ymm3, %ymm7
+    \op %ymm0, %ymm3, %ymm6
+    \op %ymm1, %ymm3, %ymm7
     vbroadcastsd 48*\kk+16(%rdi), %ymm2     # a(2, k)
-    vfmadd231pd %ymm0, %ymm2, %ymm8
-    vfmadd231pd %ymm1, %ymm2, %ymm9
+    \op %ymm0, %ymm2, %ymm8
+    \op %ymm1, %ymm2, %ymm9
     vbroadcastsd 48*\kk+24(%rdi), %ymm3     # a(3, k)
-    vfmadd231pd %ymm0, %ymm3, %ymm10
-    vfmadd231pd %ymm1, %ymm3, %ymm11
+    \op %ymm0, %ymm3, %ymm10
+    \op %ymm1, %ymm3, %ymm11
     vbroadcastsd 48*\kk+32(%rdi), %ymm2     # a(4, k)
-    vfmadd231pd %ymm0, %ymm2, %ymm12
-    vfmadd231pd %ymm1, %ymm2, %ymm13
+    \op %ymm0, %ymm2, %ymm12
+    \op %ymm1, %ymm2, %ymm13
     vbroadcastsd 48*\kk+40(%rdi), %ymm3     # a(5, k)
-    vfmadd231pd %ymm0, %ymm3, %ymm14
-    vfmadd231pd %ymm1, %ymm3, %ymm15
+    \op %ymm0, %ymm3, %ymm14
+    \op %ymm1, %ymm3, %ymm15
 .endm
 
 # RT_KAVX2_GEMM_STROW c0, c1, add -- write one row of the tile to C at
@@ -250,17 +272,25 @@
 .endm
 
 # ---------------------------------------------------------------------
-# .Lrt_kavx2_gemm_micro -- 6 x 8 register-blocked micro-kernel.
+# RT_KAVX2_GEMM_MICRO name, op -- defines the 6 x 8 register-blocked
+#   micro-kernel \name, accumulating with \op (vfmadd231pd: GEMM, the
+#   tile is A * B; vfnmadd231pd: gemm_sub, the tile is -(A * B)).
+#   Instantiated as .Lrt_kavx2_gemm_micro and .Lrt_kavx2_gemm_micro_sub.
 #   Private convention (leaf):
 #   Inputs  : %rdi = A micro-panel, %rsi = B micro-panel, %rdx = kc
 #             (>= 1), %rcx = &C(tile), %r8 = C stride in bytes,
-#             %r9 = 1 to add to C (pc > 0) / 0 to store,
+#             %r9 = 1 to add the tile to C / 0 to store it,
 #             %r10 = valid rows (1..6), %r11 = valid columns (1..8)
+#   Outputs : the valid rows x columns of the tile at %rcx, stored or
+#             added to C; nothing else of C is read or written
 #   Clobbers: %rax %rdx %rsi %rdi %r9-%r11 %ymm0-%ymm15
 #             (upper halves left dirty: the caller ends with vzeroupper)
+#   Callee-saved used: none
+#   Frame   : none (leaf)
 # ---------------------------------------------------------------------
+.macro RT_KAVX2_GEMM_MICRO name, op
     .p2align 4
-.Lrt_kavx2_gemm_micro:
+\name:
     vxorpd %ymm4, %ymm4, %ymm4      # 12 accumulators = 0
     vxorpd %ymm5, %ymm5, %ymm5
     vxorpd %ymm6, %ymm6, %ymm6
@@ -273,7 +303,8 @@
     vxorpd %ymm13, %ymm13, %ymm13
     vxorpd %ymm14, %ymm14, %ymm14
     vxorpd %ymm15, %ymm15, %ymm15
-    # warm the C tile (six rows, 64 bytes each, possibly two lines)
+    # warm the C tile (six rows, 64 bytes each, possibly two lines;
+    # a prefetch never faults, so reaching past a view is harmless)
     movq %rcx, %rax
     prefetcht0 (%rax)
     prefetcht0 63(%rax)
@@ -294,35 +325,35 @@
     prefetcht0 63(%rax)
     movq %rdx, %rax
     shrq $2, %rax                   # groups of four k steps
-    jz .Lrt_kavx2_gemm_micro_k1
-.Lrt_kavx2_gemm_micro_k4:
+    jz \name\()_k1
+\name\()_k4:
     prefetcht0 384(%rdi)            # A panel, two groups ahead
-    RT_KAVX2_GEMM_KSTEP 0
-    RT_KAVX2_GEMM_KSTEP 1
+    RT_KAVX2_GEMM_KSTEP 0, \op
+    RT_KAVX2_GEMM_KSTEP 1, \op
     prefetcht0 448(%rdi)
-    RT_KAVX2_GEMM_KSTEP 2
-    RT_KAVX2_GEMM_KSTEP 3
+    RT_KAVX2_GEMM_KSTEP 2, \op
+    RT_KAVX2_GEMM_KSTEP 3, \op
     addq $192, %rdi                 # 4 k steps of A (4 x 48 bytes)
     addq $256, %rsi                 # 4 k steps of B (4 x 64 bytes)
     subq $1, %rax
-    jnz .Lrt_kavx2_gemm_micro_k4
-.Lrt_kavx2_gemm_micro_k1:
+    jnz \name\()_k4
+\name\()_k1:
     andq $3, %rdx                   # remaining single k steps
-    jz .Lrt_kavx2_gemm_micro_store
+    jz \name\()_store
 1:
-    RT_KAVX2_GEMM_KSTEP 0
+    RT_KAVX2_GEMM_KSTEP 0, \op
     addq $48, %rdi
     addq $64, %rsi
     subq $1, %rdx
     jnz 1b
-.Lrt_kavx2_gemm_micro_store:
+\name\()_store:
     cmpq $RT_KAVX2_GEMM_MR, %r10
-    jne .Lrt_kavx2_gemm_micro_partial
+    jne \name\()_partial
     cmpq $RT_KAVX2_GEMM_NR, %r11
-    jne .Lrt_kavx2_gemm_micro_partial
+    jne \name\()_partial
     movq %rcx, %rax                 # full tile straight into C
     testq %r9, %r9
-    jnz .Lrt_kavx2_gemm_micro_add
+    jnz \name\()_add
     RT_KAVX2_GEMM_STROW %ymm4, %ymm5, 0
     RT_KAVX2_GEMM_STROW %ymm6, %ymm7, 0
     RT_KAVX2_GEMM_STROW %ymm8, %ymm9, 0
@@ -330,7 +361,7 @@
     RT_KAVX2_GEMM_STROW %ymm12, %ymm13, 0
     RT_KAVX2_GEMM_STROW %ymm14, %ymm15, 0
     ret
-.Lrt_kavx2_gemm_micro_add:
+\name\()_add:
     RT_KAVX2_GEMM_STROW %ymm4, %ymm5, 1
     RT_KAVX2_GEMM_STROW %ymm6, %ymm7, 1
     RT_KAVX2_GEMM_STROW %ymm8, %ymm9, 1
@@ -338,8 +369,9 @@
     RT_KAVX2_GEMM_STROW %ymm12, %ymm13, 1
     RT_KAVX2_GEMM_STROW %ymm14, %ymm15, 1
     ret
-.Lrt_kavx2_gemm_micro_partial:
-    # stage the tile (row-major 6 x 8), then copy the valid part
+\name\()_partial:
+    # stage the tile (row-major 6 x 8), then copy the valid part; the
+    # padding lanes (which may be NaN from 0 * inf) stay in the tile
     leaq .Lrt_kavx2_gemm_tile(%rip), %rax
     vmovapd %ymm4, 0(%rax)
     vmovapd %ymm5, 32(%rax)
@@ -353,41 +385,84 @@
     vmovapd %ymm13, 288(%rax)
     vmovapd %ymm14, 320(%rax)
     vmovapd %ymm15, 352(%rax)
-.Lrt_kavx2_gemm_micro_prow:
+\name\()_prow:
     xorl %edx, %edx                 # column
-.Lrt_kavx2_gemm_micro_pcol:
+\name\()_pcol:
     vmovsd (%rax,%rdx,8), %xmm0     # staged value
     testq %r9, %r9
     jz 2f
-    vaddsd (%rcx,%rdx,8), %xmm0, %xmm0  # pc > 0: staged + earlier part
+    vaddsd (%rcx,%rdx,8), %xmm0, %xmm0  # add mode: staged + C element
 2:
     vmovsd %xmm0, (%rcx,%rdx,8)
     addq $1, %rdx
     cmpq %r11, %rdx
-    jb .Lrt_kavx2_gemm_micro_pcol
+    jb \name\()_pcol
     addq $64, %rax                  # next staged row
     addq %r8, %rcx                  # next row of C
     subq $1, %r10
-    jnz .Lrt_kavx2_gemm_micro_prow
+    jnz \name\()_prow
     ret
+.endm
+
+    RT_KAVX2_GEMM_MICRO .Lrt_kavx2_gemm_micro, vfmadd231pd       # A * B
+    RT_KAVX2_GEMM_MICRO .Lrt_kavx2_gemm_micro_sub, vfnmadd231pd  # -(A * B)
 
 # ---------------------------------------------------------------------
-# bsk_rt_kavx2_gemm
+# bsk_rt_kavx2_gemm -- C = A * B (DESIGN.md 6.6.1).
 #   Inputs  : %rdi = C view (m x n), %rsi = A view (m x k),
-#             %rdx = B view (k x n); C overlaps neither; A, B finite
+#             %rdx = B view (k x n); C overlaps neither; elements of A
+#             and B may be +-inf or NaN (DESIGN.md 6.6.4); C's previous
+#             contents are never read
 #   Outputs : %rax = KS_OK / KS_NONFINITE
 #   Clobbers: all caller-saved registers; upper ymm state clean on exit
-#   Callee-saved used: %rbx = jc, %r12 = pc, %r13 = ic, %r14 = jr,
-#             %r15 = ir, %rbp = frame pointer
-#   Frame   : 48 bytes of saved registers + RT_KAVX2_GEMM_FRAME locals
-#             (shapes, data pointers, byte strides, current block
-#             sizes); %rsp = 0 (mod 16) at calls
+#   Callee-saved used: none here (the driver saves its own)
+#   Frame   : none (tail-jumps to .Lrt_kavx2_gemm_drv with %ecx = 0)
 # ---------------------------------------------------------------------
     .globl bsk_rt_kavx2_gemm
     .hidden bsk_rt_kavx2_gemm
     .type bsk_rt_kavx2_gemm, @function
     .p2align 4
 bsk_rt_kavx2_gemm:
+    xorl %ecx, %ecx                 # mode 0: GEMM
+    jmp .Lrt_kavx2_gemm_drv
+    .size bsk_rt_kavx2_gemm, . - bsk_rt_kavx2_gemm
+
+# ---------------------------------------------------------------------
+# bsk_rt_kavx2_gemm_sub -- C = C - A * B (DESIGN.md 6.6.1, 6.6.4).
+#   Inputs  : %rdi = C view (m x n, input and output), %rsi = A view
+#             (m x k), %rdx = B view (k x n); C overlaps neither; any
+#             element may be +-inf or NaN
+#   Outputs : %rax = KS_OK / KS_NONFINITE
+#   Clobbers: all caller-saved registers; upper ymm state clean on exit
+#   Callee-saved used: none here (the driver saves its own)
+#   Frame   : none (tail-jumps to .Lrt_kavx2_gemm_drv with %ecx = 1)
+# ---------------------------------------------------------------------
+    .globl bsk_rt_kavx2_gemm_sub
+    .hidden bsk_rt_kavx2_gemm_sub
+    .type bsk_rt_kavx2_gemm_sub, @function
+    .p2align 4
+bsk_rt_kavx2_gemm_sub:
+    movl $1, %ecx                   # mode 1: gemm_sub
+    jmp .Lrt_kavx2_gemm_drv
+    .size bsk_rt_kavx2_gemm_sub, . - bsk_rt_kavx2_gemm_sub
+
+# ---------------------------------------------------------------------
+# .Lrt_kavx2_gemm_drv -- the blocked driver shared by GEMM and gemm_sub.
+#   Inputs  : %rdi = C view, %rsi = A view, %rdx = B view (as above),
+#             %rcx = mode: 0 GEMM (first pc block stored, later ones
+#             added), 1 gemm_sub (every pc block added to C, with the
+#             subtracting micro-kernel)
+#   Outputs : %rax = KS_OK / KS_NONFINITE (finite check of C's view)
+#   Clobbers: all caller-saved registers; upper ymm state clean on exit
+#             (bsk_rt_kavx2_chkfin, the only exit, ends with vzeroupper)
+#   Callee-saved used: %rbx = jc, %r12 = pc, %r13 = ic, %r14 = jr,
+#             %r15 = ir, %rbp = frame pointer
+#   Frame   : 48 bytes of saved registers + RT_KAVX2_GEMM_FRAME locals
+#             (shapes, data pointers, byte strides, current block
+#             sizes, mode, micro-kernel); %rsp = 0 (mod 16) at calls
+# ---------------------------------------------------------------------
+    .p2align 4
+.Lrt_kavx2_gemm_drv:
     pushq %rbp
     movq %rsp, %rbp
     pushq %rbx
@@ -397,6 +472,12 @@ bsk_rt_kavx2_gemm:
     pushq %r15
     subq $RT_KAVX2_GEMM_FRAME, %rsp     # %rsp = 0 (mod 16)
     movq %rdi, RT_KAVX2_GEMM_CVIEW(%rsp)
+    movq %rcx, RT_KAVX2_GEMM_SUB(%rsp)  # mode
+    leaq .Lrt_kavx2_gemm_micro(%rip), %rax
+    leaq .Lrt_kavx2_gemm_micro_sub(%rip), %r8
+    testq %rcx, %rcx
+    cmovnz %r8, %rax
+    movq %rax, RT_KAVX2_GEMM_UKER(%rsp) # micro-kernel of this entry
     movq MV_ROWS(%rsi), %rax
     movq %rax, RT_KAVX2_GEMM_M(%rsp)    # m
     movq MV_COLS(%rsi), %rax
@@ -485,9 +566,11 @@ bsk_rt_kavx2_gemm:
     leaq (%rbx,%r14), %rax
     leaq (%rcx,%rax,8), %rcx
     movq RT_KAVX2_GEMM_LDC(%rsp), %r8
+    # add to C after the first k block (GEMM) or always (gemm_sub)
     xorl %r9d, %r9d
     testq %r12, %r12
-    setnz %r9b                      # add to C after the first k block
+    setnz %r9b
+    orq RT_KAVX2_GEMM_SUB(%rsp), %r9
     movq RT_KAVX2_GEMM_MCUR(%rsp), %r10
     subq %r15, %r10
     movl $RT_KAVX2_GEMM_MR, %eax
@@ -498,7 +581,7 @@ bsk_rt_kavx2_gemm:
     movl $RT_KAVX2_GEMM_NR, %eax
     cmpq %rax, %r11
     cmova %rax, %r11                # valid columns = min(8, nc - jr)
-    call .Lrt_kavx2_gemm_micro
+    call *RT_KAVX2_GEMM_UKER(%rsp)  # .Lrt_kavx2_gemm_micro / _micro_sub
     addq $RT_KAVX2_GEMM_MR, %r15
     cmpq RT_KAVX2_GEMM_MCUR(%rsp), %r15
     jb .Lrt_kavx2_gemm_ir
@@ -525,7 +608,6 @@ bsk_rt_kavx2_gemm:
     popq %rbx
     popq %rbp
     ret
-    .size bsk_rt_kavx2_gemm, . - bsk_rt_kavx2_gemm
 
 # Packing buffers and the partial-tile staging area (DESIGN.md 6.6.6)
     .bss

@@ -52,7 +52,7 @@ COMPILER=$BUILD/baysick
 # The archive must export the kernel API (DESIGN.md 6.6); until the kernels exist, stop clearly.
 SYMS=$(nm -g "$ARCHIVE" 2>/dev/null | awk '$2 == "T" { print $3 }')
 MISSING=
-for s in init use name variants features gemm add sub scale trn inv; do
+for s in init use name variants features gemm gemm_sub add sub scale trn inv; do
     echo "$SYMS" | grep -qx "_bsk_kern_$s" || MISSING="$MISSING _bsk_kern_$s"
 done
 if [ -n "$MISSING" ]; then

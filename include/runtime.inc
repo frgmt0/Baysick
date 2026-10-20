@@ -149,6 +149,11 @@
 //  _bsk_kern_variants() -> x0           NULL-terminated array of usable variant names
 //  _bsk_kern_features() -> x0           detected KF_* bits
 //  _bsk_kern_gemm(x0=C, x1=A, x2=B) -> x0 KS_*      C = A * B
+//  _bsk_kern_gemm_sub(x0=C, x1=A, x2=B) -> x0 KS_*  C = C - A * B (update in place;
+//                             not used by the MAT layer; DESIGN.md 6.6.1, 2.7)
+//  _bsk_kern_gemm and _bsk_kern_gemm_sub accept non-finite inputs and propagate
+//  them by the IEEE rules of DESIGN.md 6.6.4; every other kernel requires
+//  finite inputs.
 //  _bsk_kern_add(x0=C, x1=A, x2=B) -> x0 KS_*       C = A + B
 //  _bsk_kern_sub(x0=C, x1=A, x2=B) -> x0 KS_*       C = A - B
 //  _bsk_kern_scale(x0=C, x1=A, d0=k) -> x0 KS_*     C = k * A
@@ -252,7 +257,7 @@
 .equ MV_LD,             24  /* u64  row stride in elements, >= MV_COLS (or 1 when MV_COLS = 1) */
 .equ MV_SIZE,           32
 
-// ---- Kernel status (x0 result of _bsk_kern_gemm/add/sub/scale/inv) ----------------
+// ---- Kernel status (x0 result of _bsk_kern_gemm/gemm_sub/add/sub/scale/inv) -------
 .equ KS_OK,             0   /* every stored result element is finite */
 .equ KS_NONFINITE,      1   /* some result element is +-inf or NaN -> OVERFLOW */
 .equ KS_SINGULAR,       2   /* _bsk_kern_inv only: pivot <= tolerance -> SINGULAR MATRIX */
@@ -264,10 +269,11 @@
 .equ KF_X64_AVX2,       0x100   /* CPUID.(7,0):EBX[5], with OS AVX state (XCR0[2:1] = 11b) */
 .equ KF_X64_FMA,        0x200   /* CPUID.1:ECX[12], with OS AVX state (XCR0[2:1] = 11b) */
 
-// ---- Kernel variant record (KV_*), 80 bytes, DESIGN.md 6.6.3 ---------------------
+// ---- Kernel variant record (KV_*), 88 bytes, DESIGN.md 6.6.3 ----
 // A runtime-private, read-only table of these records, best variant first,
 // baseline last (KV_REQUIRES = 0). A slot a variant does not specialise
-// points at the baseline function.
+// points at the baseline function. KV_GEMM_SUB is appended after KV_INV, so
+// no earlier offset moves (DESIGN.md 2.7).
 .equ KV_NAME,           0   /* ptr  NUL-terminated variant name ("neon", "sse2", ...) */
 .equ KV_REQUIRES,       8   /* u64  KF_* bits that must all be detected */
 .equ KV_GEMM,           16  /* ptr  same contract as _bsk_kern_gemm */
@@ -278,7 +284,9 @@
 .equ KV_COPY,           56
 .equ KV_FILL,           64
 .equ KV_INV,            72
-.equ KV_SIZE,           80
+.equ KV_GEMM_SUB,       80  /* ptr  same contract as _bsk_kern_gemm_sub */
+
+.equ KV_SIZE,           88
 
 // ---- PRINT layout constants --------------------------------------------------
 .equ PRINT_LINE_WIDTH,  75  /* teletype line width used by the zone logic */

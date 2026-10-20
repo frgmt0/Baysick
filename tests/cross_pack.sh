@@ -11,7 +11,9 @@
 #
 # Layout of the bundle (docs/DESIGN.md section 8.3), consumed by
 # tests/cross_run.sh on Linux: BUNDLE marker, Makefile.linux, include/*.inc,
-# src/runtime_x86_64_linux/*.s, the two include-check files, cross_run.sh and
+# src/runtime_x86_64_linux/*.s, the two include-check files, cross_run.sh, the
+# kernel conformance test tests/kern/kern_check.c and kern_run.sh (when no PATTERN
+# is given or one matches "kern/kern_check", docs/DESIGN.md 8.7), and
 # cases/<programs|errors>/NAME.s plus the unchanged sidecars (.out .err
 # .meta and the optional .in stdin file). NAME.files/ and NAME.expect/
 # (docs/DESIGN.md 8.5) are copied unchanged when present; compile-phase or tests/ir cases with
@@ -101,6 +103,13 @@ selected() {
     set +f
     return 1
 }
+
+# Kernel conformance test (docs/DESIGN.md 8.7): C source and driver, compiled on Linux.
+if selected "kern/kern_check"; then
+    mkdir -p "$BUNDLE/tests/kern" || setup_fail "cannot create $BUNDLE/tests/kern"
+    cp "$ROOT/tests/kern/kern_check.c" "$ROOT/tests/kern/kern_run.sh" "$BUNDLE/tests/kern/" \
+        || setup_fail "cannot copy the kernel conformance test"
+fi
 
 PACKED=0
 BAD=0

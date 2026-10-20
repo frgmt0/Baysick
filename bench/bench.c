@@ -10,7 +10,7 @@
  *   --tsv FILE   write the machine-readable rows (BENCH.md section 5) to FILE
  *   --e2e DIR    also time the compiled programs DIR/e2e_gemm, e2e_inv, e2e_mixed
  *                (expected stdout in DIR/NAME.out) once per usable kernel variant
- *   --only LIST  comma-separated subset of: peak gemm add sub scale trn inv e2e
+ *   --only LIST  comma-separated subset of: peak gemm gemm_sub add sub scale trn inv e2e
  *
  * Environment: BENCH_QUICK=1 limits sizes (n <= 512, INV n <= 250) and the time per
  * measurement (0.2 s). Exit status: 0 measured and validated; 1 a validation failure;
@@ -81,6 +81,7 @@ extern const char *bsk_kern_name(void);
 extern const char *const *bsk_kern_variants(void);
 extern uint64_t bsk_kern_features(void);
 extern int bsk_kern_gemm(const mview *c, const mview *a, const mview *b);
+extern int bsk_kern_gemm_sub(const mview *c, const mview *a, const mview *b);
 extern int bsk_kern_add(const mview *c, const mview *a, const mview *b);
 extern int bsk_kern_sub(const mview *c, const mview *a, const mview *b);
 extern int bsk_kern_scale(const mview *c, const mview *a, double k);
@@ -114,8 +115,8 @@ static const char *g_only; /* --only list or NULL */
 static char *g_variants[MAX_VARIANTS];
 static int g_nvariants;
 
-typedef enum { K_GEMM, K_ADD, K_SUB, K_SCALE, K_TRN, K_INV, K_COUNT } kernel_id;
-static const char *const kernel_name[K_COUNT] = {"gemm", "add", "sub", "scale", "trn", "inv"};
+typedef enum { K_GEMM, K_GEMM_SUB, K_ADD, K_SUB, K_SCALE, K_TRN, K_INV, K_COUNT } kernel_id;
+static const char *const kernel_name[K_COUNT] = {"gemm", "gemm_sub", "add", "sub", "scale", "trn", "inv"};
 
 /* ---- Small utilities ------------------------------------------------------------------ */
 static double now_s(void) {
@@ -384,6 +385,7 @@ typedef struct {
     int n;
     double *A, *B; /* inputs, n x n, ld = n */
     double *C;     /* Baysick output */
+    double *C0;    /* gemm_sub only: the initial C (same generator, filled after B) */
     double *V;     /* vendor output / working copy */
     double k;
     mview a, b, c;
@@ -412,6 +414,9 @@ static void vendor_op(void *p) {
     switch (c->kern) {
     case K_GEMM:
         cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, n, n, n, 1.0, c->A, n, c->B, n, 0.0, c->V, n);
+        break;
+    case K_GEMM_SUB: /* updates V in place: V := V - A*B */
+        cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, n, n, n, -1.0, c->A, n, c->B, n, 1.0, c->V, n);
         break;
 #ifdef __APPLE__
     case K_ADD: vDSP_vaddD(c->A, 1, c->B, 1, c->V, 1, nn); break;
@@ -459,6 +464,7 @@ static void baysick_op(void *p) {
     bcase *c = p;
     switch (c->kern) {
     case K_GEMM: bsk_kern_gemm(&c->c, &c->a, &c->b); break;
+    case K_GEMM_SUB: bsk_kern_gemm_sub(&c->c, &c->a, &c->b); break;
     case K_ADD: bsk_kern_add(&c->c, &c->a, &c->b); break;
     case K_SUB: bsk_kern_sub(&c->c, &c->a, &c->b); break;
     case K_SCALE: bsk_kern_scale(&c->c, &c->a, c->k); break;
@@ -471,6 +477,7 @@ static void baysick_op(void *p) {
 static int baysick_status(bcase *c) {
     switch (c->kern) {
     case K_GEMM: return bsk_kern_gemm(&c->c, &c->a, &c->b);
+    case K_GEMM_SUB: return bsk_kern_gemm_sub(&c->c, &c->a, &c->b);
     case K_ADD: return bsk_kern_add(&c->c, &c->a, &c->b);
     case K_SUB: return bsk_kern_sub(&c->c, &c->a, &c->b);
     case K_SCALE: return bsk_kern_scale(&c->c, &c->a, c->k);
@@ -500,8 +507,9 @@ static void ref_trn(const bcase *c, double *out) {
         for (int j = 0; j < n; j++) out[(size_t)j * n + i] = c->A[(size_t)i * n + j];
 }
 
-/* plain product and the per-element error bound 2*k*2^-53*sum|a||b| (n <= 512) */
-static void ref_gemm(const bcase *c, double *out, double *bnd) {
+/* plain product and the per-element error bound 2*k*2^-53*sum|a||b| (n <= 512).
+ * With c0 (gemm_sub): out = c0 - A*B and the bound 2*(k+1)*2^-53*(|c0| + sum|a||b|). */
+static void ref_gemm(const bcase *c, double *out, double *bnd, const double *c0) {
     const int n = c->n;
     memset(out, 0, (size_t)n * n * sizeof(double));
     if (bnd) memset(bnd, 0, (size_t)n * n * sizeof(double));
@@ -515,8 +523,14 @@ static void ref_gemm(const bcase *c, double *out, double *bnd) {
                 if (bnd) bnd[(size_t)i * n + j] += aa * fabs(b);
             }
         }
-    if (bnd)
+    if (c0) {
+        for (size_t i = 0; i < (size_t)n * n; i++) {
+            out[i] = c0[i] - out[i];
+            if (bnd) bnd[i] = (bnd[i] + fabs(c0[i])) * 2.0 * (n + 1) * 0x1p-53;
+        }
+    } else if (bnd) {
         for (size_t i = 0; i < (size_t)n * n; i++) bnd[i] *= 2.0 * n * 0x1p-53;
+    }
 }
 
 static double max_abs(const double *p, size_t cnt) {
@@ -569,7 +583,7 @@ static void emit_row(const char *kernel, const char *variant, int n, int k, cons
     int gflops = strcmp(unit, "GFLOP/s") == 0;
     double pv = (!isnan(rate) && !isnan(vendor_rate) && vendor_rate > 0) ? 100.0 * rate / vendor_rate : NAN;
     double pp = (gflops && peak > 0 && !isnan(rate)) ? 100.0 * rate / peak : NAN;
-    printf("%-7s %-8s %-5d %-12.7f ", kernel, variant, n, me->med);
+    printf("%-8s %-8s %-5d %-12.7f ", kernel, variant, n, me->med);
     print_cell("%.2f", rate, 9);
     print_cell("%.2f", vendor_rate, 8);
     print_cell("%.1f", pv, 8);
@@ -621,6 +635,7 @@ static double work_units(kernel_id k, int n, const char **unit) {
     double nn = (double)n * (double)n;
     switch (k) {
     case K_GEMM:
+    case K_GEMM_SUB:
     case K_INV: *unit = "GFLOP/s"; return 2.0 * nn * (double)n;
     case K_ADD:
     case K_SUB: *unit = "GB/s"; return 24.0 * nn;
@@ -632,7 +647,7 @@ static void print_block_header(kernel_id k) {
     const char *unit;
     work_units(k, 1, &unit);
     printf("\n# %s  (rates in %s)\n", kernel_name[k], unit);
-    printf("kernel  variant  n     median_s     baysick   vendor   %%vendor  peak    %%peak\n");
+    printf("kernel   variant  n     median_s     baysick   vendor   %%vendor  peak    %%peak\n");
     fflush(stdout);
 }
 
@@ -651,11 +666,15 @@ static void run_kernel_size(kernel_id kern, int n) {
     c.V = xalloc(bytes);
     double *ref = xalloc(bytes);
     double *base = xalloc(bytes);
-    double *bnd = (kern == K_GEMM && n <= 512) ? xalloc(bytes) : NULL;
+    double *bnd = ((kern == K_GEMM || kern == K_GEMM_SUB) && n <= 512) ? xalloc(bytes) : NULL;
     double bnd0 = 0;
     g_rng = 1964;
     fill_random(c.A, nn);
     fill_random(c.B, nn);
+    if (kern == K_GEMM_SUB) {
+        c.C0 = xalloc(bytes);
+        fill_random(c.C0, nn);
+    }
     if (kern == K_INV)
         for (int i = 0; i < n; i++) c.A[(size_t)i * n + i] += (double)n;
     mk_view(&c.a, c.A, n);
@@ -672,16 +691,18 @@ static void run_kernel_size(kernel_id kern, int n) {
     }
 
     /* --- vendor result, checked against the plain C reference where one exists --- */
+    if (kern == K_GEMM_SUB) memcpy(c.V, c.C0, bytes); /* the vendor updates its own copy of C0 in place */
     if (kern == K_INV) vendor_prep(&c);
     vendor_op(&c);
     switch (kern) {
     case K_GEMM:
+    case K_GEMM_SUB:
         if (bnd) {
-            ref_gemm(&c, ref, bnd);
+            ref_gemm(&c, ref, bnd, c.C0);
             long bad = first_bound_violation(c.V, ref, nn, bnd, 0);
-            if (bad >= 0) die_validation("gemm", "vendor", n, "vendor result differs from the C reference at element %ld", bad);
+            if (bad >= 0) die_validation(kernel_name[kern], "vendor", n, "vendor result differs from the C reference at element %ld", bad);
         } else {
-            bnd0 = 2.0 * n * 0x1p-53 * (double)n * max_abs(c.A, nn) * max_abs(c.B, nn);
+            bnd0 = 2.0 * (n + (kern == K_GEMM_SUB)) * 0x1p-53 * ((double)n * max_abs(c.A, nn) * max_abs(c.B, nn) + (kern == K_GEMM_SUB ? max_abs(c.C0, nn) : 0.0));
         }
         break;
     case K_ADD:
@@ -718,7 +739,8 @@ static void run_kernel_size(kernel_id kern, int n) {
 #ifndef BENCH_VENDOR_ONLY
     /* --- baseline variant result (class-E and INV comparisons are against it) --- */
     if (bsk_kern_use("baseline") != 0) die_setup("_bsk_kern_use(\"baseline\") failed");
-    memset(c.C, 0xff, bytes);
+    if (kern == K_GEMM_SUB) memcpy(c.C, c.C0, bytes);
+    else memset(c.C, 0xff, bytes);
     int st = baysick_status(&c);
     if (st != KS_OK) die_validation(kernel_name[kern], "baseline", n, "kernel returned status %d", st);
     memcpy(base, c.C, bytes);
@@ -727,16 +749,18 @@ static void run_kernel_size(kernel_id kern, int n) {
     for (int v = 0; v < g_nvariants; v++) {
         const char *vn = g_variants[v];
         if (bsk_kern_use(vn) != 0) die_setup("_bsk_kern_use(\"%s\") failed for a listed variant", vn);
-        memset(c.C, 0xff, bytes);
+        if (kern == K_GEMM_SUB) memcpy(c.C, c.C0, bytes);
+        else memset(c.C, 0xff, bytes);
         st = baysick_status(&c);
         if (st != KS_OK) die_validation(kernel_name[kern], vn, n, "kernel returned status %d", st);
         long bad;
         switch (kern) {
         case K_GEMM:
+        case K_GEMM_SUB:
             bad = first_bound_violation(c.C, c.V, nn, bnd, bnd0);
-            if (bad >= 0) die_validation("gemm", vn, n, "element %ld = %.17g, vendor %.17g", bad, c.C[bad], c.V[bad]);
+            if (bad >= 0) die_validation(kernel_name[kern], vn, n, "element %ld = %.17g, vendor %.17g", bad, c.C[bad], c.V[bad]);
             bad = first_bound_violation(c.C, base, nn, bnd, bnd0);
-            if (bad >= 0) die_validation("gemm", vn, n, "element %ld = %.17g, baseline %.17g", bad, c.C[bad], base[bad]);
+            if (bad >= 0) die_validation(kernel_name[kern], vn, n, "element %ld = %.17g, baseline %.17g", bad, c.C[bad], base[bad]);
             break;
         case K_INV:
             for (size_t i = 0; i < nn; i++)
@@ -759,16 +783,18 @@ static void run_kernel_size(kernel_id kern, int n) {
 
     /* --- timing --- */
     double units = work_units(kern, n, &unit);
+    if (kern == K_GEMM_SUB) memcpy(c.V, c.C0, bytes); /* timed in place from C0, like the kernel below */
     meas vm = measure(vendor_op, kern == K_INV ? vendor_prep : NULL, &c);
     double vrate = units / vm.med * 1e-9;
-    int k_inner = (kern == K_GEMM) ? n : 0;
+    int k_inner = (kern == K_GEMM || kern == K_GEMM_SUB) ? n : 0;
 #ifdef BENCH_VENDOR_ONLY
     emit_row(kernel_name[kern], "-", n, k_inner, &vm, unit, NAN, vrate, 0);
 #else
     for (int v = 0; v < g_nvariants; v++) {
         const char *vn = g_variants[v];
         if (bsk_kern_use(vn) != 0) die_setup("_bsk_kern_use(\"%s\") failed for a listed variant", vn);
-        memset(c.C, 0xff, bytes);
+        if (kern == K_GEMM_SUB) memcpy(c.C, c.C0, bytes);
+        else memset(c.C, 0xff, bytes);
         meas bm = measure(baysick_op, NULL, &c);
         emit_row(kernel_name[kern], vn, n, k_inner, &bm, unit, units / bm.med * 1e-9, vrate, peak_for_variant(vn, NULL));
     }
@@ -776,6 +802,7 @@ static void run_kernel_size(kernel_id kern, int n) {
     free(c.A);
     free(c.B);
     free(c.C);
+    free(c.C0);
     free(c.V);
     free(ref);
     free(base);
@@ -785,7 +812,7 @@ static void run_kernel_size(kernel_id kern, int n) {
 }
 
 static void run_kernel(kernel_id kern) {
-    const int *sizes = (kern == K_GEMM) ? gemm_sizes : (kern == K_INV) ? inv_sizes : ew_sizes;
+    const int *sizes = (kern == K_GEMM || kern == K_GEMM_SUB) ? gemm_sizes : (kern == K_INV) ? inv_sizes : ew_sizes;
     print_block_header(kern);
     for (; *sizes; sizes++) {
         if (g_quick && *sizes > (kern == K_INV ? 250 : 512)) continue;
@@ -979,6 +1006,17 @@ static void report_goals(void) {
             }
         }
         goal_line(vn, "gemm odd n, % of the even neighbour's rate", have, worst, 90, 0);
+        /* gemm_sub: >= 95% of the same variant's GEMM rate at the same n, n >= 256 */
+        worst = 1e30; have = 0;
+        for (int i = 0; i < g_nrows; i++)
+            if (!strcmp(g_rows[i].kernel, "gemm_sub") && !strcmp(g_rows[i].variant, vn) && g_rows[i].n >= 256) {
+                const row_t *g = find_row("gemm", vn, g_rows[i].n);
+                if (!g || !(g->rate > 0)) continue;
+                double p = 100.0 * g_rows[i].rate / g->rate;
+                if (p < worst) worst = p;
+                have = 1;
+            }
+        goal_line(vn, "gemm_sub n>=256, % of the variant's gemm", have, worst, 95, 0);
         /* add, sub, scale: >= 80% of vendor at every size */
         static const char *const ew[3] = {"add", "sub", "scale"};
         for (int k = 0; k < 3; k++) {

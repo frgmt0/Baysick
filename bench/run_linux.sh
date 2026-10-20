@@ -61,7 +61,7 @@ ARCHIVE=build-x86_64-linux/libbaysickrt.a
 
 SYMS=$(nm -g "$ARCHIVE" 2>/dev/null | awk '$2 == "T" { print $3 }')
 MISSING=
-for s in init use name variants features gemm add sub scale trn inv; do
+for s in init use name variants features gemm gemm_sub add sub scale trn inv; do
     echo "$SYMS" | grep -qx "bsk_kern_$s" || MISSING="$MISSING bsk_kern_$s"
 done
 if [ -n "$MISSING" ]; then

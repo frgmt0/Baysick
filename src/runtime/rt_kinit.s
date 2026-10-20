@@ -6,7 +6,7 @@
 //   _bsk_kern_features
 //   _bsk_kern_gemm _bsk_kern_add _bsk_kern_sub _bsk_kern_scale
 //   _bsk_kern_trn _bsk_kern_copy _bsk_kern_fill _bsk_kern_inv
-//                                    (trampolines into the current variant)
+//   _bsk_kern_gemm_sub               (trampolines into the current variant)
 //
 // The variant table (KV_* records, best first, baseline last) is the only
 // registration point for kernel variants (DESIGN.md 6.6.3, 6.6.7). It
@@ -310,10 +310,10 @@ _bsk_kern_features:
     ret
 
 // ---------------------------------------------------------------------
-// Trampolines _bsk_kern_gemm ... _bsk_kern_inv: load the current record,
-// load the kernel's slot, branch to it with the arguments untouched.
-// Contracts: runtime.inc / DESIGN.md 6.6.1. Clobbers x16 in addition to
-// whatever the kernel clobbers. No frame.
+// Trampolines _bsk_kern_gemm ... _bsk_kern_inv and _bsk_kern_gemm_sub: load
+// the current record, load the kernel's slot, branch to it with the
+// arguments untouched. Contracts: runtime.inc / DESIGN.md 6.6.1. Clobbers
+// x16 in addition to whatever the kernel clobbers. No frame.
 // ---------------------------------------------------------------------
 .macro RT_KTRAMP name, slot
     .globl \name
@@ -333,6 +333,9 @@ _bsk_kern_features:
     RT_KTRAMP _bsk_kern_copy,  KV_COPY
     RT_KTRAMP _bsk_kern_fill,  KV_FILL
     RT_KTRAMP _bsk_kern_inv,   KV_INV
+    // C = C - A*B (DESIGN.md 6.6.1, 6.6.4); slot KV_GEMM_SUB is the last slot of the
+    // 88-byte record.
+    RT_KTRAMP _bsk_kern_gemm_sub, KV_GEMM_SUB
 
 // ---------------------------------------------------------------------
 // Strings.
@@ -364,6 +367,7 @@ Lrt_kinit_table:
     .quad _bsk_kneon_copy           // KV_COPY
     .quad _bsk_kneon_fill           // KV_FILL
     .quad _bsk_kneon_inv            // KV_INV
+    .quad _bsk_kneon_gemm_sub       // KV_GEMM_SUB
 Lrt_kinit_table_end:
 .if (Lrt_kinit_table_end - Lrt_kinit_table) != (RT_KV_COUNT * KV_SIZE)
     .error "rt_kinit: RT_KV_COUNT does not match the variant table"

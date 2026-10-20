@@ -40,10 +40,10 @@ arguments or environment (§15.1; Sea's driver passes everything on standard inp
 
 **Next:** every item of §4 is done. The next step is not another Baysick edition but the Sea
 language design document (in the `sea/` submodule), which is now agreed (`sea/docs/DESIGN.md`,
-2026-10-20; its §18 needs no Baysick language change to start, and plans a runtime kernel
+2026-10-20; its §18 needs no Baysick language change to start, and planned a runtime kernel
 contract change, `_bsk_kern_gemm_sub` and IEEE propagation, before Sea's linear-algebra phase);
-a feature the Sea compiler then turns out to need is added to Baysick the same way as
-these (a later Dartmouth edition where one has it, otherwise a labelled Baysick extension).
+that kernel change is now implemented on both targets (DESIGN.md §2.7). A feature the Sea compiler then turns out to need is added to
+Baysick the same way as these (a later Dartmouth edition where one has it, otherwise a labelled Baysick extension).
 
 ## 1. Sources
 

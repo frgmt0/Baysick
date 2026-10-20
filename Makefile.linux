@@ -5,8 +5,9 @@
 #   make -f Makefile.linux clean            remove build-x86_64-linux/
 #
 # Run on x86_64 Linux. No compiler is needed to build the runtime; gcc is only
-# used (by tests/cross_run.sh) to link test programs. See docs/DESIGN.md
-# section 8.2. AS and AR can be overridden from the environment or the command line.
+# used (by tests/cross_run.sh and tests/kern/kern_run.sh) to link test programs
+# and to compile the kernel conformance test. See docs/DESIGN.md sections 8.2,
+# 8.7. AS and AR can be overridden from the environment or the command line.
 
 UNAME_SM := $(shell uname -sm)
 ifneq ($(UNAME_SM),Linux x86_64)
@@ -17,8 +18,7 @@ AS ?= as
 AR ?= ar
 BUILD := build-x86_64-linux
 
-ASFLAGS := --64 --fatal-warnings -I include
-
+ASFLAGS      := --64 --fatal-warnings -I include
 RUNTIME_SRCS := $(wildcard src/runtime_x86_64_linux/*.s)
 RUNTIME_OBJS := $(patsubst src/runtime_x86_64_linux/%.s,$(BUILD)/obj/%.o,$(RUNTIME_SRCS))
 INCLUDES     := $(wildcard include/*.inc)

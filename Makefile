@@ -1,9 +1,12 @@
 # Baysick -- build file.
 #
-# Tools used: as, ld, ar, xcrun (Xcode command line tools). Nothing else.
+# Tools used: as, ld, ar, xcrun (Xcode command line tools); `xcrun cc` only for
+# the C test and benchmark harnesses (tests/kern/, bench/). Nothing else.
 #
 #   make                  build build/baysick and build/libbaysickrt.a
-#   make test             build, then run tests/run.sh
+#   make test             build, then run tests/run.sh and the kernel conformance
+#                         test (tests/kern/kern_run.sh, docs/DESIGN.md section 8.7)
+#   make kern-check       build, then run only the kernel conformance test
 #   make check-includes   assemble the contract include files (layout assertions)
 #   make cross-pack       pack the x86_64-linux test bundle into build/x86_64-linux-bundle
 #   make cross            pack and run the bundle on a Linux host (tests/cross.sh)
@@ -19,7 +22,7 @@ LD      := ld
 AR      := ar
 BUILD   := build
 
-ASFLAGS := -arch arm64 -mmacosx-version-min=11.0 -I include -I src/frontend
+ASFLAGS      := -arch arm64 -mmacosx-version-min=11.0 -I include -I src/frontend
 # Evaluated only when a link actually happens (recursive variable).
 SDK      = $(if $(SDKROOT),$(SDKROOT),$(shell xcrun --show-sdk-path))
 LDFLAGS  = -lSystem -syslibroot $(SDK) -e _main -arch arm64 -platform_version macos 11.0 11.0
@@ -31,7 +34,7 @@ COMPILER_OBJS := $(patsubst src/%.s,$(BUILD)/obj/%.o,$(COMPILER_SRCS))
 RUNTIME_OBJS  := $(patsubst src/%.s,$(BUILD)/obj/%.o,$(RUNTIME_SRCS))
 INCLUDES      := $(wildcard include/*.inc)
 
-.PHONY: all test clean check-includes check-sources cross-pack cross
+.PHONY: all test kern-check clean check-includes check-sources cross-pack cross
 .DEFAULT_GOAL := all
 
 all: $(BUILD)/baysick $(BUILD)/libbaysickrt.a
@@ -74,6 +77,10 @@ check-includes: $(INCLUDES) tests/include_check.s tests/include_asserts.inc
 
 test: check-includes all
 	sh tests/run.sh
+	sh tests/kern/kern_run.sh $(BUILD)/libbaysickrt.a
+
+kern-check: all
+	sh tests/kern/kern_run.sh $(BUILD)/libbaysickrt.a
 
 # x86_64-linux cross testing (docs/DESIGN.md section 8.3): pack the compiled
 # test cases into a bundle, or pack + run them on a Linux host over ssh.

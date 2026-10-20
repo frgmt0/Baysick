@@ -8,6 +8,7 @@
 #   bsk_kern_features
 #   bsk_kern_gemm bsk_kern_add bsk_kern_sub bsk_kern_scale
 #   bsk_kern_trn bsk_kern_copy bsk_kern_fill bsk_kern_inv
+#   bsk_kern_gemm_sub
 # Defines (private to the runtime, .globl + .hidden):
 #   bsk_rt_kinv_det   the DET cell written by the inv kernels
 #
@@ -344,6 +345,8 @@ bsk_kern_features:
     RT_KINIT_TRAMPOLINE bsk_kern_copy,  KV_COPY
     RT_KINIT_TRAMPOLINE bsk_kern_fill,  KV_FILL
     RT_KINIT_TRAMPOLINE bsk_kern_inv,   KV_INV
+    # C = C - A * B (DESIGN.md 6.6.1)
+    RT_KINIT_TRAMPOLINE bsk_kern_gemm_sub, KV_GEMM_SUB
 
 # ---------------------------------------------------------------------
 # Variant table (read-only, holds pointers -> .data.rel.ro).
@@ -351,8 +354,8 @@ bsk_kern_features:
     .section .data.rel.ro,"aw",@progbits
     .p2align 3
 .Lrt_kinit_table:
-    # avx2: AVX2 + FMA3 with OS YMM support (DESIGN.md 6.6.2); GEMM uses
-    # FMA (class R), the other kernels are bit-identical to sse2
+    # avx2: AVX2 + FMA3 with OS YMM support (DESIGN.md 6.6.2); GEMM and
+    # gemm_sub use FMA (class R), the other kernels are bit-identical to sse2
     .quad .Lrt_kinit_avx2_str       # KV_NAME
     .quad KF_X64_AVX2 | KF_X64_FMA  # KV_REQUIRES
     .quad bsk_rt_kavx2_gemm         # KV_GEMM
@@ -363,6 +366,7 @@ bsk_kern_features:
     .quad bsk_rt_kavx2_copy         # KV_COPY
     .quad bsk_rt_kavx2_fill         # KV_FILL
     .quad bsk_rt_kavx2_inv          # KV_INV
+    .quad bsk_rt_kavx2_gemm_sub     # KV_GEMM_SUB (FMA, class R)
     # sse2: x86-64 baseline (KV_REQUIRES = 0), specialises everything
     .quad .Lrt_kinit_sse2_str       # KV_NAME
     .quad 0                         # KV_REQUIRES
@@ -374,6 +378,7 @@ bsk_kern_features:
     .quad bsk_rt_ksse2_copy         # KV_COPY
     .quad bsk_rt_ksse2_fill         # KV_FILL
     .quad bsk_rt_ksse2_inv          # KV_INV
+    .quad bsk_rt_ksse2_gemm_sub     # KV_GEMM_SUB
 .Lrt_kinit_table_end:
 .if (.Lrt_kinit_table_end - .Lrt_kinit_table) != (RT_KINIT_NVAR * KV_SIZE)
     .error "rt_kinit.s: RT_KINIT_NVAR does not match the variant table"

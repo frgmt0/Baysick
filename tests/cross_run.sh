@@ -9,7 +9,8 @@
 # Environment:
 #   BAYSICK_TEST_TIMEOUT  seconds per program run (default: 10)
 #   AS                    GNU assembler (default: as)
-#   CC                    C compiler driver, used only to link (default: gcc)
+#   CC                    C compiler driver: links the programs and compiles the kernel
+#                         conformance test (default: gcc)
 #
 # Builds the runtime from the bundle (make -f Makefile.linux), then for every
 # case assembles + links the compiler's .s and compares the run exactly like
@@ -17,6 +18,9 @@
 # file, same output format, same exit status: 0 all passed, 1 any failed,
 # 2 setup error). Every case runs in a fresh empty
 # working directory with NAME.files/ copied in and NAME.expect/ checked afterwards (8.5). docs/DESIGN.md section 8.3.
+# Last, if the bundle has tests/kern/kern_check.c, the kernel conformance test
+# (tests/kern/kern_run.sh, compiled with $CC against the bundle's runtime, 8.7) counts as
+# one case, kern/kern_check.
 
 AS=${AS:-as}
 CC=${CC:-gcc}
@@ -233,6 +237,23 @@ for n in $(case_names errors); do
     rm -rf "$WORK"
     [ $ok = 1 ] && pass
 done
+
+# ---- kernel conformance test (section 8.7) -----------------------------------
+if [ -f "$BUNDLE/tests/kern/kern_check.c" ]; then
+    kv=
+    [ "$VERBOSE" = 1 ] && kv=-v
+    CC="$CC" sh "$BUNDLE/tests/kern/kern_run.sh" $kv "$RTLIB" >"$TMP/k.out" 2>"$TMP/k.err"
+    st=$?
+    case $st in
+    0) pass ;;
+    *)
+        reason=$(sed -n 's/^FAIL kern\/kern_check: //p' "$TMP/k.out" | head -1)
+        [ -n "$reason" ] || reason="kern_run.sh exit status $st: $(head -1 "$TMP/k.err")"
+        fail kern/kern_check "$reason"
+        sed -n '/^    /p' "$TMP/k.out"
+        ;;
+    esac
+fi
 
 echo "----"
 echo "passed: $PASS  failed: $FAIL"

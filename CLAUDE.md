@@ -6,7 +6,9 @@ ON, TAB, CHANGE, multi-line DEF, MAT INPUT, …; 1970: sequential files, `LEN AS
 string DEF, string tables; 1971: `SEG$`, `POS`, `&`, `CALL`/`SUB`/`SUBEND`; LANGUAGE.md §3–§14),
 and three **Baysick extensions** outside every edition (LANGUAGE.md §15: `LINPUT [#k,] A$`
 verbatim line input, `PRINT #-1` to standard error, `END e` / `STOP e` exit status). Version
-0.6.0. Two targets:
+0.6.0. Also implemented: a runtime kernel contract change for Sea (no language
+change): the kernel `_bsk_kern_gemm_sub` (`C ← C − A·B`) and IEEE propagation of ±∞/NaN
+through both GEMM entries (DESIGN.md §2.7, §6.6.4; test: `tests/kern`, §8.7). Two targets:
 `arm64-macos` (default, full pipeline) and `x86_64-linux` (cross: emits GNU `as` x86_64 text;
 assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, §6.4, §8).
 
@@ -25,17 +27,21 @@ assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, 
   hard-code an offset or constant that has a name in an include file.
 - Module ownership (DESIGN.md §2): `src/frontend/`, `src/ir/`+`src/driver/`,
   `src/backend/arm64_macos/`, `src/runtime/`, `src/backend/x86_64_linux/`,
-  `src/runtime_x86_64_linux/`, cross testing (`Makefile.linux`, `tests/cross*.sh`, CI),
-  benchmarks (`bench/`). Do not edit another module's files. MAT work split: DESIGN.md §2.1;
-  Third/Fourth Edition split: DESIGN.md §2.3; Fifth Edition split: DESIGN.md §2.4; Sixth
-  Edition split: DESIGN.md §2.5; Baysick extensions split: DESIGN.md §2.6.
+  `src/runtime_x86_64_linux/`, cross testing (`Makefile.linux`, `tests/cross*.sh`,
+  `tests/kern/kern_run.sh`, CI), benchmarks (`bench/`). Do not edit another module's files.
+  MAT work split: DESIGN.md §2.1; Third/Fourth Edition split: DESIGN.md §2.3; Fifth Edition
+  split: DESIGN.md §2.4; Sixth Edition split: DESIGN.md §2.5; Baysick extensions split:
+  DESIGN.md §2.6; gemm_sub split: DESIGN.md §2.7.
 - Contract counts and record sizes (`OP_COUNT`, `KW_COUNT`, `TK_COUNT`, `BI_COUNT`, `IRF_SIZE`,
-  `IRM_SIZE`) are plain constants (DESIGN.md §2.2); no staging switch is left. A future contract
-  change that many modules must follow may be staged behind a temporary switch, removed at
-  integration in one commit.
-- Matrix kernels: GEMM may reassociate/use FMA (class R); every other MAT result must be
-  bit-identical across targets and kernel variants (class E, DESIGN.md §6.6.4). Test products use
-  exact data only. Never use undocumented CPU instructions; vendor BLAS is for `bench/` only.
+  `IRM_SIZE`) are plain constants (DESIGN.md §2.2). There is no live staging
+  switch: the one for `KV_SIZE` (80 → 88, the `KV_GEMM_SUB` slot) was removed with the gemm_sub
+  integration (DESIGN.md §2.2, §2.7). `make test` passes 463 corpus tests plus `kern/kern_check`
+  (cross: 268, including `kern/kern_check`); a missing gemm_sub entry fails, it is never skipped.
+- Matrix kernels: GEMM and gemm_sub may reassociate/use FMA (class R) and propagate ±∞/NaN by
+  the IEEE rules of DESIGN.md §6.6.4 (no zero skipping, padding never in a stored lane); every
+  other kernel requires finite inputs, and every other MAT result must be bit-identical across
+  targets and kernel variants (class E). Test products use exact data only. Never use
+  undocumented CPU instructions; vendor BLAS is for `bench/` only.
 - Error message text lives only in `include/errors.inc` (`BSK_EMIT_ERRMSG_TABLE`).
 - Include files are shared with GNU `as`: `//` comments only at the start of a line, trailing
   comments as `/* ... */`, parenthesised macro conditions (DESIGN.md §3.4).
@@ -50,20 +56,24 @@ assembled/linked on Linux against `src/runtime_x86_64_linux/`, DESIGN.md §5.4, 
   cover the Fifth Edition; `ed6_*`, `manual6_*`, `c_ed6_*`, `r_ed6_*` and `tests/ir/ed6_*`
   cover the Sixth Edition; `ext_*`, `c_ext_*`, `r_ext_*` and `tests/ir/ext_*` cover the Baysick
   extensions (LANGUAGE.md §15); a run-phase `.meta` may add `streams=merged` or
-  `streams=no-stdout` (DESIGN.md §8.6).
+  `streams=no-stdout` (DESIGN.md §8.6). `tests/kern/kern_check.c` tests the kernel API (gemm,
+  gemm_sub) on every usable variant of both targets (DESIGN.md §8.7).
 - No TODOs, stubs or placeholder values.
 
 ## Commands
 - Build: `make`   Test: `make test` (or `sh tests/run.sh [-v] [pattern]`)
+- Kernel conformance test: `make kern-check` (also part of `make test` and of the cross run)
 - Include check: `make check-includes` (Mac); `make -f Makefile.linux check-includes` (Linux)
 - Kernel variant: `BAYSICK_KERNELS=<variant|baseline> sh tests/run.sh`
 - Benchmarks: `make bench` (Mac, vs Accelerate), `make bench-cross` (Linux host, vs OpenBLAS)
 - x86_64 cross test: `make cross` / `sh tests/cross.sh [-v] [-H host] [pattern]` (ssh host,
   default `desktop`); `make cross-pack` builds `build/x86_64-linux-bundle` only;
   on Linux: `sh tests/cross_run.sh [-v] BUNDLE_DIR`, runtime: `make -f Makefile.linux`.
-- Tools: Mac: `as`, `ld`, `ar`, `xcrun` (+ `ssh`, `tar` for cross testing; `xcrun cc` for
-  `bench/` only). Linux: GNU `as`, `ar`, `make`, `gcc` (link only; and the bench harness with
-  OpenBLAS). Python, if ever needed, via `uv` only.
+- Tools: Mac: `as`, `ld`, `ar`, `xcrun` (+ `ssh`, `tar` for cross testing; `xcrun cc` only for
+  the C programs that link the runtime archive: `tests/kern/` and `bench/`). Linux: GNU `as`,
+  `ar`, `make`, `nm`, `gcc` (links test programs; compiles `tests/kern/kern_check.c` and the
+  bench harness with OpenBLAS). The compiler and runtimes contain no C. Python, if ever
+  needed, via `uv` only.
 - Never set a bogus `SDKROOT`/`DEVELOPER_DIR` on the Mac.
 
 ## Assembly style (compiler and arm64 runtime; x86_64 runtime: DESIGN.md §6.4.4)
