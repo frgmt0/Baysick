@@ -1,0 +1,10 @@
+10 LET A = 1
+20 DIM L(3)
+30 CALL "ADD": A, 2, B$, L()
+40 PRINT A; L(1); B$
+50 END
+100 SUB "ADD": X, Y, S$, L()
+110 LET X = X + Y
+120 LET L(1) = X
+130 LET S$ = S$ & "Z"
+140 SUBEND

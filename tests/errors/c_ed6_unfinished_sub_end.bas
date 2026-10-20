@@ -1,0 +1,4 @@
+10 CALL "A"
+20 SUB "A"
+30 PRINT 1
+40 END

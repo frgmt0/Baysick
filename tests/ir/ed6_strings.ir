@@ -1,0 +1,38 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=1 strings=3 data=0
+string s0 "HELLO"
+string s1 "X"
+string s2 "L"
+stemps 1
+func main temps=17 labels=4
+  line 10
+  t0 = svar A$
+  t1 = slit s0
+  sset t0, t1
+  line 20
+  t2 = svar B$
+  t3 = svar A$
+  t4 = const 0x4000000000000000 ; 2
+  t5 = const 0x4008000000000000 ; 3
+  t6 = sseg %s0, t3, t4, t5
+  t7 = slit s1
+  scat t6, t7
+  t8 = svar A$
+  scat t6, t8
+  sset t2, t6
+  line 30
+  t9 = svar A$
+  t10 = slit s2
+  t11 = const 0x3FF0000000000000 ; 1
+  t12 = pos t9, t10, t11
+  prnum t12
+  prsemi
+  t13 = svar B$
+  t14 = svar A$
+  t15 = const 0x4000000000000000 ; 2
+  t16 = pos t13, t14, t15
+  prnum t16
+  prnl
+  line 40
+  end
+endfunc

@@ -1,0 +1,3 @@
+10 END
+20 SUB "S": 1
+30 SUBEND

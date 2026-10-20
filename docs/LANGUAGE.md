@@ -15,7 +15,10 @@ string variables and lists, `CHANGE`, `ON … GO TO`, `TAB`, `RANDOMIZE`, multip
 `DEF`, `MAT INPUT`, `NUM`, `DET`, `COT`, multiple assignment, `'` remarks), and by a scoped part
 of the **Fifth Edition** (1970: sequential files with `FILES`, `PRINT #`, `INPUT #`, `IF END #`,
 `SCRATCH #`, `RESTORE #`; the functions `LEN`, `ASC`, `STR$`, `VAL`; `DEF` functions with string
-arguments and string values; two-dimensional string arrays). Sections marked
+arguments and string values; two-dimensional string arrays), and by a scoped part of the **Sixth
+Edition** (1971: the string functions `SEG$` and `POS`, the concatenation operator `&`, and
+`CALL`/`SUB`/`SUBEND` subprograms with parameters by reference and no shared variables;
+"The Sixth Edition" below; **specified, being implemented**, DESIGN.md §2.5). Sections marked
 **Baysick decision:** are places where the historical behaviour is unknown, impractical on a
 modern machine, or deliberately extended; each states the choice and why. §14 lists every place
 where a later edition *changed* the meaning of a program an earlier edition already accepted,
@@ -32,9 +35,10 @@ the line printer, not of the language, and are not implemented (`PAGE` is `ILLEG
 INSTRUCTION`).
 
 There is exactly **one language level and no `--edition` flag**: every statement, function and
-form of every edition up to the Fourth, and of the Fifth Edition part above, is always accepted.
-**Baysick decision**, rationale: every Third, Fourth and Fifth Edition addition is a text that was
-an error before (`INPUT`, `ON`, `FILES`, `LEN(`, `DIM A$(3,4)`,
+form of every edition up to the Fourth, and of the Fifth and Sixth Edition parts above, is always
+accepted.
+**Baysick decision**, rationale: every Third, Fourth, Fifth and Sixth Edition addition is a text
+that was an error before (`INPUT`, `ON`, `FILES`, `LEN(`, `DIM A$(3,4)`, `CALL`, `SUB`, `&`, `SEG$(`,
 `A$`, `FNEND`, `IF … GO TO`, `'`, `NUM`, …; §14.1 lists the few error tests whose text became
 legal), so every program that compiled before compiles to the same program and prints the same
 bytes. Where a later edition **changed the meaning of an already-legal program** — `INT` became
@@ -83,9 +87,49 @@ The Fifth Edition features that Baysick does **not** implement, each a Baysick d
 | overlay "subprograms" sharing all variables | not implemented: the Sixth Edition replaced them by `CALL`/`SUB` [K81 p. 530], which is what a later Baysick edition should implement |
 | `USR$` | not implemented: it returned the DTSS user number, which does not exist on a Unix host |
 | `CHANGE … BIT` | not implemented: its bit-string semantics are not documented anywhere available; `CHANGE A$ TO B BIT 7` stays `INCORRECT FORMAT` |
-| recursive `DEF` | not implemented: `RECURSIVE FUNCTION` stays a compile error (§7.10); the Sixth Edition removed recursion again [K81 p. 530], and one activation per function is what lets string parameters and values live in static storage (DESIGN.md §6.8) |
+| recursive `DEF` | not implemented: `RECURSIVE FUNCTION` stays a compile error (§7.10); the Sixth Edition removed recursion again [K81 p. 529], and a function active at most once per activation of its program unit is what lets string parameters and values live without a stack of strings (DESIGN.md §6.8) |
 | `TIM`, `CLK$`, `DAT$` | not implemented: their values depend on the clock, so no test can pin their output byte for byte; `TIM` is the variable `T` followed by `IM` (an error, as before) |
 | the `FILE` statement (run-time binding of a name to a file number) | not implemented in this edition: [K81] attributes run-time binding to the Sixth Edition (p. 530; [U72] §11.2.3), and a Sixth Edition design adds it on top of §7.21 without changing any program |
+
+**The Sixth Edition.** The Sixth Edition manual (*BASIC*, Sixth Edition, D. G. Mather and S. V. F.
+Waite, eds., Kiewit Computation Center, Dartmouth, 1971; switched over on 21 September 1971,
+[K81] p. 530) is **not publicly scanned**: bitsavers.org, archive.org, HathiTrust and Dartmouth's
+digital collections were searched without finding it, nor Garland's formal specification
+(*Dartmouth BASIC, a specification*, Kiewit TM028, 1973, cited by [K81] p. 549). The 1972 DTSS
+user's guide [U72] does not describe the language; it refers to the Sixth Edition manual. What is
+known comes from the designers' histories [K81] p. 530–531 and [B85] p. 29–37, and from programs of
+the period ([C74], [B80]):
+
+* subprograms "connect to the calling program only through the calling sequence. The statements
+  used are CALL, SUB, and SUBEND. Parameters are specified by reference" [K81 p. 530]; arguments
+  are "matched at each CALL for correct type and number", there are no global variables, and
+  subprograms "can be separately compiled and collected into libraries" [K81 p. 530];
+* their form: `110 CALL "SUM": a, b, c` and `150 SUB "SUM": x, y, z` … `170 SUBEND` — the name is a
+  **quoted string** and a **colon** precedes the arguments [B85 p. 35]; `CALL "SUB1":I,J,K,V1,…`
+  and `SUB "SUB1":L,M,N,…` … `SUBEND` after the main program's `END` [C74]; `SUB "DATCON":D$,B$`
+  [B80 p. 55]; the internal variables "were distinct from those in the main program" [B85 p. 35];
+* "these subprograms could call themselves recursively" [B85 p. 37], while `DEF` functions
+  were "prohibited from being recursive" from the Sixth Edition on [K81 p. 529];
+* "The SEG$ function provides a substring, while the "&" causes string concatenation. The POS
+  function can locate a given string expression in a string" [K81 p. 531]; `SEG$(S$, 5, 6)` is
+  "the fifth and sixth characters" [B85 p. 29–30] — the third argument is the **last position**,
+  not a length (also `seg$(f$,3,6)` and `seg$(d$,7,8) & b$` in a 1977 program, [B80] p. 56).
+
+Every other detail — argument rounding and ranges of `SEG$` and `POS`, the number of `POS`
+arguments, where `&` may appear, how array parameters are written, local `DEF`, `GOSUB` and `FOR`
+in a subprogram, placement, limits and every error message — is a **Baysick decision**, chosen as
+the simplest rule consistent with the Fifth Edition and with these sources, and labelled so where
+it is stated. The Sixth Edition features Baysick does **not** implement, each a Baysick decision:
+
+| Feature [K81 p. 530–531] | Decision and reason |
+|--------------------------|---------------------|
+| run-time `FILE #n: "name"` (binding names to numbers at run time; `FILES` "dropped completely") | not implemented, deferred again: `FILES` (§7.21) stays, so no program changes meaning; a compiler written in Baysick reads its source on standard input and writes fixed-name files ([B80] p. 55 shows the form `file #1: "dates"`, but its semantics — closing and rebinding a number, the file-type test functions of [K81] p. 530 — are a design of their own that no Sea-bootstrap need requires, `docs/SEA_BOOTSTRAP.md`) |
+| image formatting (`PRINT USING`-like images in a string expression, [K81] p. 531) | not implemented: no source gives the image syntax of 1971 ([B85] p. 24–25 shows a later `PRINT USING`), and `STR$`, `SEG$`, `&` and `TAB` build any fixed layout |
+| `MAT A = A*B` legal | nothing to do: Baysick has computed `MAT A = A*B` correctly since its Second Edition design (§7.14.4, aliasing decision) |
+| separate compilation, libraries (`LIBRARY "file"`, [B80] p. 54), overlays | not implemented: a Baysick program is one source file compiled to one executable; its SUBs live in that file after (or between) the main program's lines (§7.27). Because a SUB connects only through its calling sequence, compiling SUBs separately later would need no language change |
+| `CALL A$` (a computed subprogram name) | not implemented: [B85] p. 35 says only that quoted names "paved the way" for it; names are constants |
+| removal of `FILES`, the old overlay subprograms, `CHANGE … BIT`, the Fifth Edition items left out above | unchanged: Baysick keeps every earlier statement (one language level), and the items left out of the Fifth Edition stay out |
+| the on-line debugger, `MARGIN`, random-access file typing, other "minor changes" [K81 p. 530] | not implemented: not part of the language a program's output depends on, or not documented |
 
 ## 0. Sources
 
@@ -93,8 +137,12 @@ The Fifth Edition features that Baysick does **not** implement, each a Baysick d
 |-----|--------|
 | [M64] | *BASIC — A Manual for BASIC, the elementary algebraic language designed for use with the Dartmouth Time Sharing System*, Dartmouth College Computation Center, 1 October 1964. Scan: <https://alandix.com/wp-content/uploads/2021/07/BASIC_Oct64.pdf>. Catalog entry: <https://exhibits.library.dartmouth.edu/s/OnSolidGround/item/89>. This is the Second Edition ("version 2") manual, also at <https://www.bitsavers.org/pdf/dartmouth/dtss/196410_BASIC.pdf>; it is the earliest widely available printing and documents the language as implemented in 1964 (the May 1964 First Edition typescript is not publicly scanned). Page numbers below are the manual's own. |
 | [M68] | *BASIC*, Fourth Edition, John G. Kemeny and Thomas E. Kurtz, Dartmouth College Computation Center, 1 January 1968. Scan: <https://www.bitsavers.org/pdf/dartmouth/dtss/196801_BASIC_4th_Edition.pdf>. The normative source of every Third and Fourth Edition feature (page numbers are the manual's own; the scan lacks page 26). Used before only for MAT details that [M64]'s one-page summary leaves open. |
-| [K81] | Thomas E. Kurtz, "BASIC", in *History of Programming Languages* (R. L. Wexelblat, ed.), Academic Press / ACM, 1981, p. 515–549 (§3.3–3.6, p. 526–531: the Third to Sixth Editions). Primary historical account by the language's co-designer: used for *which edition* introduced a feature, and for the Third Edition, whose manual is not available. |
-| [U72] | *User's Guide to the Dartmouth Time-Sharing System*, Dartmouth, September 1972 (<https://www.bitsavers.org/pdf/dartmouth/dtss/197209_Users_Guide_to_the_Dartmouth_Timesharing_System.pdf>), §11.2.3: the Sixth Edition file statements. Cited in "The Fifth Edition" and §7.22, and in `docs/SEA_BOOTSTRAP.md`. |
+| [K81] | Thomas E. Kurtz, "BASIC", in *History of Programming Languages* (R. L. Wexelblat, ed.), Academic Press / ACM, 1981, p. 515–549 (§3.3–3.6, p. 526–531: the Third to Sixth Editions). Primary historical account by the language's co-designer: used for *which edition* introduced a feature, and for the Third Edition, whose manual is not available. Copy: <https://www.labouseur.com/courses/tpl/History%20of%20BASIC-kurtz.pdf>. |
+| [B85] | John G. Kemeny and Thomas E. Kurtz, *Back to BASIC*, Addison-Wesley, 1985, chapter 2 (p. 29–37: `&`, `SEG$`, `POS`; the Fifth and Sixth Edition subprograms, `CALL "SUM": a, b, c`, recursion). Text: <https://archive.org/download/BackToBASIC-KemenyKurtz/BackToBASIC-KemenyKurtz_djvu.txt>. The designers' later account; used for the Sixth Edition only, where [K81] is silent. |
+| [B80] | J. Bull, *The Dartmouth Time Sharing System*, Ellis Horwood, 1980, p. 54–56: DTSS library subprograms `SUB "DATCON":D$,B$` … `SUBEND`, and a 1977 program using `call "datcon": d$,f$`, `seg$(f$,3,6)` and `seg$(d$,7,8) & b$`. Text: <https://archive.org/download/bitsavers_dartmouthduthTimeSharingSystem1980_10306903/The_Dartmouth_Time-Sharing_System_1980_djvu.txt>. Period usage only (the program is SBASIC, a later dialect). |
+| [C74] | Project CONDUIT, report of 1974 (ERIC ED093340), section on converting FORTRAN to DTSS BASIC: `CALL "SUB1":I,J,K,V1,…` and `SUB "SUB1":L,M,N,…` … `SUBEND` after the main program's `END`. Text: <https://archive.org/download/micro_IA41153119_0227/micro_IA41153119_0227_djvu.txt>. Period usage of the Sixth Edition form. |
+| [U72] | *User's Guide to the Dartmouth Time-Sharing System*, Dartmouth, September 1972 (<https://www.bitsavers.org/pdf/dartmouth/dtss/197209_Users_Guide_to_the_Dartmouth_Timesharing_System.pdf>), §11.2.3: the Sixth Edition file statements. Cited in "The Fifth Edition" and §7.22, and in `docs/SEA_BOOTSTRAP.md`. It does not describe the language and refers to the Sixth Edition manual. |
+| [R71] | *BASIC*, Sixth Edition, D. G. Mather and S. V. F. Waite (eds.), Kiewit Computation Center, Dartmouth College, 1971. Not scanned anywhere found (see "The Sixth Edition"); cited only to record that it exists and was not available. |
 | [G70] | *BASIC Language Reference Manual*, General Electric Information Service Department, publication 711224B, revised November 1970 (the MARK II time-sharing dialect). Scan: <https://www.bitsavers.org/pdf/ge/MarkI_Timesharing/711224B_BASICLanguageReferenceManual_Nov1970.pdf> (mirror: <https://ftp.mirrorservice.org/sites/www.bitsavers.org/pdf/ge/MarkI_Timesharing/711224B_BASICLanguageReferenceManual_Nov1970.pdf>). Page numbers are the manual's own. Not a Dartmouth manual: used only for the form of the Fifth Edition file statements and functions and for error texts, each use a Baysick decision (see "The Fifth Edition" above). |
 | [R70] | *BASIC*, Fifth Edition, Kiewit Computation Center, Dartmouth College, September 1970. Not scanned; a paper copy is listed in the Rauner Special Collections Library catalogue (<https://archives-manuscripts.dartmouth.edu/repositories/2/archival_objects/412980>, found by web search; the page itself could not be opened, so the listing is **unverified**). Cited only to record that the manual exists and was not available. |
 | [W] | Wikipedia, "Dartmouth BASIC" (edition history; cites [K81]). Secondary source: used only for dates and edition names, not for semantics. |
@@ -217,7 +265,8 @@ toward the 5 digits.
 1.6. More than **10 000** stored lines at any moment is `PROGRAM TOO LONG`.
 
 1.7. After all physical lines are processed the program is the set of stored lines **sorted by
-line number** ([M64] p. 4). Execution starts at the lowest-numbered line.
+line number** ([M64] p. 4). Execution starts at the lowest-numbered line of the main program
+(Sixth Edition: SUB blocks, §7.27, are not part of it; without them this is the lowest line).
 
 ## 2. Compaction, case, and characters
 
@@ -248,18 +297,20 @@ line number (the *statement text*).
 
 ## 3. Statements and keyword recognition
 
-3.1. The statement text must begin with one of the twenty-four keywords, tested **in this
+3.1. The statement text must begin with one of the twenty-seven keywords, tested **in this
 order** as a prefix of the statement text:
 
 `LET PRINT END READ DATA GOTO IF FOR NEXT GOSUB RETURN DEF DIM REM STOP MAT INPUT RESTORE ON
-RANDOMIZE CHANGE FNEND FILES SCRATCH`
+RANDOMIZE CHANGE FNEND FILES SCRATCH CALL SUBEND SUB`
 
 (`FILES` and `SCRATCH` are the Fifth Edition keywords, §7.21–§7.22; the other file statements
-start with `PRINT`, `INPUT`, `IF` and `RESTORE`.)
+start with `PRINT`, `INPUT`, `IF` and `RESTORE`. `CALL`, `SUBEND` and `SUB` are the Sixth Edition
+keywords, §7.27.)
 
 The keyword `RANDOMIZE` also matches the shorter spelling `RANDOM` ([M68] p. 45: "RANDOMIZE (or
-more briefly RANDOM)"): the text is tested for `RANDOMIZE` first, then for `RANDOM`. Apart from
-that pair no keyword is a prefix of another, so the order only matters for documentation. The
+more briefly RANDOM)"): the text is tested for `RANDOMIZE` first, then for `RANDOM`. Likewise
+`SUB` is a prefix of `SUBEND`, which is tested first. Apart from these two pairs no keyword is a
+prefix of another, so the order only matters for documentation. The
 first match determines the statement; the remaining text is parsed by that statement's grammar
 (§7). If none matches (including an empty statement text, §1.5): `ILLEGAL INSTRUCTION IN n`.
 
@@ -340,16 +391,16 @@ are string data, not labels, and do not count.
   rounded half up, `SUBSCRIPT ERROR` outside `0..bound`; element `(i, j)` of a table whose
   current second bound is `c` is storage element `i·(c+1) + j`. A string array whose
   dimensionality is still unknown after the whole program (it appears only as a bare name in
-  MAT READ or MAT PRINT) is a **list** with bound 10 — unlike a numeric array, which becomes a
+  MAT READ or MAT PRINT, or — Sixth Edition — as `L$()` in CALL arguments) is a **list** with
+  bound 10 — unlike a numeric array, which becomes a
   table (§7.11) — so every Fourth Edition program keeps its meaning (**Baysick decision**).
 * `X1$(3)` (letter + digit + `$` + `(`) → `ILLEGAL VARIABLE IN n`, like `X1(3)`.
 * A string value is a sequence of **0 to 65 536 bytes** (`LIM_STRING_LEN`); any byte value
   0–255 may occur. All string variables and string list elements start as the **empty string**.
 * A **string reference** is a string constant, a string variable or a string array element
   (list or table). In the Fourth Edition it is the only form of a "string expression"; the
-  Fifth Edition adds the string-valued functions of §4.6. There are still no string operators:
-  concatenation (`&`) and `SEG$`/`POS` are Sixth Edition features ([K81] p. 531,
-  `docs/SEA_BOOTSTRAP.md`), not part of Baysick.
+  Fifth Edition adds the string-valued functions of §4.6, and the Sixth Edition the function
+  `SEG$` and the concatenation operator `&` (§4.6, §6.2).
 
 ### 4.5 Strings and numbers do not mix
 
@@ -377,29 +428,55 @@ input line, §7.15), small enough that a `CHANGE` vector of every string fits a 
 (`DIM A(65536)`).
 
 **Fifth Edition: string expressions.** Everything above applies with "string reference" read as
-"string expression" (§4.6): in operand position the text `STR$(` and `FN` *letter* `$` also start
-a string expression, so `LET X = STR$(5)`, `LET X = 1 + FNA$(2)` and `IF LEN(A$) = FNB$ THEN 10`
+"string expression" (§4.6): in operand position the text `STR$(` and `FN` *letter* `$` (Sixth
+Edition: also `SEG$(`) also start a string expression, so `LET X = STR$(5)`, `LET X = 1 + FNA$(2)` and `IF LEN(A$) = FNB$ THEN 10`
 are `MISMATCHED STRING OPERATION`; a string expression followed by an arithmetic operator outside
 PRINT is the same error (`LET A$ = STR$(1) + "X"`). Conversely `LEN`, `ASC` and `VAL` need a
 string expression as argument: `LEN(5)`, `ASC(X)`, `VAL(A$ + 1)` are
 `MISMATCHED STRING OPERATION`.
 
-### 4.6 String expressions (Fifth Edition)
+**Sixth Edition: `&`.** `&` joins two string expressions (§4.6). Its operands must be string
+operands: a numeric operand after `&` (`A$ & 1`, `A$ & X`, `A$ & (1)`) is
+`MISMATCHED STRING OPERATION`; anything else that cannot start an operand (`A$ &`, `A$ & )`) is
+`ILLEGAL FORMULA`. `&` is recognised only right after a string operand (the scanner's operator
+position after a string, §5.3): after a numeric operand it is not an operator, and the statement
+grammar sees it as leftover text (`LET X = 1 & 2` → `INCORRECT FORMAT`, `PRINT 1 & "A"` →
+`INCORRECT FORMAT` (§7.2), `IF X & Y = 1 THEN 10` → `ILLEGAL RELATION`). A string expression
+containing `&` is still a string expression, so the rules above apply to it as a whole
+(`LET X = A$ & B$` and `LET A$ = B$ & C$ + D$` are `MISMATCHED STRING OPERATION`).
+
+### 4.6 String expressions (Fifth and Sixth Editions)
 
 ```
-string-expression := string-reference
+string-expression := string-primary { "&" string-primary }             Sixth Edition: &
+string-primary    := string-reference
                    | "STR$" "(" expression ")"                         §6
+                   | "SEG$" "(" string-expression "," expression "," expression ")"   §6.2, Sixth Edition
                    | "FN" letter "$" [ "(" argument { "," argument } ")" ]   §7.10
 string-reference  := string-constant | string-variable
                    | letter "$" "(" expression [ "," expression ] ")"  list or table element
 argument          := string-expression | expression
 ```
 
+**Concatenation** (Sixth Edition; [K81] p. 531: "the "&" causes string concatenation"; its use
+inside a LET value: [B80] p. 56). `a & b` is the bytes of `a` followed by the bytes of `b`; `&`
+is the only string operator, so there is no precedence to decide, and a chain `a & b & c` is
+joined left to right (the result does not depend on the grouping). There are no parentheses in
+string expressions: `(` always starts a numeric operand. **Baysick decisions:** (a) `&` may appear
+in every string expression, so everywhere one is allowed: a string LET value, a PRINT or PRINT #
+item, each side of an IF comparison, the source of CHANGE, a string DEF body, an argument of a
+user function, of `LEN`, `ASC`, `VAL`, `SEG$`, `POS` and of CALL (§7.27); (b) a result longer
+than 65 536 bytes is the run-time error `STRING TOO LONG IN n` (the CHANGE error, now also raised
+by `&`); (c) the operands are evaluated **left to right, each to its value**: in `A$ & FNX$(1)` the
+value of `A$` is taken before FNX$ runs, so a change of `A$` inside FNX$ does not change the
+result.
+
 A string expression may appear wherever the Fourth Edition allowed a string reference as a
 *value*: the value of a string LET (§7.1), a PRINT item (§7.2, §7.24), each side of a string
 comparison in IF (§7.7), the source of `CHANGE … TO list` (§7.19), the body of a single-line
 string DEF (§7.10), an argument of a user function (§7.10) and the argument of `LEN`, `ASC`,
-`VAL` (§6). A *target* (LET, READ, INPUT, INPUT #, CHANGE … TO, a string DEF's value variable)
+`VAL` (§6); in the Sixth Edition also the string arguments of `SEG$` and `POS` (§6.2) and a
+string argument of CALL (§7.27). A *target* (LET, READ, INPUT, INPUT #, CHANGE … TO, a string DEF's value variable)
 is still a string variable or string array element (or `FNx$` in its own body), never a function
 call: `LET STR$(1) = "X"` → `ILLEGAL VARIABLE`.
 
@@ -407,10 +484,10 @@ Inside the body of a multi-line string function FN*x*`$`, the text `FNx$` not fo
 that function's value variable (§7.10), exactly as `FNx` is for a numeric function.
 
 Every string expression has a value that is a string of 0 to 65 536 bytes. A function's result
-is a **copy**: after `LET A$ = FNA$(1)` or `LET B$ = STR$(X)`, nothing the program does later
-changes `A$` or `B$` except an assignment to them. There is still no way to combine two strings
-into one in an expression (no concatenation, Sixth Edition); `CHANGE` (§7.19) builds strings from
-character codes.
+is a **copy**: after `LET A$ = FNA$(1)`, `LET B$ = STR$(X)`, `LET C$ = SEG$(D$, 1, 2)` or
+`LET E$ = F$ & G$`, nothing the program does later changes `A$` … `E$` except an assignment to
+them. `CHANGE` (§7.19) still builds strings from character codes; `&` and `SEG$` make most such
+uses unnecessary ([K81] p. 531: "Together, these functions allow all string operations").
 
 
 ## 5. Expressions
@@ -427,6 +504,7 @@ primary    := constant
             | "FN" letter [ "(" expression { "," expression } ")" ]  user function (§7.10)
             | builtin "(" expression ")"                             builtin call
             | ( "LEN" | "ASC" | "VAL" ) "(" string-expression ")"   Fifth Edition (§6, §4.6)
+            | "POS" "(" string-expression "," string-expression [ "," expression ] ")"   Sixth Edition (§6.2)
             | "RND" | "NUM" | "DET"                                  (bare, see §6)
             | "(" expression ")"
 ```
@@ -450,9 +528,11 @@ At a point where an operand is required, the parser looks at the compacted text:
 3. letter:
    1. if the next three characters are a builtin name taking an argument (`SIN COS TAN COT ATN
       EXP ABS LOG SQR INT SGN RND`, and in the Fifth Edition `LEN ASC VAL`) and the fourth is
-      `(` → builtin call (for `LEN ASC VAL` the argument is a string expression, §4.6);
+      `(` → builtin call (for `LEN ASC VAL` the argument is a string expression, §4.6; Sixth
+      Edition: `POS(` → a POS call, §6.2);
       if the next four characters are `STR$` and the fifth is `(` → `STR$` call, a string
-      expression: `MISMATCHED STRING OPERATION` here (§4.5);
+      expression: `MISMATCHED STRING OPERATION` here (§4.5); likewise `SEG$(` (Sixth Edition)
+      → a `SEG$` call, a string expression: `MISMATCHED STRING OPERATION` here;
    2. else if they are `RND` (not followed by `(`) → bare `RND`;
    3. else if they are `NUM` or `DET` → that function; if a `(` follows → `ILLEGAL FORMULA`
       (they take no argument);
@@ -478,22 +558,26 @@ one or more (their number is checked against the DEF after the whole program is 
 array subscript list contains one or two. Anything else before the `)` is `ILLEGAL FORMULA`
 (`FNA()` too: an operand is required after the `(`). These recognitions cannot change the
 meaning of any program that compiled before: in every case (`NUM`, `DET`, `SGN(`, `COT(`, `FNA`
-without `(`, `A$`, `"` in an expression; Fifth Edition: `LEN(`, `ASC(`, `VAL(`, `STR$(`, `FNA$`)
-the text used to be a compile error.
+without `(`, `A$`, `"` in an expression; Fifth Edition: `LEN(`, `ASC(`, `VAL(`, `STR$(`, `FNA$`;
+Sixth Edition: `POS(`, `SEG$(`) the text used to be a compile error. `POS` takes two or three
+arguments and `SEG$` exactly three, separated by commas; any other count is `ILLEGAL FORMULA`
+(a missing `,` or `)` where one is required, as for the other builtins).
 
 Where a **string expression** is required (§4.6), the same text is read with the string rules:
-`"` → constant; `STR$(` → STR$ call (one numeric expression, then `)`); `FN` letter `$` → string
+`"` → constant; `STR$(` → STR$ call (one numeric expression, then `)`); `SEG$(` → SEG$ call (a
+string expression, `,`, two numeric expressions separated by `,`, then `)`); `FN` letter `$` → string
 function call (with `(`: one or more arguments, each a string expression if its text starts like
-one — `"`, `STR$(`, `FN` letter `$`, letter [digit] `$` — else a numeric expression); letter
+one — `"`, `STR$(`, `SEG$(`, `FN` letter `$`, letter [digit] `$` — else a numeric expression); letter
 [digit] `$` → string variable, or with `(` (no digit) a string array element with one or two
 subscripts; anything else → `MISMATCHED STRING OPERATION` if it starts a numeric operand, else
 `ILLEGAL FORMULA` (as for a missing value, §7.1). `STR$` without `(` is not a string expression
-(the variable `S` followed by `TR$`).
+(the variable `S` followed by `TR$`), nor is `SEG$` without `(`. After each string primary, `&`
+continues the string expression with another string primary (§4.5 for the errors).
 
 ### 5.3 Operator position
 
-After an operand the parser looks for `^ * / + -` to continue the expression. Anything else
-ends the expression and is handed back to the statement grammar, which accepts only what it
+After an operand the parser looks for `^ * / + -` to continue the expression (after a string
+operand: for `&`, §4.6). Anything else ends the expression and is handed back to the statement grammar, which accepts only what it
 expects at that point: `)`, `,`, `;`, a relation (`= <> < <= > >=`), the keywords `THEN TO
 STEP GOTO`, or end of line. Because a letter cannot follow an operand inside an expression, a
 letter in operator position can only begin a context keyword.
@@ -539,6 +623,8 @@ raised `OVERFLOW`), all six relations behave as in mathematics.
 | `ASC(S$)` | the code (0–255, §7.19) of the first byte of the string | empty string → `ASC OF EMPTY STRING` |
 | `VAL(S$)` | the number the string denotes, by the INPUT number rule (§6.1) | not a number → `ILLEGAL 'VAL' ARGUMENT` |
 | `STR$(X)` | a **string**: the printed form of X without leading or trailing spaces (§6.1) | — |
+| `SEG$(S$, M, N)` | a **string**: the bytes of S$ from position M through position N, clamped to the string (§6.2) | — |
+| `POS(S$, T$)`, `POS(S$, T$, M)` | the first position, at M or after, where T$ occurs in S$; 0 if none (§6.2) | — |
 
 **RND generator. Baysick decision** ([M64] only requires a fixed, repeatable sequence in (0,1)):
 the Park–Miller "minimal standard" Lehmer generator. State `s` is an integer, initially
@@ -597,6 +683,49 @@ digits at 1E100 or above, i.e. from about 9.999995E99 up, and for every |x| that
 The arguments are evaluated once, before the function is applied; the string argument may be any
 string expression (`LEN(STR$(X))`, `VAL(FNA$(1))`, `ASC(L$(I, J))`).
 
+### 6.2 SEG$ and POS (Sixth Edition)
+
+[K81] p. 531 names the two functions ("The SEG$ function provides a substring … The POS function
+can locate a given string expression in a string"), and [B85] p. 29–30 fixes the meaning of
+SEG$'s arguments: `SEG$(S$, 5, 6)` is "the fifth and sixth characters" — a first and a **last**
+position, not a length. Everything else below is a **Baysick decision**. Positions count bytes
+from 1, as `CHANGE` numbers them (§7.19).
+
+**Position arguments** are numeric expressions rounded like subscripts (§7.11): the value x
+becomes `floor(x + 0.5)`. The rounding and every comparison below are done exactly on the real
+values (no conversion can wrap: `SEG$(A$, -1E30, 1E30)` is all of A$).
+
+* **`SEG$(s, m, n)`**, with L the length of s and m', n' the rounded positions: let
+  `first = max(m', 1)` and `last = min(n', L)`. If `first > last` the value is the empty string;
+  otherwise it is the `last − first + 1` bytes of s at positions `first … last`. There is no
+  error: a range that reaches outside the string is cut to the string, and an empty or inverted
+  range gives the empty string. `SEG$("HELLO", 2, 3)` = `"EL"`, `SEG$("HELLO", 0, 2)` = `"HE"`,
+  `SEG$("HELLO", 4, 99)` = `"LO"`, `SEG$("HELLO", 3, 2)` = `""`, `SEG$("HELLO", 6, 9)` = `""`,
+  `SEG$("HELLO", 2.5, 3.49)` = `"L"` (3 through 3), `SEG$("", 1, 1)` = `""`. Trailing blanks are
+  bytes like any other: `SEG$("AB  ", 3, 4)` is two blanks (`LEN` 2).
+* **`POS(s, t, m)`**, with L and K the lengths of s and t and m' the rounded start: let
+  `start = max(m', 1)`. The value is the smallest integer p with `start ≤ p ≤ L − K + 1` such that
+  the K bytes of s at positions `p … p + K − 1` equal the bytes of t; **0** if there is none.
+  `POS(s, t)` is `POS(s, t, 1)`. Bytes are compared exactly (unsigned, trailing blanks
+  significant — unlike `=`, §7.7). `POS("BANANA", "AN")` = 2, `POS("BANANA", "AN", 3)` = 4,
+  `POS("BANANA", "AN", 5)` = 0, `POS("BANANA", "A", -3)` = 2, `POS("ABC", "ABCD")` = 0,
+  `POS("AB  ", " ")` = 3. An **empty** t occurs at every position 1 … L + 1:
+  `POS("BANANA", "")` = 1, `POS("BANANA", "", 7)` = 7, `POS("BANANA", "", 8)` = 0,
+  `POS("", "")` = 1.
+
+**Evaluation order:** the arguments are evaluated left to right (the string arguments to their
+references, the positions to numbers), then the function reads the bytes of its string arguments.
+A position argument that calls a function changing a string variable named by an earlier argument
+(`SEG$(A$, FNX(1), 2)` where FNX assigns `A$`) therefore sees the new value — the same rule as a
+string comparison in IF (§7.7), whose two sides are read when they are compared.
+
+**Baysick decisions, reasons:** clamping instead of an error makes the common scanner idioms
+(`SEG$(L$, P, P)` one past the end, `SEG$(L$, P + 1, LEN(L$))` for the rest of a line) need no
+range tests, and `SEG$` with an inverted range is the natural empty string; rounding follows the
+subscript rule because positions are indices; the optional third argument of `POS` keeps the
+two-argument search short while allowing a scan to continue after a match; an empty pattern
+matching at the start position is the only choice consistent with `SEG$(s, p, p − 1) = ""`.
+
 ## 7. Statements
 
 Notation: `n` is the line number of the statement. Every statement must consume its whole
@@ -611,7 +740,7 @@ numeric-target := simple-variable | letter "(" expression [ "," expression ] ")"
 string-target  := simple-variable "$" | letter "$" "(" expression [ "," expression ] ")"
                 | "FN" letter "$"                   (only in that function's multi-line DEF body)
 value      := expression          (numeric targets)
-            | string-expression   (string targets: "…", A$, A$(i), A$(i,j), STR$(x), FNA$(…), §4.6)
+            | string-expression   (string targets: "…", A$, A$(i), A$(i,j), STR$(x), FNA$(…), SEG$(…), a & b, §4.6)
 ```
 (The second subscript of a string target and the `FN` letter `$` target are Fifth Edition.)
 `LET` is required ([M64] Appendix C). Several targets receive the same value ([M68] p. 33:
@@ -647,7 +776,8 @@ item-list := element { element }
 element   := string-expression | "TAB" "(" expression ")" | expression | "," | ";"
 ```
 (`string-expression`, §4.6: a string reference, and in the Fifth Edition also `STR$(…)` and
-`FNx$…`; `PRINT #` is §7.24.)
+`FNx$…`; in the Sixth Edition also `SEG$(…)` and concatenations `a & b`, one item; `PRINT #` is
+§7.24.)
 Constraints: an expression must be followed by `,`, `;` or end of line (otherwise
 `INCORRECT FORMAT`). A string item or a TAB item may be followed directly by another item
 with no separator (`PRINT "X ="X`, [M64] p. 32; `PRINT A$B$`). Consecutive separators are
@@ -658,10 +788,16 @@ string expression (§5.2, §4.6) is a string item; anything else is an expressio
 
 ### 7.3 END
 `END` with nothing after it. Exactly one END, and it must be the **highest-numbered line**
-([M64] p. 7, 30). An END on a line that is not the last → `END IS NOT LAST IN n` (this also
-catches two ENDs). No END at all → `NO END INSTRUCTION`. A multi-line DEF still open at the END
-line (its FNEND missing) → `UNFINISHED DEF IN n`, n = the DEF line (§7.10; checked after
-`END IS NOT LAST`). Executing END terminates normally (§10).
+([M64] p. 7, 30) **of the main program** (Sixth Edition: lines of SUB blocks, §7.27, may follow
+it — they are not lines of the main program). An END followed by a line of the main program →
+`END IS NOT LAST IN n` (n = the END line; this also catches two ENDs). No END at all →
+`NO END INSTRUCTION`. `END IS NOT LAST` is decided when the END line is checked, in phase-2
+order (§10.1), from the partition of the pre-scan (§7.27), so a later SUB block — even one whose
+SUB line has a syntax error — never makes it fire. A multi-line DEF still open at the END line (its FNEND missing) →
+`UNFINISHED DEF IN n`, n = the DEF line (§7.10; checked after `END IS NOT LAST`); a SUB block
+still open at the END line → `UNFINISHED SUB IN n`, n = the SUB line (§7.27; checked after
+`UNFINISHED DEF`). Executing END terminates normally (§10). Without SUB blocks "the last line of
+the main program" is the last line, so every earlier program keeps its meaning.
 
 ### 7.4 READ
 ```
@@ -706,7 +842,8 @@ No digits → `INCORRECT FORMAT`; more than 5 digits → `ILLEGAL LINE NUMBER IN
 is not a line of the program → `UNDEFINED NUMBER IN n`. Targets may be any line, including REM,
 DATA, DEF and DIM lines (which do nothing when executed, [M64] p. 45; reaching a multi-line DEF
 line continues after its FNEND, §7.10), except that a jump between a multi-line DEF body and the
-rest of the program → `ILLEGAL TRANSFER IN n` (§7.10).
+rest of the program → `ILLEGAL TRANSFER IN n` (§7.10), and so is a jump between two program units
+(the main program and the subprograms, §7.27).
 
 ### 7.7 IF … THEN
 ```
@@ -717,7 +854,8 @@ relation := "=" | "<>" | "<" | "<=" | ">" | ">="
 ```
 `IF X > 5 GO TO 200` is the same as `IF X > 5 THEN 200` ([M68] p. 36). The comparison is a
 string comparison when the text after `IF` starts with a string expression (§4.6: a string
-reference, `STR$(`, `FN` letter `$`); then the right side must be a string expression too, else
+reference, `STR$(`, `FN` letter `$`, Sixth Edition `SEG$(`; a string expression may continue
+with `&`); then the right side must be a string expression too, else
 `MISMATCHED STRING OPERATION` (likewise a numeric left side with a string right side). If the
 text after `IF` starts with `END#`, the statement is `IF END #` (§7.26), not a comparison; in the
 Fourth Edition `IF END…` could only be an error (`E` followed by `N` is not an expression). The relation is matched longest-first (`<=`, `<>`, `>=` before
@@ -744,8 +882,9 @@ string list element as loop variable (`FOR A$ = …`, `FOR A$(1) = …`, also `N
 `MISMATCHED STRING OPERATION` (§4.5). Inside a multi-line DEF body (§7.10) the loop variable may
 be one of the function's parameters (its local cell).
 
-**Multi-line functions.** The FOR/NEXT matching below is done separately for the main program
-and for each multi-line DEF body (§7.10): a NEXT inside a body can only close a FOR of the same
+**Multi-line functions.** The FOR/NEXT matching below is done separately for the main program,
+for each subprogram's body (Sixth Edition, §7.27: a FOR open at its SUBEND → `UNFINISHED SUB IN
+n`, n = the SUBEND line) and for each multi-line DEF body (§7.10): a NEXT inside a body can only close a FOR of the same
 body, a NEXT outside every body only a FOR outside every body. A FOR of a body still open at its
 FNEND → `UNFINISHED DEF IN n` (n = the FNEND line); a NEXT in a body with no FOR of that body open →
 `NOT MATCH WITH FOR IN n`.
@@ -754,7 +893,9 @@ FNEND → `UNFINISHED DEF IN n` (n = the FNEND line); a NEXT in a body with no F
 brackets: a NEXT closes the most recent unclosed FOR and must name the same variable, else
 `NOT MATCH WITH FOR IN n` (also for a NEXT with no open FOR). An unclosed FOR at the end →
 `FOR WITHOUT NEXT` (no line number, as printed in [M64] p. 23). More than **1000** FOR statements
-→ `TOO MANY LOOPS IN n`. Loops using the same variable may nest.
+→ `TOO MANY LOOPS IN n` (n = the 1001st FOR line). Sixth Edition: FOR and NEXT are matched per
+program unit (§7.27), but the 1000 FOR statements are counted over the **whole program**, all
+units together, in ascending line order. Loops using the same variable may nest.
 
 **Semantics** (exactly reproducing [M64] p. 29–30). Each FOR statement *k* owns two hidden
 cells LIMIT*k* and STEP*k*.
@@ -799,6 +940,11 @@ repeated GOSUBs work; programs that were valid in 1964 behave identically. [M68]
 allows nested GOSUBs, which agrees.
 
 `GOSUB` or `RETURN` inside a multi-line DEF body → `ILLEGAL TRANSFER IN n` (§7.10).
+
+**Subprograms** (Sixth Edition, §7.27): GOSUB and RETURN work inside a subprogram; each
+activation has its own pending GOSUBs (a RETURN with none pending in the current activation →
+`ILLEGAL RETURN`, even if the caller has some), and those still pending at SUBEND are dropped.
+The limit of 1024 counts the pending GOSUBs of all activations together.
 
 ### 7.10 DEF and FNEND
 ```
@@ -865,10 +1011,23 @@ Other errors: a second DEF for the same letter → `DUPLICATE FUNCTION IN n`; a 
 reach itself through calls (in single-line expressions or multi-line bodies) →
 `RECURSIVE FUNCTION IN n` (n = its DEF line).
 
+**Functions of a subprogram** (Sixth Edition, §7.27). A DEF inside a SUB block defines a function
+of that subprogram, not of the main program: everything above holds with "the main program" read
+as "the subprogram" — the function's variables other than its parameters are the subprogram's
+(of the activation that calls it, including the subprogram's parameters), it is called only from
+lines of the subprogram, and all checks (`DUPLICATE FUNCTION`, `UNDEFINED FUNCTION`, argument
+counts and kinds, `RECURSIVE FUNCTION`) are made per program unit: `DEF FNA` in two units defines
+two functions. A function reached again through a CALL (a multi-line `FNA` of subprogram `"S"` executes
+`CALL "S"`, and the new activation calls `FNA`) is not recursion of the function: each activation
+of a subprogram has its own calls of its functions, so `RECURSIVE FUNCTION` considers only calls
+between the functions of one unit, never CALL statements.
+
 **Baysick decisions:** (a) recursion is rejected for both kinds: [M68] does not say whether a
 function may call itself; a single-line function cannot contain a conditional, so its recursion
 could never end, and rejecting it for multi-line functions too keeps one rule and gives every
-function exactly one activation at a time. (b) A duplicate DEF is rejected rather than silently
+function at most one activation at a time in each activation of its program unit (Sixth Edition: a
+function of a subprogram can be active once in each of several activations of that subprogram,
+§7.27). (b) A duplicate DEF is rejected rather than silently
 replaced. (c) [M68] states the transfer restriction but no message; Baysick reports
 `ILLEGAL TRANSFER`. (d) At most 8 parameters: [M68] states no limit; eight cover every example
 and fit the argument registers of both targets.
@@ -931,8 +1090,9 @@ rules above.
   one statement (`IF FNA$(1) = FNA$(2) THEN 50`, `PRINT FNA$(1); FNA$(2)`) give two independent
   values.
 * Recursion stays rejected (`RECURSIVE FUNCTION`, decision (a)), through string functions as
-  through numeric ones; every function has at most one activation at a time, which is what lets
-  the runtime keep string parameters and values without a stack of strings (DESIGN.md §6.8).
+  through numeric ones; every function is active at most once per activation of its program
+  unit, which is what lets the runtime keep string parameters and values without a stack of
+  strings (DESIGN.md §6.8).
   Recursive DEF (a Fifth Edition feature, [K81] p. 529) is therefore **not** implemented (see
   "The Fifth Edition" above).
 
@@ -952,12 +1112,14 @@ string array (or a use conflicting with an earlier DIM) → `ILLEGAL VARIABLE` (
 recommends for long strings is legal and simply declares a list of 1001 strings.
 Sets the upper bound of each subscript (lower bound is always 0). DIM is a compile-time
 declaration: it applies to the whole program regardless of where it appears ([M64] p. 38;
-Baysick decision for "regardless of position"). Arrays not mentioned in a DIM have bound 10 in
+Baysick decision for "regardless of position"); Sixth Edition: to the whole **program unit** in
+which it appears (§7.27) — a DIM in a subprogram dimensions that subprogram's array. Arrays not mentioned in a DIM have bound 10 in
 each subscript. The dimensionality (list/table) of a letter is fixed by its first appearance in
 ascending line order (DIM or use); a `MAT READ X(e)` / `MAT READ X(e,f)` target counts as a use
-as a list / table, every other MAT reference names the whole array and fixes nothing. A letter
+as a list / table, every other MAT reference names the whole array and fixes nothing, and so
+does a whole-array CALL argument `L()` (Sixth Edition, §7.27). A letter
 whose dimensionality is still unknown after the whole program (it appears only as a bare name in
-MAT statements) is a **table with bounds 10, 10** ([M68] p. 54: "matrices up to 10 rows and 10
+MAT statements or as `L()` in CALL arguments) is a **table with bounds 10, 10** ([M68] p. 54: "matrices up to 10 rows and 10
 columns").
 
 The bounds given by DIM (or the default 10) are the *initial* bounds and fix the array's
@@ -1480,7 +1642,8 @@ decisions** (see "The Fifth Edition" at the top).
 reaching it does nothing. All names of all FILES statements, in ascending line order and left to
 right, receive the **file numbers** 1, 2, 3, … ([G70] p. 60: "FILES name 1; name 2; … ;name n";
 "Multiple FILES statements are permitted"). A FILES statement may appear anywhere, also in a
-multi-line DEF body. More than **8** names in all (`LIM_FILES`) → `TOO MANY FILES IN n`, reported as soon as a
+multi-line DEF body and (Sixth Edition) in a subprogram, whose FILES names number the program's
+files like every other (§7.27: files are shared by all program units). More than **8** names in all (`LIM_FILES`) → `TOO MANY FILES IN n`, reported as soon as a
 ninth name starts — at the position where a name is expected (after `FILES` or after a `;`),
 whatever follows there, even an empty or malformed name, exactly like the ninth DEF parameter
 (§7.10) — n = the line of that position; [G70] p. 60, 86: "You can reference as many as eight files at the
@@ -1710,6 +1873,248 @@ expression errors, and after it `THEN` or `GOTO` must follow, else `INCORRECT FO
 operand is required, §5.2 rule 5), while `IF END # THEN 10` reads the letter `T` as the
 designator (the variable T) and then finds no `THEN` → `INCORRECT FORMAT`.
 
+### 7.27 CALL, SUB and SUBEND (Sixth Edition)
+
+```
+SUB name [ ":" parameter { "," parameter } ]
+SUBEND
+CALL name [ ":" argument { "," argument } ]
+name      := '"' byte { byte } '"'                  any bytes except '"' and LF, at least one
+parameter := simple-variable | simple-variable "$"
+           | letter "(" ")" | letter "$" "(" ")"     a numeric or string array
+argument  := letter "(" ")" | letter "$" "(" ")"     a whole numeric or string array
+           | string-expression | expression
+```
+
+[K81] p. 530: the Sixth Edition's subprograms "connect to the calling program only through the
+calling sequence. The statements used are CALL, SUB, and SUBEND. Parameters are specified by
+reference"; arguments are "matched at each CALL for correct type and number"; there are no
+global variables. The forms `CALL "SUM": a, b, c`, `SUB "SUM": x, y, z` … `SUBEND` ([B85] p. 35,
+[C74], [B80] p. 55) and recursion ([B85] p. 37) are from the sources; every other rule of this
+section is a **Baysick decision** (reasons at the end).
+
+**Program units.** A **SUB block** is a SUB line, the lines after it, and the next SUBEND line.
+Before any statement is checked, the compiler **pre-scans** the lines in ascending order and
+partitions them, looking only at the keyword each statement starts with (§3.1): a **SUB line** is
+a line whose statement starts with the keyword `SUB` (and not `SUBEND`, which is tested first),
+**whatever follows the keyword** — `SUB SUM`, `SUB ""` and `SUB "S": 1` are SUB lines too, whose
+errors are reported later, in phase-2 order (§10.1); a **SUBEND line** is a line whose statement
+starts with `SUBEND`, whatever follows it. A SUB line that is not inside a multi-line DEF body
+(§7.10) and not inside another SUB block starts a SUB block, which ends at the next SUBEND line
+(or, in an erroneous program, at the END line or after the last line, below). (Multi-line DEF
+bodies are found by the same pre-scan, from the DEF lines without `=` and the FNEND lines.) Each SUB block is a
+**subprogram**; the lines outside every SUB block are the **main program**. The main program and
+the subprograms are the **program units**. A SUB block may stand anywhere in the line order; the
+customary place, and the one every example uses, is after the main program's `END` ([C74]).
+The main program never executes a line of a SUB block: control passes from the main-program line
+before a block to the main-program line after it, as if the block were not there. A subprogram
+runs only through CALL.
+
+**Names.** A subprogram's name is the bytes between the quotes, kept exactly (§2: quoted text is
+not compacted) and compared byte for byte, so `"SUM"`, `"sum"` and `"S UM"` are three names. A
+name is not a string constant: it is neither a PRINT label nor counted for `TOO MANY LABELS`
+(§4.3). A second SUB with a name already used → `DUPLICATE SUBPROGRAM IN n` (n = the later SUB
+line). After the whole program is read, a CALL of a name that no SUB has →
+`UNDEFINED SUBPROGRAM IN n` (n = the CALL line).
+
+**SUB statement.** After `SUB` the name must follow (`"`), else `INCORRECT FORMAT`; an
+unterminated name or the empty name `""` → `INCORRECT FORMAT`. After the name: end of line (no
+parameters) or `:` and the parameter list; anything else → `INCORRECT FORMAT`. Each parameter is
+a simple variable (`X`, `X1`), a string variable (`X$`), a numeric array `L()` or a string array
+`L$()` (a letter, then for a string array `$`, then `(` `)`). A missing or malformed parameter
+(`SUB "S":`, `SUB "S": A,`, `SUB "S": 1`, `SUB "S": A(1)`, `SUB "S": A(`, `SUB "S": X1()`,
+`SUB "S": X1$()`) → `ILLEGAL VARIABLE`; the same parameter twice (`A, A`; `A$, A$`; `L(), L()`)
+→ `ILLEGAL VARIABLE` (`A`, `A$`, `A()` and `A$()` are four different names, as everywhere, §4.2,
+§4.4); more than **16** parameters (`LIM_SUB_PARAMS`) → `INCORRECT FORMAT`, reported as soon as
+a seventeenth parameter starts, whatever it is (like the ninth DEF parameter, §7.10); after a
+parameter anything but `,` or end of line → `INCORRECT FORMAT`.
+
+**SUBEND statement.** `SUBEND` with nothing after it (text after it → `INCORRECT FORMAT`). A
+SUBEND outside every SUB block → `ILLEGAL INSTRUCTION IN n` (as FNEND outside a DEF body).
+
+**Structure errors** (per statement, §10.1 phase 2, unless stated):
+
+* a SUB line inside a SUB block or inside a multi-line DEF body → `NESTED SUB IN n` (n = that SUB
+  line);
+* an END line while a SUB block is open → `UNFINISHED SUB IN n` (n = the SUB line of the open
+  block; END belongs to the main program, §7.3);
+* a SUBEND line while a multi-line DEF of the same block is open → `UNFINISHED DEF IN n` (n = the
+  DEF line);
+* a SUBEND line while a FOR of the subprogram is open → `UNFINISHED SUB IN n` (n = the SUBEND
+  line; like a FOR open at FNEND, §7.8);
+* a SUB block still open after the last line → `UNFINISHED SUB IN n` (n = its SUB line;
+  whole-program phase, §10.1).
+
+**CALL statement.** After `CALL` the name must follow as in SUB (`INCORRECT FORMAT` otherwise,
+also for `""` and an unterminated name). After the name: end of line (no arguments) or `:` and
+the argument list; anything else → `INCORRECT FORMAT`. An argument is read as follows: a letter
+followed by `()` is the whole numeric array of that letter, a letter followed by `$()` the whole
+string array; text that starts a string expression (§5.2) is a string expression; any other text
+is a numeric expression, read with every §5 rule (a missing argument — `CALL "S":`, `CALL "S":
+A,` — is `ILLEGAL FORMULA`, an operand being required; `X1()` is `ILLEGAL VARIABLE`). More than
+16 arguments → `INCORRECT FORMAT` as soon as a seventeenth starts; after an argument anything but
+`,` or end of line → `INCORRECT FORMAT` (`CALL "S": A B`). Everywhere outside an argument list,
+`A()` stays what it was (`ILLEGAL FORMULA`: an operand is required after `(`).
+
+**Matching** (after the whole program is read, §10.1). For a CALL of name s with k arguments and
+the SUB of that name with p parameters: k ≠ p → `INCORRECT NUMBER OF ARGUMENTS IN n`. Otherwise
+each argument must have its parameter's **kind**: a numeric scalar (a numeric variable, element
+or expression) for a numeric variable parameter, a string scalar (a string expression) for a
+string variable parameter, a whole numeric array for `L()`, a whole string array for `L$()`. The
+first argument, left to right, whose kind differs decides the message: an array where a scalar is
+required or a scalar where an array is required → `ARGUMENT MISMATCH IN n`; otherwise (a string
+for a number or a number for a string, scalars or arrays) → `MISMATCHED STRING OPERATION IN n`
+(n = the CALL line). Whether a numeric array is a list or a table is checked when the subprogram
+is entered (below), because a parameter array passed on by another subprogram has no fixed
+dimensionality of its own.
+
+**References.** A parameter is another name for the caller's variable, element or array
+("Parameters are specified by reference", [K81] p. 530):
+
+* an argument that is exactly a simple variable, a numeric array element, a string variable or a
+  string array element (list or table) — nothing else in the argument — is passed **by
+  reference**: the parameter is that variable or element for the whole activation; assigning the
+  parameter assigns the caller's variable at once, and the caller sees every change. The
+  subscripts of an element are evaluated and checked (`SUBSCRIPT ERROR`, n = the CALL line) when
+  the arguments are evaluated; the reference then keeps naming that element — the storage
+  element addressed at the CALL — even if the variables of its subscripts change, and even if a
+  MAT statement in the subprogram redimensions the array so that the element's subscripts
+  change (§7.11: storage element `i·(c+1) + j` is the one named, whatever the new shape);
+* a whole array `L()` or `L$()` is passed by reference: the parameter array is the caller's
+  array, with its current bounds; MAT statements in the subprogram that redimension it
+  (§7.14.3) redimension the caller's array;
+* inside a subprogram, an argument that is exactly one of its own parameters passes on the
+  caller's variable (or array) that the parameter names — when that parameter names a by-value
+  cell (below), it is that cell that is passed on;
+* every **other** argument is passed **by value**: a constant, any expression with an operator or
+  a function call, a variable in parentheses (`(A)`) or with a sign (`+X` and `-X` are
+  expressions, §5.1, so `CALL "S": +X` passes the value of X), a string function call or a concatenation,
+  and — inside a multi-line DEF body — a parameter of that function or its value variable (`FNx`,
+  `FNx$`), which are the function call's own copies, not variables of a program unit. The value
+  is computed and put in a fresh cell private to this CALL; the parameter names that cell, may be
+  assigned, and the cell is discarded at SUBEND.
+
+**Execution of CALL.**
+
+1. The arguments are evaluated **left to right**: element subscripts, expressions and function
+   calls in the order they are written (a function called by a later argument cannot move the
+   element a former argument names, and does not change a by-value argument already computed).
+2. A new **activation** of the subprogram starts. Checks, in this order: if 1024 activations
+   (`LIM_CALL_DEPTH`) are already active, or if the costs of the active activations plus the
+   cost of the new one would exceed 2 097 152 words (`LIM_CALL_WORDS`, below) →
+   `TOO MANY CALLS IN n`; for each array parameter, left
+   to right, whose dimensionality the subprogram fixes (below): the argument array must have it,
+   else `DIMENSION ERROR IN n`; if the activation's storage cannot be allocated →
+   `OUT OF ROOM IN n` (n = the CALL line in all three).
+3. Every variable of the activation starts fresh: numeric variables and array elements 0, string
+   variables and string array elements empty, arrays at their DIM (or default) bounds, no FOR
+   loop and no GOSUB pending — nothing is kept from an earlier call or another activation.
+4. Execution starts at the first line after the SUB line and goes on through the subprogram's
+   lines as in any program unit; run-time errors report the subprogram line being executed.
+5. Reaching the SUBEND line — in sequence, or by GOTO, IF, ON or IF END # (the SUBEND line
+   belongs to the subprogram, so `GOTO` the SUBEND line returns) — ends the activation: its
+   variables, arrays and pending GOSUBs are discarded, and the program continues after the CALL
+   statement, with the CALL line current again. Reaching the SUB line itself (by a jump) does
+   nothing.
+
+**Recursion.** A subprogram may CALL itself, directly or through other subprograms or functions
+([B85] p. 37: "these subprograms could call themselves recursively"); each activation has its own
+variables (step 3). Two limits bound the active activations (step 2), and whichever is reached
+first gives `TOO MANY CALLS`:
+
+* at most **1024** activations at once (`LIM_CALL_DEPTH`);
+* the **call budget**: every subprogram has a fixed **cost** in 8-byte words, computed by the
+  compiler from the subprogram's text alone (DESIGN.md §5.3.1) — its activation storage (286
+  numeric and 286 string variables, 858 words; its hidden FOR cells; one word per parameter; one
+  word per numeric array element and two per string array element of its own arrays, four per
+  array; two per string temporary of its expressions), plus its work area (temporaries of its
+  largest statement and its CALL arguments) and that of its longest chain of function calls. The
+  sum of the costs of the active activations never exceeds **2 097 152** words
+  (`LIM_CALL_WORDS`, 16 MiB).
+
+Both limits depend only on the program text, so the point where `TOO MANY CALLS` occurs is the
+same on every target and every machine. Every subprogram costs at least 858 words, so without
+large local arrays the 1024-activation limit is reached first (1024 × ~900 words is under half the
+budget); a subprogram with a local `DIM A(199999)` costs a little more than 200 000 words, and its
+eleventh simultaneous activation exceeds the budget. Allocating an activation's storage can still
+fail on a machine without enough memory (`OUT OF ROOM`, step 2), which depends on the host.
+
+**What a program unit owns.** Private to each activation (and to the main program): all its
+numeric and string variables; its arrays and string arrays (other than array parameters) with
+their DIM statements (a DIM in a subprogram dimensions the subprogram's arrays; a DIM of a
+parameter array → `ILLEGAL VARIABLE`); its FOR loops (FOR/NEXT are matched per unit, §7.8, and
+each unit has its own hidden LIMIT/STEP cells); its pending GOSUBs; its `DEF` functions (below);
+the temporary cells of its string expressions. Shared by the whole program: the DATA blocks and
+their cursors (READ and RESTORE in any unit use the one numeric and the one string data block of
+§7.5, built from the DATA statements of all units in line order); the files (FILES names and file
+numbers of all units, modes, positions, column states, §7.21); standard input and output and the
+print column (§8); the RND state and RANDOMIZE; the NUM and DET values; and the line numbers,
+which are unique in the whole program.
+
+**Within a subprogram:**
+
+* the scalar and array rules of §4 and §7.11 hold per unit: `A` in the main program and `A` in a
+  subprogram are different variables; a letter's array is a list or a table separately in each
+  unit (the conflict check of §4.2 is per unit). A **parameter array**'s dimensionality is fixed
+  by every use that fixes any array's kind (§7.11, §7.14.8, §7.19): a subscripted use (`L(I)`: a
+  list, `L(I, J)`: a table), `MAT INPUT L` (a list), `MAT READ L(e)` / `MAT READ L(e, f)` (a list /
+  a table), `CHANGE … TO L` or `CHANGE L TO …` (a list); conflicts → `ILLEGAL VARIABLE` as for
+  any array. When no use fixes it — it appears only in MAT assignments, MAT PRINT, a MAT READ
+  without dimensions, or as a CALL argument `L()` — it accepts lists and tables;
+* GOTO, IF … THEN, ON … GOTO, GOSUB and IF END # may only name lines of the same program unit
+  (and, as before, not cross the boundary of a multi-line DEF body), else
+  `ILLEGAL TRANSFER IN n` (n = the line of the jump); the SUB and SUBEND lines belong to the
+  subprogram;
+* GOSUB and RETURN work as in §7.9, per activation: RETURN returns only to a GOSUB of the same
+  activation (none pending in it → `ILLEGAL RETURN`); GOSUBs still pending at SUBEND are dropped;
+  the 1024 pending GOSUBs of `TOO MANY GOSUBS` are counted over all activations;
+* `DEF` defines a function **of that subprogram** (§7.10): it is called only by lines of the
+  subprogram, its variables other than its parameters are the subprogram's variables of the
+  current activation (including the subprogram's parameters), and its letter is independent of
+  the same letter in other units (`DEF FNA` in the main program and in a subprogram are two
+  functions; `DUPLICATE FUNCTION`, `UNDEFINED FUNCTION`, `INCORRECT NUMBER OF ARGUMENTS`,
+  `MISMATCHED STRING OPERATION` and `RECURSIVE FUNCTION` are decided per unit). A multi-line DEF
+  body, in any unit, may contain CALL statements;
+* `STOP` ends the whole program, as anywhere; `END` cannot stand in a subprogram (above: it
+  belongs to the main program); RETURN is never a return from the subprogram — only SUBEND is.
+
+**Example** (the [B85] p. 35 program, upper-cased):
+
+```
+100 INPUT A, B
+110 CALL "SUM": A, B, C
+120 PRINT C
+130 END
+150 SUB "SUM": X, Y, Z
+160 LET Z = X + Y
+170 SUBEND
+```
+
+With the input line `2, 3` it prints ` 5`: Z is C, so line 160 assigns the main program's C.
+
+**Baysick decisions** ([K81], [B85] give only what is quoted above): (a) recursion is allowed and
+every activation starts fresh — the only semantics compatible with recursion, and what a
+recursive-descent parser needs; (b) arguments that are not variables are passed by value through
+a private cell, so `CALL "S": 2*X` is legal and cannot change anything of the caller (a variable
+in parentheses is therefore the way to pass a variable by value); a function's parameters and
+value variable are passed by value because they belong to one function call, not to a program
+unit; (c) array parameters are written `L()` (no source shows one); lists and tables share the
+form, and the dimensionality is checked at entry, `DIMENSION ERROR`, because it is known only at
+run time when an array is passed on; (d) names are compared exactly, like every other quoted text;
+(e) SUB blocks may stand anywhere (no source restricts it; placing them after END, as [C74] does,
+is the convention); (f) there is no `SUBEXIT`: no source shows one, and `GOTO` the SUBEND line
+returns, as `GOTO` the FNEND line does; (g) DATA, files, the terminal and the random number
+generator are shared, because they are not variables ([K81]'s "no global variables") and a
+subprogram of a compiler must read and write the program's files; (h) `DEF` inside a subprogram
+is local to it, so a subprogram is a self-contained unit that could be compiled separately; (i)
+at most 16 parameters (twice the DEF limit; arguments are passed through a vector, DESIGN.md
+§5.3.1, so the number is not bound to registers) and 1024 activations (as for GOSUB), plus the
+call budget, which bounds the memory recursion can take with a rule that depends on the program
+text alone (a limit on the machine stack itself would differ between targets and machines); (j) the
+messages `UNDEFINED SUBPROGRAM`, `DUPLICATE SUBPROGRAM`, `NESTED SUB`, `UNFINISHED SUB`,
+`ARGUMENT MISMATCH` and `TOO MANY CALLS` are Baysick's, worded like the 1968 messages (`NESTED
+DEF`, `UNFINISHED DEF`, `TOO MANY GOSUBS`).
+
 ## 8. PRINT output
 
 The runtime keeps two counters for the current output line: `col`, the logical column
@@ -1721,7 +2126,9 @@ teletype shows none either).
 * **emit(c)**: if `c` is a space: `col += 1`. Otherwise write `col − out` spaces, write `c`,
   `col += 1`, `out = col`.
 * **newline**: write LF; `col = out = 0`.
-* **string item** (a string constant, a string variable or a string list element, §7.2): emit
+* **string item** (a string constant, a string variable or a string list element, §7.2; Fifth
+  and Sixth Editions: any string expression — `STR$(…)`, `FNx$…`, `SEG$(…)`, a concatenation
+  with `&`, §4.6): emit
   each byte of its value — any byte, including control characters, is written unchanged (a byte
   that is not a space counts as one column). Strings are never truncated or wrapped, even past
   column 75. **Baysick decision:** [M64] p. 34 says text past the 75th column "may be lost";
@@ -1820,7 +2227,11 @@ Examples (field shown between brackets; `·` = space):
 | END or STOP, and writing a file's last output fails (Fifth Edition) | pending-line newline, flush | `CAN'T WRITE FILE IN n` + LF | 1 |
 
 `n` is the line number of the statement being executed (for errors inside a single-line FN
-expression, the calling statement; inside a multi-line DEF body, the body line, §7.10).
+expression, the calling statement; inside a multi-line DEF body, the body line, §7.10; inside a
+subprogram, the subprogram's line, and for an error while a CALL starts an activation —
+`TOO MANY CALLS`, the entry `DIMENSION ERROR`, `OUT OF ROOM` — the CALL line, §7.27). STOP, OUT
+OF DATA, END OF INPUT and every run-time error end the whole program, also inside a subprogram:
+the activations still active are simply abandoned.
 **Baysick decision:** running out of data is the normal way 1964 programs finished ([M64] p. 7:
 "the program is assumed to be done"), so it exits 0, but the message is still written to stderr
 so it is visible; running out of input is treated the same way (§7.15).
@@ -1864,17 +2275,31 @@ The compiler stops at the **first** error, determined in this order:
    array dimensionality conflicts, `FORMULA TOO COMPLEX`, MAT syntax errors of §7.14.2,
    `MISMATCHED STRING OPERATION`, `NESTED DEF`, `ILLEGAL TRANSFER` for GOSUB/RETURN in a body,
    `UNFINISHED DEF` at an END or at a FNEND with an open FOR; Fifth Edition: `TOO MANY FILES`,
-   the FILES syntax errors, `DUPLICATE FUNCTION` for a `DEF FNx` and a `DEF FNx$`).
+   the FILES syntax errors, `DUPLICATE FUNCTION` for a `DEF FNx` and a `DEF FNx$`; Sixth Edition:
+   the SUB, SUBEND and CALL syntax errors, `DUPLICATE SUBPROGRAM`, `NESTED SUB`,
+   `UNFINISHED SUB` at an END or at a SUBEND with an open FOR, `UNFINISHED DEF` at a SUBEND,
+   `ILLEGAL INSTRUCTION` for a SUBEND outside a SUB block, `ILLEGAL VARIABLE` for a DIM of a
+   parameter array).
 3. **Whole program**, in this order: `UNFINISHED DEF` (a DEF still open after the last line;
-   reported at the DEF line); `FOR WITHOUT NEXT`; `NO END INSTRUCTION`; `NO DATA`;
+   reported at the DEF line); `UNFINISHED SUB` (Sixth Edition: a SUB block still open after the
+   last line; reported at the SUB line); `FOR WITHOUT NEXT`; `NO END INSTRUCTION`; `NO DATA`;
    `NO STRING DATA`; `UNDEFINED NUMBER` (first offending reference in ascending line order, a
    line's references left to right); `ILLEGAL TRANSFER` (first jump between a multi-line DEF body
-   and the rest of the program, same order); `UNDEFINED FUNCTION` (first reference in ascending
+   and the rest of the program, or — Sixth Edition — between two program units, same order); `UNDEFINED FUNCTION` (first reference in ascending
    line order, single-line DEF expressions included at their DEF line);
    `INCORRECT NUMBER OF ARGUMENTS` (first call, same order, whose argument count differs from its
    DEF); `MISMATCHED STRING OPERATION` (Fifth Edition, §7.10.1: first call, same order, whose
    kind — `FNx` or `FNx$` — or any argument's kind differs from its DEF); `RECURSIVE FUNCTION` (lowest letter A…Z that can reach itself; reported at its DEF
-   line).
+   line; Sixth Edition: the main program's functions first, then each subprogram's in ascending
+   order of its SUB line, lowest letter first within a unit). Sixth Edition, then:
+   `UNDEFINED SUBPROGRAM` (first CALL, in ascending line order, of a name no SUB has);
+   `INCORRECT NUMBER OF ARGUMENTS` (first CALL, same order, whose argument count differs from
+   its SUB's parameter count); `ARGUMENT MISMATCH` or `MISMATCHED STRING OPERATION` (first CALL,
+   same order, with an argument whose kind differs from its parameter's; its first such argument
+   decides which, §7.27). In the checks of `UNDEFINED NUMBER`, `ILLEGAL TRANSFER`,
+   `UNDEFINED FUNCTION` and the FN argument checks, "ascending line order" runs over all units
+   together (every line has one number in the whole program); `UNDEFINED FUNCTION` means not
+   defined in the unit of the call.
 
 The message is written to **stderr** as exactly `<MESSAGE> IN <n>` + LF, or `<MESSAGE>` + LF for
 messages without a line number, with **no prefix**, and the compiler exits with status **1**
@@ -1885,7 +2310,8 @@ Command-line, file and toolchain problems are not BASIC errors; they are reporte
 
 ## 11. Error messages
 
-Compile-time ("IN n" column says whether a line number is printed):
+Compile-time ("IN n" column says whether a line number is printed). Codes 1–31 and, Sixth Edition,
+57–61 (they follow the run-time codes so that no earlier code changes):
 
 | Code | Message | IN n | Raised when |
 |-----:|---------|:----:|-------------|
@@ -1893,10 +2319,10 @@ Compile-time ("IN n" column says whether a line number is printed):
 | 2 | `ILLEGAL FORMULA` | yes | operand expected but not found; missing `)`; wrong builtin argument count; `NUM(`/`DET(`; `FNA()` |
 | 3 | `ILLEGAL RELATION` | yes | IF without a valid relation after the first expression |
 | 4 | `ILLEGAL LINE NUMBER` | no / yes | bad line number at start of a line (no); jump target with >5 digits (yes) |
-| 5 | `ILLEGAL INSTRUCTION` | yes | statement text starts with no keyword (also an empty statement, §1.5); FNEND outside a DEF |
-| 6 | `ILLEGAL VARIABLE` | yes | variable required but missing/invalid; `X1(…)`, `X1$(…)`; list/table conflict; two subscripts on a string list; bad or repeated DEF parameter; `LET FNA` outside its body |
-| 7 | `INCORRECT FORMAT` | yes | missing `=`, `TO`, `THEN`/`GOTO`, line number, `)` in DEF/DIM; unterminated string; trailing text; > 8 DEF parameters; bad DATA string |
-| 8 | `END IS NOT LAST` | yes | END on a line that is not the highest-numbered |
+| 5 | `ILLEGAL INSTRUCTION` | yes | statement text starts with no keyword (also an empty statement, §1.5); FNEND outside a DEF; Sixth Edition: SUBEND outside a SUB block |
+| 6 | `ILLEGAL VARIABLE` | yes | variable required but missing/invalid; `X1(…)`, `X1$(…)`; list/table conflict; two subscripts on a string list; bad or repeated DEF parameter; `LET FNA` outside its body; Sixth Edition: bad or repeated SUB parameter, DIM of a parameter array |
+| 7 | `INCORRECT FORMAT` | yes | missing `=`, `TO`, `THEN`/`GOTO`, line number, `)` in DEF/DIM; unterminated string; trailing text; > 8 DEF parameters; bad DATA string; Sixth Edition: a missing, empty or unterminated SUB/CALL name, text after it other than `:`, > 16 SUB parameters or CALL arguments |
+| 8 | `END IS NOT LAST` | yes | END on a line that is not the highest-numbered line of the main program |
 | 9 | `NO END INSTRUCTION` | no | program has no END |
 | 10 | `NO DATA` | no | numeric READ/MAT READ target present, no numeric DATA values |
 | 11 | `UNDEFINED FUNCTION` | yes | FN letter never DEFined |
@@ -1904,7 +2330,7 @@ Compile-time ("IN n" column says whether a line number is printed):
 | 13 | `PROGRAM TOO LONG` | no | file > 1 MiB or > 10 000 lines |
 | 14 | `TOO MUCH DATA` | yes | > 100 000 numeric or > 100 000 string DATA values |
 | 15 | `TOO MANY LABELS` | yes | > 65 536 bytes of string constants outside DATA |
-| 16 | `TOO MANY LOOPS` | yes | > 1000 FOR statements |
+| 16 | `TOO MANY LOOPS` | yes | > 1000 FOR statements (in the whole program, all program units together) |
 | 17 | `NOT MATCH WITH FOR` | yes | NEXT with wrong variable or no open FOR (of the same body, §7.8) |
 | 18 | `FOR WITHOUT NEXT` | no | FOR never closed |
 | 19 | `DIMENSION TOO LARGE` | yes | DIM bound > 7 digits or > 1 000 000 elements |
@@ -1913,34 +2339,39 @@ Compile-time ("IN n" column says whether a line number is printed):
 | 22 | `DUPLICATE DIMENSION` | yes | second DIM of a letter (Baysick) |
 | 23 | `RECURSIVE FUNCTION` | yes | FN can reach itself (Baysick) |
 | 24 | `FORMULA TOO COMPLEX` | yes | parenthesis depth > 32 (Baysick) |
-| 25 | `MISMATCHED STRING OPERATION` | yes | a string where a number is required or vice versa (§4.5) ([M68] p. 72) |
+| 25 | `MISMATCHED STRING OPERATION` | yes | a string where a number is required or vice versa (§4.5) ([M68] p. 72); Sixth Edition: also a numeric operand of `&` and a CALL argument of the other kind (§7.27) |
 | 26 | `NO STRING DATA` | no | string READ/MAT READ target present, no string DATA values ([M68] p. 71) |
-| 27 | `INCORRECT NUMBER OF ARGUMENTS` | yes | FN call with a different number of arguments than its DEF ([M68] p. 71) |
-| 28 | `UNFINISHED DEF` | yes | multi-line DEF without FNEND (n = DEF line); FOR open at FNEND (n = FNEND line) ([M68] p. 72) |
+| 27 | `INCORRECT NUMBER OF ARGUMENTS` | yes | FN call with a different number of arguments than its DEF ([M68] p. 71); Sixth Edition: CALL with a different number of arguments than its SUB's parameters |
+| 28 | `UNFINISHED DEF` | yes | multi-line DEF without FNEND (n = DEF line, also at an END or, Sixth Edition, a SUBEND); FOR open at FNEND (n = FNEND line) ([M68] p. 72) |
 | 29 | `NESTED DEF` | yes | DEF inside a multi-line DEF body ([M68] p. 72) |
-| 30 | `ILLEGAL TRANSFER` | yes | GOSUB/RETURN in a multi-line DEF body; a jump into or out of a body (Baysick) |
+| 30 | `ILLEGAL TRANSFER` | yes | GOSUB/RETURN in a multi-line DEF body; a jump into or out of a body; Sixth Edition: a jump between program units (Baysick) |
 | 31 | `TOO MANY FILES` | yes | more than 8 FILES names in the program (§7.21) ([G70] p. 86) |
+| 57 | `UNDEFINED SUBPROGRAM` | yes | CALL of a name no SUB has (§7.27) (Baysick) |
+| 58 | `DUPLICATE SUBPROGRAM` | yes | second SUB with the same name (§7.27) (Baysick) |
+| 59 | `NESTED SUB` | yes | SUB inside a SUB block or a multi-line DEF body (§7.27) (Baysick) |
+| 60 | `UNFINISHED SUB` | yes | SUB block without SUBEND (n = SUB line, also at an END); FOR open at SUBEND (n = SUBEND line) (§7.27) (Baysick) |
+| 61 | `ARGUMENT MISMATCH` | yes | CALL with a whole array for a variable parameter or a variable or expression for an array parameter (§7.27) (Baysick) |
 
 Run-time:
 
 | Code | Message | Exit | Raised when |
 |-----:|---------|:----:|-------------|
 | 32 | `SUBSCRIPT ERROR` | 1 | rounded subscript outside `0..bound` |
-| 33 | `ILLEGAL RETURN` | 1 | RETURN with no pending GOSUB |
+| 33 | `ILLEGAL RETURN` | 1 | RETURN with no pending GOSUB (Sixth Edition: of the current activation, §7.9) |
 | 34 | `OUT OF DATA` | 0 | READ with the data block exhausted |
 | 35 | `DIVISION BY ZERO` | 1 | divisor is ±0 (Baysick) |
 | 36 | `ZERO TO A NEGATIVE POWER` | 1 | `0 ^ b`, `b < 0` (Baysick) |
 | 37 | `LOG OF ZERO` | 1 | `LOG(0)` (Baysick) |
 | 38 | `OVERFLOW` | 1 | non-finite arithmetic or builtin result (Baysick) |
 | 39 | `TOO MANY GOSUBS` | 1 | 1025th pending GOSUB (Baysick) |
-| 40 | `DIMENSION ERROR` | 1 | MAT: operands do not conform, a dimension argument below 1, a result or new shape that does not fit the target's storage, a list given more than one column, a matrix with a zero dimension, IDN of a non-square matrix (§7.14; text from [M68] p. 73) |
+| 40 | `DIMENSION ERROR` | 1 | MAT: operands do not conform, a dimension argument below 1, a result or new shape that does not fit the target's storage, a list given more than one column, a matrix with a zero dimension, IDN of a non-square matrix (§7.14; text from [M68] p. 73); Sixth Edition: a list passed for a table parameter or a table for a list parameter (§7.27) |
 | 41 | `SINGULAR MATRIX` | 1 | MAT INV: a pivot not larger than the tolerance (§7.14.6) (Baysick) |
 | 42 | `ON EVALUATED OUT OF RANGE` | 1 | ON: integer part below 1 or above the number of line numbers ([M68] p. 74) |
 | 43 | `END OF INPUT` | 0 | INPUT/MAT INPUT needs a line, stdin is at its end (§7.15) (Baysick) |
-| 44 | `STRING TOO LONG` | 1 | CHANGE list to string with more than 65 536 characters (Baysick) |
+| 44 | `STRING TOO LONG` | 1 | CHANGE list to string with more than 65 536 characters; Sixth Edition: a concatenation `&` longer than 65 536 bytes (§4.6) (Baysick) |
 | 45 | `ILLEGAL CHARACTER` | 1 | CHANGE list to string: a code outside 0–255 (text from [M68] p. 71) |
 | 46 | `INPUT LINE TOO LONG` | 1 | an input line longer than 65 536 bytes (Baysick) |
-| 47 | `OUT OF ROOM` | 1 | string storage could not be allocated ([M68] p. 74) |
+| 47 | `OUT OF ROOM` | 1 | string storage could not be allocated ([M68] p. 74); Sixth Edition: also the storage of a subprogram activation (§7.27) |
 | 48 | `CAN'T OPEN FILE` | 1 | a file cannot be opened for reading (INPUT #, IF END #) or writing (SCRATCH #) (§7.21) ([G70] p. 87) |
 | 49 | `INVALID FILE NUMBER` | 1 | a file designator whose integer part is below 0 or above the number of FILES names (text and meaning: [G70] p. 88); Baysick decision: also `SCRATCH #0`, `RESTORE #0` (§7.21) |
 | 50 | `ILLEGAL FILE COMMAND` | 1 | PRINT # to a file in read mode, INPUT # from a file in write mode (§7.21) ([G70] p. 88) |
@@ -1949,6 +2380,7 @@ Run-time:
 | 53 | `CAN'T WRITE FILE` | 1 | writing a file failed (§7.21, §10) ([G70] p. 87) |
 | 54 | `ILLEGAL 'VAL' ARGUMENT` | 1 | VAL of a string that is not a number (§6.1) ([G70] p. 88) |
 | 55 | `ASC OF EMPTY STRING` | 1 | ASC of the empty string (§6.1) (Baysick) |
+| 56 | `TOO MANY CALLS` | 1 | CALL would start the 1025th active activation, or the active activations' costs would exceed the call budget of 2 097 152 words (§7.27) (Baysick) |
 
 INPUT diagnostics (stderr, no `IN n`, program continues; [M68] p. 74; §7.15):
 `INPUT DATA NOT IN CORRECT FORMAT -- RETYPE IT`, `NOT ENOUGH INPUT -- ADD MORE`,
@@ -1981,11 +2413,11 @@ MAT syntax errors use the existing compile-time messages (§7.14.2); the [M68] m
 | constant | 9 mantissa digits, 2 exponent digits | ILLEGAL CONSTANT |
 | DATA values | 100 000 numeric + 100 000 string | TOO MUCH DATA |
 | string constant bytes outside DATA (total) | 65 536 | TOO MANY LABELS |
-| string length | 65 536 bytes | STRING TOO LONG (CHANGE) |
+| string length | 65 536 bytes | STRING TOO LONG (CHANGE; Sixth Edition: also `&`) |
 | input line (stdin and files) | 65 536 bytes | INPUT LINE TOO LONG |
 | DEF parameters | 8 | INCORRECT FORMAT |
 | character codes | 0–255 | ILLEGAL CHARACTER |
-| FOR statements | 1000 | TOO MANY LOOPS |
+| FOR statements | 1000 in the whole program (all program units) | TOO MANY LOOPS |
 | parenthesis depth | 32 | FORMULA TOO COMPLEX |
 | elements per array | 1 000 000 | DIMENSION TOO LARGE |
 | MAT matrix shape | within the array's storage (§7.14.3); square matrices up to 999 × 999 | DIMENSION ERROR |
@@ -1993,6 +2425,10 @@ MAT syntax errors use the existing compile-time messages (§7.14.2); the [M68] m
 | FILES names (file numbers 1–8; file 0 is the terminal) | 8 (`LIM_FILES`) | TOO MANY FILES |
 | bytes of a FILES name | 255 (`LIM_FILE_NAME`; a 255-byte line holds at most 249) | — (LINE TOO LONG first) |
 | open files at once | the 8 FILES numbers plus standard input and output | — |
+| SUB parameters / CALL arguments | 16 (`LIM_SUB_PARAMS`) | INCORRECT FORMAT |
+| active subprogram activations | 1024 (`LIM_CALL_DEPTH`); summed activation cost 2 097 152 words (`LIM_CALL_WORDS`, §7.27) | TOO MANY CALLS |
+| subprograms | no limit of their own (at most 5 000: each has a SUB and a SUBEND line) | PROGRAM TOO LONG |
+| SUB/CALL name | the bytes between the quotes, at least 1 (a 255-byte line holds at most 249) | — |
 
 The 1964 limits ([M64] Appendix B: 300 data, 26 FORs, 1500 array elements, …) are relaxed
 because they reflected GE-225 core memory, not the language.
@@ -2082,6 +2518,32 @@ decisions too):
     redimensioning by MAT READ, MAT PRINT by rows); a string array named only in MAT READ/PRINT
     stays a list; MAT INPUT stays list-only; no `MAT PRINT #`/`MAT INPUT #`.
 
+Sixth Edition (each where [K81] and [B85] give only the feature's existence and the forms quoted in
+"The Sixth Edition"):
+
+43. Scope: `SEG$`, `POS`, `&`, `CALL`/`SUB`/`SUBEND`; not the run-time `FILE` statement, image
+    formatting, separate compilation and libraries, `CALL A$` (the table under "The Sixth
+    Edition"); `MAT A = A*B` was already legal.
+44. `SEG$(s, m, n)`: positions m through n, rounded like subscripts and clamped to the string,
+    never an error; `POS(s, t [, m])`: first match at or after m (default 1), 0 if none, exact
+    bytes, an empty t matches at m.
+45. `&` joins string expressions left to right, each operand to its value; allowed in every
+    string expression; a result over 65 536 bytes is `STRING TOO LONG`.
+46. Subprograms: quoted names compared exactly; `SUB "s": params` … `SUBEND`, `CALL "s": args`;
+    parameters by reference (variables, elements, whole arrays `L()`/`L$()`, a subprogram's own
+    parameters passed on), every other argument by value through a private cell; at most 16
+    parameters; arguments matched after the whole program (`UNDEFINED SUBPROGRAM`,
+    `INCORRECT NUMBER OF ARGUMENTS`, `ARGUMENT MISMATCH`, `MISMATCHED STRING OPERATION`), list
+    versus table at entry (`DIMENSION ERROR`).
+47. Recursion allowed; every activation starts with fresh variables; at most 1024 activations
+    and a call budget of 2 097 152 words of activation cost, both decided from the program text
+    alone, so identically on every target (`TOO MANY CALLS`).
+48. Each program unit owns its variables, arrays, FOR loops, pending GOSUBs, DEF functions and
+    string temporaries; DATA, files, the terminal, RND, NUM and DET are shared.
+49. SUB blocks may stand anywhere; the main program is every other line, and END must be its last
+    line; `NESTED SUB`, `UNFINISHED SUB`, `DUPLICATE SUBPROGRAM`; jumps between units are
+    `ILLEGAL TRANSFER`; no `SUBEXIT` (`GOTO` the SUBEND line).
+
 ## 14. Edition differences
 
 ### 14.1 Texts that were errors and are now programs
@@ -2121,6 +2583,17 @@ One message moves between phases without changing: a string argument for a numer
 per-statement error (any line) or an earlier whole-program error now reports that error instead.
 No Fifth Edition feature changes the
 meaning of a program that compiled before, so §14.2 has no Fifth Edition rows.
+
+**Sixth Edition.** Every Sixth Edition addition gives meaning to text that was an error: a
+statement starting with `CALL`, `SUB` or `SUBEND` (`ILLEGAL INSTRUCTION`), `&` after a string
+operand (in PRINT: an item cannot start with `&`, `ILLEGAL FORMULA`; elsewhere leftover text,
+`INCORRECT FORMAT`), `SEG$(` (the variable `S` followed by `EG$(`) and `POS(` (the variable `P` followed by `OS(`),
+each an error in every position. The lines of a SUB block after END were
+`END IS NOT LAST` and are now subprograms. No test of the Fifth Edition corpus pins any of these
+texts, so no test is rewritten, and no Sixth Edition feature changes the meaning of a program that
+compiled before (§14.2 has no Sixth Edition rows). Not a meaning change but worth noting: after
+the Sixth Edition a program may contain lines that are not in the main program, which is why §7.3
+now says "the last line of the main program".
 
 ### 14.2 Meanings changed by later editions (Baysick keeps the earlier one)
 

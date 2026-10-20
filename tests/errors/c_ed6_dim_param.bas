@@ -1,0 +1,4 @@
+10 END
+20 SUB "S": L()
+30 DIM L(5)
+40 SUBEND

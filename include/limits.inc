@@ -27,6 +27,7 @@
 .equ LIM_DEFAULT_BOUND,     10        /* default upper bound of each subscript without DIM */
 .equ LIM_FILES,             8         /* max file names in all FILES statements (file numbers 1..8) -> TOO MANY FILES */
 .equ LIM_FILE_NAME,         255       /* max bytes of one FILES name (implied by LIM_PHYS_LINE_LEN) */
+.equ LIM_SUB_PARAMS,        16        /* max SUB parameters / CALL arguments -> INCORRECT FORMAT (Sixth Edition) */
 
 // ---- Language-fixed sizes --------------------------------------------
 .equ NUM_LETTERS,           26
@@ -36,6 +37,8 @@
 
 // ---- Runtime limits ----------------------------------------------------
 .equ LIM_GOSUB_DEPTH,       1024      /* pending GOSUBs -> TOO MANY GOSUBS */
+.equ LIM_CALL_DEPTH,        1024      /* active SUB activations -> TOO MANY CALLS (Sixth Edition) */
+.equ LIM_CALL_WORDS,        2097152   /* summed SUBL_COST of active activations -> TOO MANY CALLS (Sixth Edition) */
 .equ LIM_STRING_LEN,        65536     /* max bytes in a string value -> STRING TOO LONG */
 .equ LIM_INPUT_LINE,        65536     /* max bytes in an input line (excl. CR LF) -> INPUT LINE TOO LONG */
 .equ LIM_CHAR_CODE,         255       /* CHANGE codes are 0..255 -> ILLEGAL CHARACTER */

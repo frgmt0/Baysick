@@ -1,0 +1,60 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=1 strings=1 data=0
+array L dims=1 b1=3
+string s0 "Z"
+func main temps=10 labels=5
+  line 10
+  t0 = const 0x3FF0000000000000 ; 1
+  stv A, t0
+  line 20
+  line 30
+  t1 = vaddr A
+  t2 = const 0x4000000000000000 ; 2
+  t3 = taddr t2
+  t4 = svar B$
+  t5 = aref L
+  subarg 1, t3
+  subarg 2, t4
+  subarg 3, t5
+  callsub "ADD", t1
+  line 40
+  t6 = ldv A
+  prnum t6
+  prsemi
+  t7 = const 0x3FF0000000000000 ; 1
+  t8 = ald1 L, t7
+  prnum t8
+  prsemi
+  t9 = svar B$
+  prsv t9
+  prnl
+  line 50
+  end
+endfunc
+sub "ADD" params=X,Y,S$,L() def=100 subend=140
+unit slots=286 fors=0 funcs=1
+array L param dims=1
+stemps 1
+func SUB temps=9 labels=5
+  line 100
+  line 110
+  t0 = ldv X
+  t1 = ldv Y
+  t2 = add t0, t1
+  stv X, t2
+  line 120
+  t3 = const 0x3FF0000000000000 ; 1
+  t4 = ldv X
+  ast1 L, t3, t4
+  line 130
+  t5 = svar S$
+  t6 = svar S$
+  t7 = scell %s0
+  sset t7, t6
+  t8 = slit s0
+  scat t7, t8
+  sset t5, t7
+  line 140
+  subret
+endfunc
+endsub

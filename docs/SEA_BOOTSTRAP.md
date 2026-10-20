@@ -17,6 +17,15 @@ out after all (row 19: a compiler does not need it), with the other exclusions l
 LANGUAGE.md "The Fifth Edition". The rows of §2 marked "Fifth (implemented)" or
 "**implemented**" below are covered now: rows 3, 4, 8, 10, 11, 13 and 15.
 
+**Update (Sixth Edition):** item 2 of §4 is specified and being implemented (LANGUAGE.md "The
+Sixth Edition", §4.6, §6.2, §7.27; DESIGN.md §2.5): `SEG$`, `POS` and `&` (rows 8, 9) and
+`CALL`/`SUB`/`SUBEND` with parameters by reference, private variables and recursion (rows 13,
+14, 16). Its sources are [K81] §3.6 and the later Dartmouth descriptions cited in LANGUAGE.md §0
+([B85], [B80], [C74]); every detail they leave open is a Baysick decision. Not covered: separate
+compilation and libraries (row 14's second half; a whole program is still one source file), the
+run-time `FILE` statement (row 4 stays covered by `FILES`), and the Baysick extensions of item 3
+(rows 2, 17), which remain the next step.
+
 ## 1. Sources
 
 | Ref | Source |
@@ -70,15 +79,15 @@ Edition as specified in LANGUAGE.md; **(b)** covered by the Fifth or Sixth Editi
 | 5 | Write arbitrary text to the output | (a) | `PRINT A$` writes any bytes (§8); a byte that BASIC cannot type (`"`, control characters) is built with `CHANGE` (§7.19). Lines may exceed 75 columns (never wrapped). Trailing blanks are never written (lazy spaces, §8) — harmless for assembly text |
 | 6 | Character codes of a string, and a string from codes | (a) | `CHANGE` ([M68] p. 67–69; [K81] p. 528: "any conceivable string operation could be carried out by equivalent operations on numbers") |
 | 7 | Compare strings, sort identifiers, symbol tables | (a) | IF with strings (§7.7), string lists (§4.4), numeric lists for hashing via CHANGE codes |
-| 8 | String length, character at position, substring | (a) via CHANGE / (b) | Fourth: `CHANGE A$ TO V` then `V(0)`, `V(i)`. Fifth: `LEN`, `ASC` [K81 p. 529] (**implemented**, LANGUAGE.md §6.1); Sixth: `SEG$`, `POS` [K81 p. 531] |
-| 9 | Concatenation, building output lines | (a) via CHANGE / (b) | Fourth: copy codes into one list, `CHANGE V TO A$` (or print pieces with `;`, §8). Sixth: `&` [K81 p. 531] |
+| 8 | String length, character at position, substring | (a) via CHANGE / (b) | Fourth: `CHANGE A$ TO V` then `V(0)`, `V(i)`. Fifth: `LEN`, `ASC` [K81 p. 529] (**implemented**, LANGUAGE.md §6.1); Sixth: `SEG$`, `POS` [K81 p. 531] (**specified**, LANGUAGE.md §6.2) |
+| 9 | Concatenation, building output lines | (a) via CHANGE / (b) | Fourth: copy codes into one list, `CHANGE V TO A$` (or print pieces with `;`, §8). Sixth: `&` [K81 p. 531] (**specified**, LANGUAGE.md §4.6) |
 | 10 | Number → text (emit constants, labels, offsets) | (a) by arithmetic / (b) | Fourth: digits by `INT` arithmetic + CHANGE. Fifth: `STR$` [K81 p. 529] (BASIC's 6-significant-digit print form: fine for integers below 10⁹, not for exact reals; **implemented**, LANGUAGE.md §6.1) |
 | 11 | Text → number (parse numeric literals) | (a) by arithmetic / (b) | Fourth: CHANGE + digit arithmetic. Fifth: `VAL` [K81 p. 529] (**implemented**: the INPUT number syntax, LANGUAGE.md §6.1) |
 | 12 | Exact IEEE bit patterns of real constants | (a) | Baysick numbers are doubles (§5.4); scaling by powers of two is exact, so a program can extract mantissa and exponent and print hex digits |
-| 13 | Recursive descent parsing, nested scopes | (a), clumsy | GOSUB has a 1024-deep return stack but no locals (§7.9); explicit stacks in lists. Multi-line DEF has local parameters and is non-recursive (§7.10); **Fifth (implemented):** string parameters and string results (§7.10.1); recursive DEF left out |
-| 14 | Procedures with private variables, separate compilation | (b) | Sixth Edition `CALL`/`SUB`/`SUBEND` [K81 p. 530] |
+| 13 | Recursive descent parsing, nested scopes | (a), clumsy | GOSUB has a 1024-deep return stack but no locals (§7.9); explicit stacks in lists. Multi-line DEF has local parameters and is non-recursive (§7.10); **Fifth (implemented):** string parameters and string results (§7.10.1); recursive DEF left out. **Sixth (specified):** recursive `SUB` with private variables per activation (LANGUAGE.md §7.27) |
+| 14 | Procedures with private variables, separate compilation | (b) | Sixth Edition `CALL`/`SUB`/`SUBEND` [K81 p. 530] (**specified**, LANGUAGE.md §7.27; separate compilation left out, LANGUAGE.md "The Sixth Edition") |
 | 15 | Records, 2-D tables of strings (AST nodes, token tables) | (a) / (b) | Fourth: parallel numeric lists/tables and 1-D string lists. Fifth: two-dimensional string arrays [K81 p. 529] (**implemented**, LANGUAGE.md §4.4) |
-| 16 | Program size of a real compiler (thousands of lines) | (a), with limits | Baysick limits (§12): 10 000 lines of ≤ 255 bytes, line numbers ≤ 99999. Fifth `CHAIN`/subprograms and Sixth `SUB` allow splitting [K81 p. 529–530] |
+| 16 | Program size of a real compiler (thousands of lines) | (a), with limits | Baysick limits (§12): 10 000 lines of ≤ 255 bytes, line numbers ≤ 99999. Fifth `CHAIN`/subprograms and Sixth `SUB` allow splitting [K81 p. 529–530] (**specified**: SUB units within one source file, LANGUAGE.md §7.27) |
 | 17 | Report errors on stderr and fail the build with a non-zero exit status | **(c)** | A program's only stderr output and only non-zero exit are BASIC run-time errors (§10). A deliberate run-time error (e.g. `ON 0 GO TO 10`) exits 1 with `ON EVALUATED OUT OF RANGE IN n` — usable as a last resort, not as diagnostics |
 | 18 | Command-line arguments, environment (input file name, options) | **(c)** | No Dartmouth edition has them (programs ran under a time-sharing command system). Use stdin/stdout redirection |
 | 19 | Elapsed time (the workloads time themselves; a compiler does not need it) | (b) | Fifth `TIM`, `CLK$` [K81 p. 529]; **not** in Baysick's Fifth Edition (left out, LANGUAGE.md "The Fifth Edition") |

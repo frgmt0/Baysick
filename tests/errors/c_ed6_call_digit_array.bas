@@ -1,0 +1,4 @@
+10 CALL "S": X1()
+20 END
+30 SUB "S": L()
+40 SUBEND

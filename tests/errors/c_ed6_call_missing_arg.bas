@@ -1,0 +1,4 @@
+10 CALL "S": A,
+20 END
+30 SUB "S": X, Y
+40 SUBEND

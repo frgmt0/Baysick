@@ -95,6 +95,20 @@
 //  _bsk_smat_print accept string tables; _bsk_end and _bsk_err flush the
 //  files written (DESIGN.md 6.8).
 //
+//  Sixth Edition (DESIGN.md 6.9; LANGUAGE.md 4.6, 6.2, 7.27):
+//  _bsk_str_cat(x0=dst SD*, x1=src SD*) dst := dst & src (src may be dst;
+//                                       STRING TOO LONG, OUT OF ROOM)
+//  _bsk_seg(x0=dst SD*, x1=src SD*, d0=first, d1=last)
+//                                       dst := SEG$(src, first, last)
+//  _bsk_pos(x0=a SD*, x1=b SD*, d0=start) -> d0   POS(a, b, start)
+//  _bsk_sub_enter(x0=SUBL*, x1=argument vector) -> x0   new activation
+//                                       block of a SUB (TOO MANY CALLS,
+//                                       DIMENSION ERROR, OUT OF ROOM)
+//  _bsk_sub_leave()                     end the newest activation (SUBEND)
+//  Changed by the Sixth Edition: _bsk_gosub_pop raises ILLEGAL RETURN when
+//  no GOSUB of the current activation is pending; _bsk_err accepts exactly
+//  the codes ERR_FIRST_RUNTIME..ERR_END_RUNTIME-1 (DESIGN.md 6.9).
+//
 //  MAT statements (DESIGN.md 6.5; x0/x1/x2 = RTA descriptors, LANGUAGE.md 7.14):
 //  _bsk_mat_redim1(x0=desc, d0=rows)              shape rows x 1
 //  _bsk_mat_redim2(x0=desc, d0=rows, d1=cols)     shape rows x cols
@@ -165,6 +179,45 @@
 .equ SD_LEN,            8   /* u32  length, 0..LIM_STRING_LEN */
 .equ SD_CAP,            12  /* u32  owned capacity in bytes, 0 = not owned */
 .equ SD_SIZE,           16
+
+// ---- SUB activation layout (SUBL_*), 56 bytes, Sixth Edition --------------
+// One read-only record per SUB unit, emitted by the backend (DESIGN.md
+// 5.3.1, 5.4.6) and passed to _bsk_sub_enter. The runtime allocates a
+// zero-filled block of SUBL_BLOCKSIZE bytes per call (an "activation"), copies
+// the SUBL_NPARAMS argument pointers to SUBL_PARAMOFF, copies the
+// SUBL_NDESC 32-byte RTA templates of SUBL_DESCS to SUBL_DESCOFF and adds
+// the block address to each copy's RTA_DATA (a template's RTA_DATA holds
+// an offset in the block). At _bsk_sub_leave it frees the buffer of every
+// SD record with SD_CAP > 0 among the SUBL_NSD records at SUBL_SDOFF, then
+// the block. SUBL_COST is the activation's cost in 8-byte words, added to
+// the call budget (LIM_CALL_WORDS) while the activation is active.
+.equ SUBL_BLOCKSIZE,    0   /* u32  block size in bytes, a multiple of 16 */
+.equ SUBL_NPARAMS,      4   /* u32  number of parameters 0..LIM_SUB_PARAMS */
+.equ SUBL_PARAMOFF,     8   /* u32  offset of the parameter pointers (8 bytes each) */
+.equ SUBL_SDOFF,        12  /* u32  offset of the owned SD records (16-byte aligned) */
+.equ SUBL_NSD,          16  /* u32  number of owned SD records */
+.equ SUBL_DESCOFF,      20  /* u32  offset of the RTA descriptors (16-byte aligned) */
+.equ SUBL_NDESC,        24  /* u32  number of RTA descriptor templates */
+.equ SUBL_COST,         28  /* u32  activation cost in words (DESIGN.md 5.3.1) */
+.equ SUBL_DESCS,        32  /* ptr  SUBL_NDESC templates of RTA_SIZE bytes (0 when none) */
+.equ SUBL_PDIMS,        40  /* u8[LIM_SUB_PARAMS] SUBD_* per parameter (unused 0) */
+.equ SUBL_RECSIZE,      56
+// SUBL_PDIMS values: what the argument pointer of the parameter must be.
+.equ SUBD_SCALAR,       0   /* a double or an SD record: not checked */
+.equ SUBD_LIST,         1   /* an RTA descriptor with RTA_DIMS 1, else DIMENSION ERROR */
+.equ SUBD_TABLE,        2   /* an RTA descriptor with RTA_DIMS 2, else DIMENSION ERROR */
+.equ SUBD_ANY,          3   /* an RTA descriptor of either kind: not checked */
+// Fixed per-frame overhead of the activation cost (DESIGN.md 5.3.1): a
+// generated function's frame is at most 8*(W+L+V+RT_FRAME_EXTRA_WORDS)
+// bytes on both targets.
+.equ RT_FRAME_EXTRA_WORDS, 6
+// The runtime runs _bsk_program on a stack of its own (DESIGN.md 6.9):
+// RT_PROGRAM_STACK_BYTES of mmap'd memory plus a guard page below it. It
+// holds every activation allowed by LIM_CALL_WORDS (at most
+// 8*LIM_CALL_WORDS bytes of frames) plus RT_STACK_RESERVE_BYTES for the
+// main program's frames and the runtime and libc calls of the deepest frame.
+.equ RT_STACK_RESERVE_BYTES, 8388608      /* 8 MiB */
+.equ RT_PROGRAM_STACK_BYTES, 25165824     /* 24 MiB = 8*LIM_CALL_WORDS + reserve */
 
 // ---- Matrix view (MV_*), 32 bytes: a rows x cols block of doubles ---------------
 // Element (i,j), 0-based within the view, is at MV_DATA + 8*(i*MV_LD + j).

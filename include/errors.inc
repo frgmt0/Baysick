@@ -13,7 +13,7 @@
 .ifndef BSK_ERRORS_INC
 .equ BSK_ERRORS_INC, 1
 
-// ---- Compile-time errors (codes 1..31) --------------------------------
+// ---- Compile-time errors (codes 1..31 and, Sixth Edition, 57..61) ----
 .equ ERR_NONE,                  0
 .equ ERR_ILLEGAL_CONSTANT,      1   /* "ILLEGAL CONSTANT" */
 .equ ERR_ILLEGAL_FORMULA,       2   /* "ILLEGAL FORMULA" */
@@ -49,7 +49,7 @@
 // Fifth Edition compile-time error (LANGUAGE.md 7.21, 11)
 .equ ERR_TOO_MANY_FILES,        31  /* "TOO MANY FILES"         (GE 1970 manual text) */
 
-// ---- Run-time errors (codes 32..55) ------------------------------------
+// ---- Run-time errors (codes 32..56) ------------------------------------
 .equ ERR_SUBSCRIPT,             32  /* "SUBSCRIPT ERROR" */
 .equ ERR_ILLEGAL_RETURN,        33  /* "ILLEGAL RETURN" */
 .equ ERR_OUT_OF_DATA,           34  /* "OUT OF DATA"   (exit status 0, see LANGUAGE.md) */
@@ -76,9 +76,20 @@
 .equ ERR_CANT_WRITE_FILE,       53  /* "CAN'T WRITE FILE"       (file write failure; GE 1970 manual text) */
 .equ ERR_ILLEGAL_VAL,           54  /* "ILLEGAL 'VAL' ARGUMENT" (VAL; GE 1970 manual text) */
 .equ ERR_ASC_EMPTY,             55  /* "ASC OF EMPTY STRING"    (ASC; Baysick addition) */
+// Sixth Edition run-time error (LANGUAGE.md 7.27, 11)
+.equ ERR_TOO_MANY_CALLS,        56  /* "TOO MANY CALLS"         (SUB depth; Baysick addition) */
+// Sixth Edition compile-time errors (LANGUAGE.md 7.27, 10.1, 11). They
+// follow the run-time codes so that no existing code moves; the run-time
+// codes are exactly ERR_FIRST_RUNTIME .. ERR_END_RUNTIME-1.
+.equ ERR_UNDEFINED_SUB,         57  /* "UNDEFINED SUBPROGRAM"   (CALL of a name no SUB has; Baysick addition) */
+.equ ERR_DUPLICATE_SUB,         58  /* "DUPLICATE SUBPROGRAM"   (two SUBs of one name; Baysick addition) */
+.equ ERR_NESTED_SUB,            59  /* "NESTED SUB"             (SUB inside a SUB or DEF body; Baysick addition) */
+.equ ERR_UNFINISHED_SUB,        60  /* "UNFINISHED SUB"         (SUB without SUBEND, FOR open at SUBEND; Baysick addition) */
+.equ ERR_ARG_MISMATCH,          61  /* "ARGUMENT MISMATCH"      (array for scalar or vice versa in a CALL; Baysick addition) */
 
 .equ ERR_FIRST_RUNTIME,         32
-.equ ERR_TABLE_SIZE,            56  /* valid indices 0..55; the unused entry 0 is 0 */
+.equ ERR_END_RUNTIME,           57  /* one past the last run-time code */
+.equ ERR_TABLE_SIZE,            62  /* valid indices 0..61; the unused entry 0 is 0 */
 
 // ---------------------------------------------------------------------
 // BSK_EMIT_ERRMSG_TABLE name
@@ -110,6 +121,8 @@
     .quad \name\()_m44, \name\()_m45, \name\()_m46, \name\()_m47
     .quad \name\()_m48, \name\()_m49, \name\()_m50, \name\()_m51
     .quad \name\()_m52, \name\()_m53, \name\()_m54, \name\()_m55
+    .quad \name\()_m56, \name\()_m57, \name\()_m58, \name\()_m59
+    .quad \name\()_m60, \name\()_m61
 \name\()_m1:  .asciz "ILLEGAL CONSTANT"
 \name\()_m2:  .asciz "ILLEGAL FORMULA"
 \name\()_m3:  .asciz "ILLEGAL RELATION"
@@ -165,6 +178,12 @@
 \name\()_m53: .asciz "CAN'T WRITE FILE"
 \name\()_m54: .asciz "ILLEGAL 'VAL' ARGUMENT"
 \name\()_m55: .asciz "ASC OF EMPTY STRING"
+\name\()_m56: .asciz "TOO MANY CALLS"
+\name\()_m57: .asciz "UNDEFINED SUBPROGRAM"
+\name\()_m58: .asciz "DUPLICATE SUBPROGRAM"
+\name\()_m59: .asciz "NESTED SUB"
+\name\()_m60: .asciz "UNFINISHED SUB"
+\name\()_m61: .asciz "ARGUMENT MISMATCH"
     .p2align 3
 .endm
 

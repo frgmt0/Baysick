@@ -1,0 +1,4 @@
+5 LET A$ = "A" & "B"
+10 PRINT 1
+20 SUBEND
+30 END

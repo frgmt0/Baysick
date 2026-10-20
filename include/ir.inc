@@ -140,7 +140,43 @@
 .equ OP_SCRATCH,    97  /*  A=file number */
 .equ OP_FRESTORE,   98  /*  A=file number: RESTORE # */
 
+// Sixth Edition opcodes (IR.md 3.4). New temp kinds: "nref" (address of a
+// double: OP_VADDR, OP_AADDR1, OP_AADDR2, OP_TADDR), "aref" (address of a
+// numeric array descriptor: OP_AREF) and "saref" (address of a string array
+// descriptor: OP_SAREF); OP_SSEG defines an sref. OP_SSEG allocates a new
+// string temp cell X like OP_SCELL. OP_SUBARG / OP_CALLSUB follow the
+// OP_FNARG / OP_CALLFN rule (IR.md 3.4.2). In a SUB unit (IR.md 2.2),
+// OP_LDV / OP_STV / OP_VADDR of a numeric parameter slot, OP_SVAR of a
+// string parameter slot and every array letter that is an array parameter
+// name the caller's variable (the backend goes through the parameter).
+.equ OP_SCAT,       99  /*  A=destination sref (never a slit), B=source sref: A := A & B */
+.equ OP_SSEG,       100 /*  DST sref, X=new string temp cell, A=source sref, B=first, C=last */
+.equ OP_POS,        101 /*  DST, A=sref searched, B=sref sought, C=start position */
+.equ OP_VADDR,      102 /*  DST nref, X=scalar slot 0..285 */
+.equ OP_AADDR1,     103 /*  DST nref, X=numeric list letter, A=subscript */
+.equ OP_AADDR2,     104 /*  DST nref, X=numeric table letter, A=row, B=column */
+.equ OP_TADDR,      105 /*  DST nref, A=number: address of a cell holding A (the value of a by-value argument) */
+.equ OP_AREF,       106 /*  DST aref, X=numeric array letter */
+.equ OP_SAREF,      107 /*  DST saref, X=string array letter */
+.equ OP_SUBARG,     108 /*  IMM=argument index k 1..LIM_SUB_PARAMS-1, A=reference (right before its callsub) */
+.equ OP_CALLSUB,    109 /*  X=SUB unit index, A=argument 0 reference or IR_NONE */
+.equ OP_SUBRET,     110 /*  - (SUBEND: return from the current SUB) */
+
+// Contract staging switch of the Sixth Edition (DESIGN.md 2.2). 0: the
+// counts and layouts the current (Fifth Edition) modules are built with.
+// 1: the Sixth Edition contract. Build with `make BSK_ED6=1` during the
+// implementation phase; the integration step deletes the switch and keeps
+// only the BSK_ED6_CONTRACT=1 values. Every other constant is
+// unconditional. (Also defined, identically guarded, in tokens.inc.)
+.ifndef BSK_ED6_CONTRACT
+.equ BSK_ED6_CONTRACT, 0
+.endif
+
+.if BSK_ED6_CONTRACT
+.equ OP_COUNT,      111
+.else
 .equ OP_COUNT,      99
+.endif
 
 // ---- Relation codes (u16 IRI_REL, OP_JCMP only; 0 otherwise) ------------
 .equ REL_NONE,      0
@@ -167,6 +203,15 @@
 .equ FUNC_KIND_MAIN,    0
 .equ FUNC_KIND_FN,      1           /* single-line DEF */
 .equ FUNC_KIND_FNML,    2           /* multi-line DEF ... FNEND (LANGUAGE.md 7.10) */
+.equ FUNC_KIND_SUB,     3           /* Sixth Edition: the body of a SUB unit (index 0 of the unit, LANGUAGE.md 7.27) */
+
+// ---- SUB parameter kinds (Sixth Edition; u8 per parameter in IRM_SUBPKINDS) ---
+//   The parameter's IRM_SUBPARAMS entry is a scalar slot (SUBP_NUM), a
+//   string slot (SUBP_STR) or an array letter 0..25 (SUBP_ARR, SUBP_SARR).
+.equ SUBP_NUM,          0           /* numeric variable, by reference (argument temp: nref) */
+.equ SUBP_STR,          1           /* string variable, by reference (argument temp: sref) */
+.equ SUBP_ARR,          2           /* numeric array, by reference (argument temp: aref) */
+.equ SUBP_SARR,         3           /* string array, by reference (argument temp: saref) */
 
 // ---- Function kinds of the Fifth Edition (u32 per function in IRM_FNKINDS) ---
 //   bit k (k = 0..7): parameter k is a string parameter (its IRF_PARAMS entry
@@ -203,13 +248,21 @@
 .equ IRA_DIMS,      0   /* u32 0 = array unused, 1 = list, 2 = table */
 .equ IRA_B1,        4   /* u32 upper bound of first subscript (default 10) */
 .equ IRA_B2,        8   /* u32 upper bound of second subscript (0 for lists) */
-.equ IRA_FLAGS,     12  /* u32 bit 0 = bounds set by a DIM statement */
+.equ IRA_FLAGS,     12  /* u32 bit 0 = bounds set by a DIM statement (IRA_FLAG_DIMMED); bit 1 = SUB parameter (IRA_FLAG_PARAM, Sixth Edition) */
                         // String arrays (IRM_SARRAYS): DIMS 1 = string list,
                         // 2 = string table (Fifth Edition), B2 0 for lists.
                         // B1/B2 are the INITIAL bounds; MAT may change the
                         // run-time shape within (B1+1)*(B2+1) elements.
 .equ IRA_SIZE,      16
 .equ IRA_FLAG_DIMMED, 1
+// Sixth Edition: an array PARAMETER of a SUB unit has IRA_FLAG_PARAM, B1 =
+// B2 = 0 (no storage of its own: it is the caller's array) and DIMS 1 or 2
+// as fixed by the uses that fix any array's kind (LANGUAGE.md 7.11, 7.14.8,
+// 7.19: subscripted uses, MAT INPUT, MAT READ X(e) / X(e,f), CHANGE), or
+// IRA_DIMS_ANY when no use fixes it (only MAT assignments, MAT PRINT, a
+// bare MAT READ name and CALL arguments).
+.equ IRA_FLAG_PARAM,  2
+.equ IRA_DIMS_ANY,    3
 
 // ---- Function record (IRF_*), 96 bytes -----------------------------------
 .equ IRF_PRESENT,   0   /* u32 1 if this function exists */
@@ -229,7 +282,7 @@
 .equ IRF_PARAMS,    64  /* u32[LIM_FN_PARAMS] parameter slots in order; unused entries IR_NONE */
 .equ IRF_SIZE,      96
 
-// ---- Module record (IRM_*), 3624 bytes ------------------------------------
+// ---- Module record (IRM_*), 3624 bytes (3760 with BSK_ED6_CONTRACT) -------
 .equ IRM_NFORS,     0   /* u32 number of FOR statements */
 .equ IRM_NSLOTS,    4   /* u32 = SLOT_FOR_BASE + 2*nfors */
 .equ IRM_NSTRINGS,  8   /* u32 */
@@ -252,7 +305,32 @@
 .equ IRM_CAPFILES,  3504 /* u32 (builder private) */
 .equ IRM_RESERVED5, 3508 /* u32 must be 0 */
 .equ IRM_FNKINDS,   3512 /* 27 x u32, inline: FNK_* bits per function index (0 for main) */
+// Sixth Edition additions (IR.md 2.2). The names are defined at both switch
+// values, but the fields exist only in a 3760-byte module
+// (BSK_ED6_CONTRACT=1). With BSK_ED6_CONTRACT=0 a module is 3624 bytes and
+// no module may read or write these offsets (they lie past its end).
+// A SUB unit is itself a Module record: its own NFORS/NSLOTS, arrays,
+// sarrays, funcs (index 0 = the SUB body, 1+L = FN letter L of the unit),
+// NSTEMPS and FNKINDS; its strings/data/sdata/files fields are 0 (every
+// constant, DATA value and FILES name lives in the main module).
+.equ IRM_NSUBS,     3624 /* u32 main: number of SUB units; unit: 0 */
+.equ IRM_CAPSUBS,   3628 /* u32 (builder private) */
+.equ IRM_SUBS,      3632 /* ptr main: Module*[NSUBS], unit u at entry u (ascending SUB line); unit: 0 */
+.equ IRM_PARENT,    3640 /* ptr unit: the main Module*; main: 0 */
+.equ IRM_UNITIDX,   3648 /* u32 unit: its index u; main: 0 */
+.equ IRM_SUBNPARAMS,3652 /* u32 unit: number of parameters 0..LIM_SUB_PARAMS; main: 0 */
+.equ IRM_SUBLINE,   3656 /* u32 unit: line of its SUB statement; main: 0 */
+.equ IRM_SUBENDLINE,3660 /* u32 unit: line of its SUBEND statement; main: 0 */
+.equ IRM_SUBNAME,   3664 /* ptr unit: the name's bytes (arena copy, no NUL); main: 0 */
+.equ IRM_SUBNAMELEN,3672 /* u32 unit: name length 1..; main: 0 */
+.equ IRM_RESERVED6, 3676 /* u32 must be 0 */
+.equ IRM_SUBPARAMS, 3680 /* u32[LIM_SUB_PARAMS]: per parameter a scalar slot, string slot or array letter; unused IR_NONE */
+.equ IRM_SUBPKINDS, 3744 /* u8[LIM_SUB_PARAMS]: SUBP_* per parameter; unused 0 */
+.if BSK_ED6_CONTRACT
+.equ IRM_SIZE,      3760 /* 3744 + 16 */
+.else
 .equ IRM_SIZE,      3624 /* 3512 + 27*4 = 3620, rounded up to a multiple of 8 */
+.endif
 
 // ---------------------------------------------------------------------------
 // IR builder API (implemented in src/ir/ir_build.s). AAPCS64. All memory
@@ -292,6 +370,29 @@
 //                                          string table: DIMS=2, B1, B2, FLAGS
 //  _ir_set_fnkind(x0=Module*, w1=func index 1..26, w2=FNK_* bits)
 //                                          IRM_FNKINDS[index] := bits
+//
+// Sixth Edition additions (BSK_ED6_CONTRACT layouts; IR.md 2.2, 4.4):
+//  _ir_new_sub(x0=main Module*, x1=name bytes, w2=name length, w3=SUB line)
+//                                        -> x0 = new SUB unit Module*
+//                                          (a zeroed module with NSLOTS=286,
+//                                          PARENT=main, UNITIDX=the old
+//                                          NSUBS, the name copied, SUBLINE;
+//                                          appended to the main IRM_SUBS)
+//  _ir_sub_set(x0=unit Module*, w1=nparams 0..LIM_SUB_PARAMS,
+//              x2=ptr to u32[nparams] slots/letters, x3=ptr to u8[nparams]
+//              SUBP_* kinds, w4=SUBEND line)
+//                                          sets SUBNPARAMS, SUBPARAMS (rest
+//                                          IR_NONE), SUBPKINDS (rest 0) and
+//                                          SUBENDLINE
+//  _ir_set_param_array(x0=unit Module*, w1=letter, w2=dims 1, 2 or
+//              IRA_DIMS_ANY, w3=0 numeric array / 1 string array)
+//                                          IRA entry := DIMS, B1=B2=0,
+//                                          FLAGS=IRA_FLAG_PARAM
+//  Every other builder function takes the Module* the record belongs to:
+//  a unit for _ir_func_begin, _ir_set_array, _ir_set_sarray(2),
+//  _ir_set_fors, _ir_new_stemp, _ir_set_fnkind of the unit's own parts;
+//  always the MAIN module for _ir_add_string, _ir_add_data, _ir_add_sdata
+//  and _ir_add_file (the program-wide pools).
 //
 // IR dumper (src/ir/ir_dump.s):
 //  _ir_dump(x0=Module*, x1=OutBuf*)         appends the canonical text dump

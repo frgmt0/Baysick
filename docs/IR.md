@@ -15,7 +15,10 @@ The IR is a **linear, target-independent three-address code over virtual registe
   temporaries: every string value lives in a variable, an array element, a constant, a DATA item
   or — for the results of the Fifth Edition string functions (`STR$`, `FNx$`) and for string
   arguments — in a static **string temp cell** that the frontend allocates per use (§2.1,
-  §3.3), and an sref names it (§3.2);
+  §3.3), and an sref names it (§3.2); Sixth Edition: `sseg` defines an sref too, and three more
+  kinds of temp hold addresses for the CALL statement (§3.4.1): an **nref** (the address of a
+  double), an **aref** (of a numeric array descriptor) and a **saref** (of a string array
+  descriptor);
 * an instruction reads up to three temps (`A`, `B`, `C`) and writes at most one (`DST`);
 * control flow is explicit jumps to numbered labels; there are no basic-block objects, no SSA
   phi nodes and no implicit fall-through tricks;
@@ -33,14 +36,15 @@ the middle of anything), so φ-placement would add complexity no backend needs.
 **Temp lifetime rule** (backends may rely on it): within a function each temp is written by
 exactly one instruction (static single assignment, without φ), and is read only by instructions
 that come **after** its definition in the linear order and before the next `line` instruction
-that follows the definition. Temps are function-local. A temp may be live across `callfn` and
-`scallfn`. Every temp has a **kind** fixed by its defining opcode — *sref* for `slit`, `svar`,
-`sald1`, `scell`, `sald2`, `sparam`, `sfv`, *number* for every other — and every operand field
-requires one kind (§3, §3.2, §3.3, verifier §6).
+that follows the definition. Temps are function-local. A temp may be live across `callfn`,
+`scallfn` and `callsub`. Every temp has a **kind** fixed by its defining opcode — *sref* for
+`slit`, `svar`, `sald1`, `scell`, `sald2`, `sparam`, `sfv`, `sseg`; *nref* for `vaddr`,
+`aaddr1`, `aaddr2`, `taddr`; *aref* for `aref`; *saref* for `saref`; *number* for every other —
+and every operand field requires one kind (§3, §3.2, §3.3, §3.4, verifier §6).
 
 ## 2. Module structure
 
-A **Module** (`IRM_*`, 3488 bytes; 3624 with the Fifth Edition contract, DESIGN.md §2.2)
+A **Module** (`IRM_*`, 3624 bytes; 3760 with the Sixth Edition contract, DESIGN.md §2.2)
 holds:
 
 | Part | Meaning |
@@ -56,6 +60,7 @@ holds:
 | stemps | Fifth Edition: `NSTEMPS`, the number of string temp cells `%s0 … %s(NSTEMPS−1)` (§2.1) |
 | files | Fifth Edition: `NFILES` (0…8) FILES names `IRS_*` in file-number order (entry 0 = `#1`), bytes as the frontend determined them (LANGUAGE.md §7.21) |
 | fnkinds | Fifth Edition: 27 u32 `FNK_*` words, one per function index: bit k (`FNK_SPARAM0 << k`) = parameter k is a string parameter; `FNK_STRING` = a string function `FNx$`; 0 for `main` and for numeric functions with numeric parameters |
+| subs | Sixth Edition: `NSUBS` pointers to the **SUB units** (§2.2), unit u at entry u, in ascending order of their SUB lines |
 
 A **Function** (`IRF_*`, 96 bytes) holds a linear array of
 instructions, its temp count, a label table (`LABELS[id]` = BASIC line number for a line label,
@@ -66,7 +71,8 @@ form), `DEFLINE` and, for a multi-line function, `ENDLINE` (its FNEND line). In 
 Edition `PARAMS[k]` is a **string slot** (0…285, the `X$` of the parameter) when bit k of the
 function's `fnkinds` word is set, a scalar slot otherwise. `main` has one line
 label per line of the main program (every program line that is not in a multi-line DEF body,
-LANGUAGE.md §7.10) plus internal labels; a multi-line function has one line label per line of
+LANGUAGE.md §7.10, and — Sixth Edition — not in a SUB block, §7.27) plus internal labels; a SUB
+body (§2.2) has one line label per line of its block that is not in a multi-line DEF body; a multi-line function has one line label per line of
 its body plus internal labels; single-line functions have no labels.
 
 ### 2.1 Operand kinds
@@ -87,12 +93,50 @@ its body plus internal labels; single-line functions have no labels.
 | relation | u16 in `IRI_REL` | `eq ne lt le gt ge` |
 | line number | u64 in `IRI_IMM` (`line` op) | decimal |
 | small integer | u64 in `IRI_IMM`: parameter index (`param`, `stparam`, `fnarg`, `sparam`), count (`onsel`), RESTORE variant | decimal / `all num str` |
+| SUB unit | u32 unit index u in `IRI_X` (`callsub`) | the unit's name in quotes, `"SUM"` |
+| string temp cell (new) | u32 in `IRI_X` of `sseg`: a new cell `0..NSTEMPS-1`, as `scell` | `%s<n>` |
 
 Scalar slot of a variable: `letter*11 + (digit+1)`, or `letter*11` for a bare letter
 (`A`=0, `A0`=1, … `A9`=10, `B`=11, …, `Z9`=285). Text name: the letter, followed by the digit if
 any.
 
 Unused operand fields hold `IR_NONE` (0xFFFFFFFF); unused `IRI_REL` and `IRI_IMM` are 0.
+
+### 2.2 SUB units (Sixth Edition)
+
+A subprogram (LANGUAGE.md §7.27) is a **SUB unit**: a Module record of its own, reached from the
+main module's `IRM_SUBS`. A unit has everything a program unit owns — `NFORS`/`NSLOTS` (its FOR
+loops), the 26 `arrays` and `sarrays` entries (its arrays and parameter arrays), the 27 `funcs`
+(index 0 = the SUB body, a function of kind `FUNC_KIND_SUB`; index 1+L = its function FN L),
+`fnkinds` and `NSTEMPS` (its string temp cells) — and the unit fields: `PARENT` (the main
+module), `UNITIDX` (u), `SUBNAME`/`SUBNAMELEN` (the name's bytes), `SUBLINE`, `SUBENDLINE`,
+`SUBNPARAMS` (0…16) and per parameter k `SUBPARAMS[k]` (a scalar slot for `SUBP_NUM`, a string
+slot for `SUBP_STR`, an array letter for `SUBP_ARR` and `SUBP_SARR`) and `SUBPKINDS[k]`. The
+program-wide pools — strings, data, sdata, files — exist only in the main module (a unit's
+`NSTRINGS`, `NDATA`, `NSDATA`, `NFILES` and `NSUBS` are 0): `slit sK` in a unit names string K of
+the main module. In the main module the unit fields are 0.
+
+An **array parameter** `L()` / `L$()` is an entry of the unit's `arrays` / `sarrays` with
+`IRA_FLAG_PARAM`, `B1` = `B2` = 0 and `DIMS` 1 (list), 2 (table) or `IRA_DIMS_ANY` (3). `DIMS` is
+fixed by every use that fixes any array's kind (LANGUAGE.md §7.11, §7.14.8, §7.19, §7.27): a
+subscripted use, MAT INPUT (1), MAT READ with dimensions (1 or 2), CHANGE (1);
+`IRA_DIMS_ANY` remains only when the array appears solely in MAT assignments, MAT PRINT, a MAT
+READ without dimensions and CALL arguments. It has no storage: it names the caller's array.
+
+Inside a unit, the operands that name variables keep their meaning "the variable of the current
+program unit"; when the variable is a **parameter**, it is the caller's variable that the
+parameter is bound to:
+
+* `ldv`/`stv`/`vaddr` X where X is the scalar slot of a `SUBP_NUM` parameter, and the targets of
+  every store that uses them, read and write the caller's double;
+* `svar X$` where X$ is a `SUBP_STR` parameter is the caller's string (variable, element or
+  by-value cell);
+* every opcode field naming a numeric or string array letter that is a parameter array names the
+  caller's array (its descriptor, with the caller's current bounds).
+
+So the frontend lowers a subprogram's statements exactly like the main program's; only the
+backend distinguishes parameters (DESIGN.md §5.3.1). FOR slots (`%limk`, `%stepk`) are always
+the unit's own.
 
 ## 3. Instruction set
 
@@ -146,14 +190,17 @@ Each instruction is a 32-byte record (`IRI_*`). "Run-time line" means the value 
 Placement rules (checked by the verifier, §6). Opcode groups:
 
 * **E** (expression): `const ldv add sub mul div pow neg sin cos tan atn exp abs log sqr int rnd
-  ald1 ald2 callfn fnarg sgn cot num det`, and (Fifth Edition) `len asc val`;
+  ald1 ald2 callfn fnarg sgn cot num det`, and (Fifth Edition) `len asc val`, (Sixth Edition)
+  `pos`;
 * **S** (string reference): `slit svar sald1`, and (Fifth Edition) `scell sald2`;
 * **X** (string expression, Fifth Edition): `sset sstr scallfn` — the operations a string
-  expression or a string argument needs (also inside single-line functions);
+  expression or a string argument needs (also inside single-line functions) — and (Sixth
+  Edition) `scat sseg`;
 * **T** (statement): `line label stv ast1 ast2 jmp jcmp jfor read prnum prstr prcomma prsemi
   prnl stop`, the MAT opcodes 42–54, and `sjcmp prsv prtab sread inbeg innum insv inend
   matinput smatinput smatredim smatread smatprint chgs2n chgn2s onsel restore randomize`, and
-  (Fifth Edition) `fsel jeof scratch frestore`.
+  (Fifth Edition) `fsel jeof scratch frestore`, and (Sixth Edition) `vaddr aaddr1 aaddr2 taddr
+  aref saref subarg callsub` (the CALL statement).
 
 `nop` belongs to no group: it is allowed in every function kind.
 
@@ -162,11 +209,15 @@ Placement rules (checked by the verifier, §6). Opcode groups:
 | `main` | E, S, X, T, `gosub`, `return`, `end` | `end` (END must be the last line) |
 | single-line FN (`FUNC_KIND_FN`) | E, S, X, `param`, `sparam`, and `ret` (numeric) or `sret` (string function) | `ret` / `sret` |
 | multi-line FN (`FUNC_KIND_FNML`) | E, S, X, T, `param`, `stparam`, `sparam`, and `ldfv`, `stfv`, `ret` (numeric) or `sfv`, `sret` (string function) | `ret` / `sret` (its FNEND) |
+| SUB body (`FUNC_KIND_SUB`, Sixth Edition: index 0 of a SUB unit) | E, S, X, T, `gosub`, `return`, `subret` | `subret` (its SUBEND) |
+
+In a SUB unit, the unit's FN functions (indices 1…26) follow the FN rows above. `end` occurs only
+in the main module's `main`, `subret` only in a SUB body.
 
 (Without Fifth Edition features S and X never occur in a single-line function, so the table is the
 Fourth Edition table for every Fourth Edition program.)
 
-Instructions after an unconditional transfer (`jmp`, `return`, `end`, `stop`, `ret`, `sret`) up to the
+Instructions after an unconditional transfer (`jmp`, `return`, `end`, `stop`, `ret`, `sret`, `subret`) up to the
 next label are reachable only through labels, as usual.
 
 ### 3.1 MAT opcodes
@@ -283,8 +334,9 @@ the caller's private cell and never into a caller's variable. A **string functio
 the `scell` the caller names in `scallfn`'s B: the callee receives its address as a hidden
 argument (DESIGN.md §5.3: `x8` on arm64, `%rax` on x86_64), keeps it in local cell NP, `sfv`
 returns it (multi-line), a multi-line string function's prologue sets it to the empty string, and
-`sret A` copies A into it. Because a function is never active twice at once (RECURSIVE FUNCTION,
-LANGUAGE.md §7.10), no string ever needs a stack.
+`sret A` copies A into it. Because a function is active at most once per activation of its
+program unit (RECURSIVE FUNCTION, LANGUAGE.md §7.10; the cells it uses belong to that activation,
+§2.2), no string ever needs a stack.
 
 The `fnarg` rule (§3.2) is unchanged: argument k of a call is `fnarg k` (k ≥ 1) or the
 `callfn`/`scallfn` `A` (k = 0); its temp is a number for a numeric parameter and an sref for a
@@ -301,6 +353,53 @@ print or input opcode without a preceding `fsel` is the Fourth Edition operation
 items of a PRINT # are evaluated before their `fsel` (a function called by an item may print to
 standard output), and nothing can come between the selection and its use.
 
+### 3.4 Sixth Edition opcodes
+
+Opcodes 99–110 (LANGUAGE.md §4.6, §6.2, §7.27). `scat`, `sseg`, `pos` are one runtime call each
+(DESIGN.md §6.9); `vaddr`, `taddr`, `aref`, `saref` only form an address, `aaddr1`/`aaddr2` call
+the subscript routine, `subarg` stores into the argument vector, `callsub` calls a generated
+function, and `subret` ends an activation. Unused fields as in §2.1.
+
+| Op | Fields | Text form | Semantics |
+|----|--------|-----------|-----------|
+| `scat` 99 | A=sref, B=sref | `scat t3, t4` | the string A references := itself followed by the string B references (B may be A); STRING TOO LONG if longer than 65 536 bytes; OUT OF ROOM. A is never a `slit` |
+| `sseg` 100 | DST, X=cell, A=sref, B, C | `t5 = sseg %s2, t1, t3, t4` | string temp cell X := SEG$(string A, B, C) (LANGUAGE.md §6.2); DST := a reference to cell X. Like `scell`, every `sseg` allocates a new cell |
+| `pos` 101 | DST, A=sref, B=sref, C | `t6 = pos t1, t2, t3` | DST := POS(string A, string B, C) (LANGUAGE.md §6.2) |
+| `vaddr` 102 | DST, X=slot | `t7 = vaddr A` | DST := the address of numeric variable X (0…285) of the current program unit — for a numeric parameter of a SUB unit, the address the caller passed |
+| `aaddr1` 103 | DST, X=list, A | `t8 = aaddr1 L, t2` | DST := the address of element A of numeric list X (subscript rule and SUBSCRIPT ERROR as `ald1`) |
+| `aaddr2` 104 | DST, X=table, A, B | `t9 = aaddr2 T, t2, t3` | DST := the address of element (A, B) of numeric table X (as `ald2`) |
+| `taddr` 105 | DST, A | `t10 = taddr t4` | DST := the address of a cell holding the value of number temp A, private to the current statement: the by-value argument of a CALL (§3.4.1) |
+| `aref` 106 | DST, X=array | `t11 = aref L` | DST := a reference to numeric array X of the current program unit (its descriptor; for an array parameter, the caller's) |
+| `saref` 107 | DST, X=string array | `t12 = saref L$` | DST := a reference to string array X (likewise) |
+| `subarg` 108 | IMM=k, A | `subarg 1, t7` | argument k (1…15) of the `callsub` that follows |
+| `callsub` 109 | X=unit, A or none | `callsub "SUM", t5` / `callsub "SUM"` | CALL unit X with argument 0 = A (none: no arguments) and the arguments of the `subarg` instructions right before it (§3.4.1) |
+| `subret` 110 | — | `subret` | SUBEND: end the current activation and return to the CALL |
+
+#### 3.4.1 Calls of SUB units
+
+Every argument of `callsub`/`subarg` is a **reference** whose kind is its parameter's (unit field
+`SUBPKINDS[k]`): an **nref** for `SUBP_NUM`, an **sref** for `SUBP_STR`, an **aref** for
+`SUBP_ARR`, a **saref** for `SUBP_SARR`. By-reference arguments are formed by `vaddr`, `aaddr1`,
+`aaddr2`, `svar`, `sald1`, `sald2`, `aref`, `saref`; a by-value numeric argument by `taddr` of its
+value, a by-value string argument by a `scell` (or `sseg`) holding its value — never a `slit`,
+because the callee may assign its parameter (§4.3 "CALL").
+
+`callsub` starts a new activation of unit X (LANGUAGE.md §7.27, DESIGN.md §6.9: its own zeroed
+variables, its parameters bound to the references, the run-time line saved), runs the unit's SUB
+body from its first instruction and returns when that body executes `subret`, which discards the
+activation and restores the caller's run-time line. A reference stays valid for the whole call:
+`vaddr`/`svar` of the caller's unit name storage of the caller's activation, `aaddr1`/`aaddr2`/
+`sald1`/`sald2` storage elements of an array (array storage never moves), and a `taddr` or
+by-value `scell` is used by no other instruction of the caller while the call runs. Temps of the
+caller are not otherwise changed by the call.
+
+#### 3.4.2 The `subarg` rule
+
+As for `fnarg` (§3.2): a CALL with k arguments (k ≥ 2) is the k − 1 instructions `subarg 1, …`,
+…, `subarg k−1, …`, in this order, **immediately** followed by its `callsub` (A = argument 0);
+a CALL with one argument is `callsub` with A and no `subarg`; with none, `callsub` with A =
+`IR_NONE`. The number of arguments equals the callee's `SUBNPARAMS`.
+
 ## 4. Canonical lowering (frontend → IR)
 
 The frontend must produce **exactly** this IR; `tests/ir/*.ir` depend on it.
@@ -311,17 +410,31 @@ The frontend must produce **exactly** this IR; `tests/ir/*.ir` depend on it.
   program (every line not in a multi-line DEF body) in ascending line order
   (`_ir_new_label(main, line)`); then each multi-line function, in ascending order of its DEF
   line, is created (`_ir_func_begin`, `_ir_func_set`) and gets label ids `0..M-1` for the M lines
-  of its body. Without multi-line DEFs this is exactly the earlier numbering.
+  of its body. Without multi-line DEFs this is exactly the earlier numbering. Sixth Edition: the
+  lines of SUB blocks are not lines of `main`. After `main`'s functions, each SUB unit, in
+  ascending order of its SUB line, is created (`_ir_new_sub`, so unit u is the u-th SUB block);
+  its SUB body (`_ir_func_begin(unit, 0, IR_NONE, SUB line)`, `_ir_func_set(fn, FUNC_KIND_SUB, 0,
+  0, SUBEND line)`) gets label ids `0..M-1` for the M lines of the block that are not in one of
+  its multi-line DEF bodies — the SUB line first, the SUBEND line last — and then each multi-line
+  function of the unit, in ascending order of its DEF line, is created and numbered like those of
+  `main`. All of this happens before any line is lowered. `_ir_sub_set` (parameters) is called
+  when the SUB line is lowered.
 * **Internal labels** are allocated in the function being lowered (`main` or a multi-line
   function) in the order the lowering below requests them, starting after its line labels.
 * **Temps** are allocated per function, starting at 0, at the moment the instruction that
   defines them is emitted. Expressions are lowered in **post-order, left operand first**, one
   instruction per node. There is **no** constant folding, CSE or dead-code removal.
-* **FOR index k** counts FOR statements in ascending line order from 0.
+* **FOR index k** counts FOR statements in ascending line order from 0 — separately in each
+  program unit (`main` with its functions, and each SUB unit with its functions); each unit's
+  `NFORS`/`NSLOTS` is set with `_ir_set_fors` on its own Module. This numbering names the hidden
+  cells; it is independent of the `TOO MANY LOOPS` limit, which the frontend checks against the
+  count of FOR statements in the **whole program**, all units together (LANGUAGE.md §7.8), so
+  the sum of all units' `NFORS` never exceeds 1000.
 * **String ids** count the string constants outside DATA statements (PRINT labels and the
   constants of LET, IF and CHANGE; Fifth Edition: every string constant in a string expression,
   e.g. a function argument, a `LEN`/`ASC`/`VAL` argument, a single-line string DEF's expression
-  at its DEF line, a PRINT # item; never a FILES name) in ascending line order, left to right,
+  at its DEF line, a PRINT # item; never a FILES name, never a SUB or CALL name) over the whole
+  program — all units — in ascending line order, left to right,
   from 0 (no deduplication) — for programs without the new statements, exactly the PRINT literals as
   before. **Data index** likewise for numeric DATA values, **string data index** for string DATA
   values (separately, from 0).
@@ -330,7 +443,9 @@ The frontend must produce **exactly** this IR; `tests/ir/*.ir` depend on it.
   expression is lowered at its DEF line, a multi-line body line by line). Each `scell` emitted by
   the rules below allocates a **new** cell (`_ir_new_stemp`); no cell is shared by two `scell`
   instructions. **File numbers** count the FILES names in ascending line order, left to right,
-  from 1 (`_ir_add_file`).
+  from 1 (`_ir_add_file`). Sixth Edition: `sseg` allocates a new cell exactly like `scell`, and
+  cells are numbered from 0 **per program unit** (the main module's cells for `main` and its
+  functions, each SUB unit's for that unit), in emission order within the unit.
 
 ### 4.2 Expressions (emit order)
 
@@ -355,6 +470,8 @@ The frontend must produce **exactly** this IR; `tests/ir/*.ir` depend on it.
 | `L(i, j)` | i, j, then `tN = ald2 L, ti, tj` |
 | `LEN(s)` / `ASC(s)` / `VAL(s)` | s's string reference tS (below), then `tN = len tS` / `asc` / `val` |
 | parameter k of the enclosing DEF that is a string parameter, in a string position | `tN = sparam` (k = 0) / `tN = sparam k` |
+| `POS(a, b, m)` (Sixth Edition) | a's string reference ta, b's tb, m, then `tN = pos ta, tb, tm` |
+| `POS(a, b)` | ta, tb, then `tm = const 0x3FF0000000000000 ; 1`, then `tN = pos ta, tb, tm` |
 
 String expressions (LANGUAGE.md §4.4, §4.6) are lowered where a statement, function or argument
 needs one; each yields one sref temp, "its string reference":
@@ -369,11 +486,17 @@ needs one; each yields one sref temp, "its string reference":
 | `FNx$` inside the multi-line body of FNx$ (its value variable) | `tN = sfv` |
 | `FNx$` without `(` (a call with no arguments) | `tC = scell %sK`, `scallfn tC, FNx`; the reference is tC |
 | `FNx$(a0, …, ak)` | the arguments as for a call below, then `tC = scell %sK`, then `fnarg 1, ta1`, …, `fnarg k, tak`, then `scallfn tC, FNx, ta0`; the reference is tC |
+| `SEG$(s, m, n)` (Sixth Edition) | s's string reference tS, then m, then n, then `tC = sseg %sK, tS, tm, tn` (a new cell); the reference is tC |
+| `p1 & p2 & … & pk` (k ≥ 2, Sixth Edition) | p1's reference t1; if p1 is a **result expression** (below) its cell is the result cell tC = t1, otherwise `tC = scell %sK` (a new cell), `sset tC, t1`; then for i = 2 … k: pi's reference ti, `scat tC, ti`. The reference is tC |
+
+A **result expression** is a `STR$` call, a `SEG$` call, a string FN call (`FNx$…` outside its own
+body) or a concatenation: its reference is a cell that the lowering above has just allocated
+for it and that nothing else reads or writes, so it may be used (and appended to) directly.
 
 **Arguments of a call** (`FNx(…)` and `FNx$(…)`, Fifth Edition rules; for numeric arguments
 exactly the rows above): the arguments are lowered left to right; a numeric argument is its
-expression's temp; a string argument whose expression is a `STR$` or string FN call is that
-call's result cell; any other string argument (a constant, a variable, an array element, a
+expression's temp; a string argument that is a result expression (a `STR$`, `SEG$` or string FN
+call, or a concatenation) is its result cell; any other string argument (a constant, a variable, an array element, a
 string parameter or a value variable) is lowered to its reference tR and then **copied into a
 new cell** right away: `tC = scell %sK`, `sset tC, tR`; the argument is tC. So `FNA(X, B$)` is
 `tX = ldv X`, `tB = svar B$`, `tC = scell %s0`, `sset tC, tB`, `fnarg 1, tC`, `tN = callfn FNA,
@@ -435,8 +558,31 @@ it — then, into the same function:
 | `IF END #e THEN n` (also `GOTO`) | e; `jeof te, @n` |
 | `PRINT #e` [`,` items] | e (→ tF); then exactly the PRINT lowering of the items (above), except that every emitted `prnum prstr prsv prtab prcomma prsemi prnl` is immediately preceded by `fsel tF` (the item's value — its expression or string reference — is lowered before the `fsel`). `PRINT #e` alone: e; `fsel tF`; `prnl` |
 | `INPUT #e, x1, …` | e (→ tF); `fsel tF`; `inbeg`; then each target exactly as in INPUT except that every `innum` / `insv` is immediately preceded by `fsel tF` (the subscripts, and for a string variable its `svar`, come before the `fsel`; a string table element uses the cell form above with `fsel tF` before its `insv tC`); after the last target `fsel tF`, `inend` |
+| `SUB "s" [: p…]` (Sixth Edition; the first line of its SUB unit) | nothing (its `line` starts the SUB body; `_ir_sub_set` records the parameters) |
+| `SUBEND` (in its SUB body) | `subret` |
+| `CALL "s"` | `callsub "s"` |
+| `CALL "s": a0, a1, …, ak` | each argument left to right to its reference tRi (below); then `subarg 1, tR1`, …, `subarg k, tRk`; then `callsub "s", tR0` |
 | `FOR v = a TO b [STEP c]` (FOR index k) | see below |
 | `NEXT v` (closing FOR k) | see below |
+
+**CALL arguments** (Sixth Edition; LANGUAGE.md §7.27). The argument's text decides, in this order:
+
+| Argument | Its reference |
+|----------|---------------|
+| `L()` (whole numeric array) | `tR = aref L` |
+| `L$()` (whole string array) | `tR = saref L$` |
+| exactly a simple variable V (a variable of the unit, including a numeric parameter of the SUB unit), not a parameter of an enclosing multi-line DEF | `tR = vaddr V` |
+| exactly a numeric list element `L(i)` / table element `L(i, j)` | i, then `tR = aaddr1 L, ti` / i, j, then `tR = aaddr2 L, ti, tj` |
+| exactly a string variable V$ (including a string parameter of the SUB unit), not a parameter of an enclosing multi-line DEF | `tR = svar V$` |
+| exactly a string list element `L$(i)` / table element `L$(i, j)` | i, then `tR = sald1 L$, ti` / i, j, then `tR = sald2 L$, ti, tj` |
+| any other numeric expression e (a constant, `(V)`, an operator, a function call, a DEF parameter `param k`, a value variable `ldfv`) | e (→ te), then `tR = taddr te` |
+| a string result expression (a `STR$`, `SEG$` or string FN call, or a concatenation) | its result cell: tR = tC |
+| any other string expression (a constant, a DEF string parameter `sparam k`, a value variable `sfv`) | its reference tr, then `tR = scell %sK` (a new cell), `sset tR, tr` |
+
+So `CALL "S": X, A(I), 2*X, B$, "Q"` in `main` is `tX = vaddr X`, `tI = ldv I`, `tA = aaddr1 A,
+tI`, `t2 = const 2`, `tx = ldv X`, `tm = mul t2, tx`, `tV = taddr tm`, `tB = svar B$`, `tq = slit
+s0`, `tC = scell %s0`, `sset tC, tq`, `subarg 1, tA`, `subarg 2, tV`, `subarg 3, tB`, `subarg 4,
+tC`, `callsub "S", tX`.
 
 FOR (allocate internal labels Z, B, X in that order when the FOR is lowered):
 
@@ -495,6 +641,18 @@ function `DEF FNx$(…) = s` lowers s (its string reference tS) followed by `sre
 multi-line string function, FNEND lowers to `line <n>`, `tN = sfv`, `sret tN`. A string parameter
 is read with `sparam k` (every occurrence emits a new `sparam`), its value variable with `sfv`.
 
+**SUB units** (Sixth Edition). The lines of a SUB block are lowered, in ascending order, into its
+unit: the SUB line and every line not in a multi-line DEF body of the block into the SUB body
+(index 0), with exactly the statement rules of §4.3 — variables, arrays, FOR slots, string cells
+and FN calls of the unit, labels of the SUB body; the SUB line emits only its `line`, and the
+SUBEND line `line <n>`, `subret`. A DEF in the block creates function 1+x **of the unit**
+(`_ir_func_begin(unit, 1+x, …)`, `_ir_set_fnkind(unit, …)`) and is lowered as in `main`; a
+multi-line DEF header in the body lowers to `line <n>`, `jmp @m` with m the first line of the SUB
+body after its FNEND (it exists: the SUBEND line is in the body). After the whole program, the
+unit's arrays are entered like `main`'s (`_ir_set_array`, `_ir_set_sarray`, `_ir_set_sarray2` on
+the unit, with the main program's defaults), and each parameter array with
+`_ir_set_param_array(unit, letter, dims, kind)`, dims 1, 2 or `IRA_DIMS_ANY`.
+
 ## 5. Text dump format (`--emit-ir`)
 
 The dump is ASCII, every line terminated by LF, no trailing spaces, no tabs. Grammar (literal
@@ -502,13 +660,22 @@ text in quotes, `SP` = one space):
 
 ```
 dump      := header module-line array-line* sarray-line* string-line* data-line* sdata-line*
-             [ stemps-line ] file-line* function+
+             [ stemps-line ] file-line* function+ unit*
 header    := "; baysick-ir 1" LF
 module-line := "module slots=" U " fors=" U " funcs=" U " strings=" U " data=" U LF
 array-line  := "array " LETTER " dims=1 b1=" U LF
              | "array " LETTER " dims=2 b1=" U " b2=" U LF          (letters A..Z, used arrays only)
+             | "array " LETTER " param dims=" PDIMS LF              (array parameter of a SUB unit)
 sarray-line := "sarray " LETTER " dims=1 b1=" U LF                   (string arrays A$..Z$ in letter order, used ones only)
              | "sarray " LETTER " dims=2 b1=" U " b2=" U LF          (string table, Fifth Edition)
+             | "sarray " LETTER " param dims=" PDIMS LF             (string array parameter of a SUB unit)
+PDIMS       := "1" | "2" | "any"
+unit        := sub-line unit-line array-line* sarray-line* [ stemps-line ] function+ "endsub" LF
+sub-line    := "sub " NAME " params=" SPLIST " def=" U " subend=" U LF  (Sixth Edition, units in index order)
+unit-line   := "unit slots=" U " fors=" U " funcs=" U LF
+NAME        := '"' BYTES '"'                                           (the name's raw bytes)
+SPLIST      := "-" | SPVAR { "," SPVAR }
+SPVAR       := VAR | VAR "$" | LETTER "()" | LETTER "$()"           (SUBP_NUM, SUBP_STR, SUBP_ARR, SUBP_SARR)
 string-line := "string s" U SP '"' BYTES '"' LF                       (raw bytes of the literal)
 data-line   := "data d" U SP HEX " ; " G17 LF
 sdata-line  := "sdata d" U SP '"' BYTES '"' LF                         (raw bytes of the string DATA value)
@@ -520,6 +687,7 @@ func-head := "func main temps=" U " labels=" U LF
            | "func " FNAME " params=" PLIST " temps=" U " labels=" U LF       (single-line, 0 or 2..8 parameters)
            | "func " FNAME " params=" PLIST " def=" U " fnend=" U
              " temps=" U " labels=" U LF                                        (multi-line, any count)
+           | "func SUB temps=" U " labels=" U LF                               (SUB body, Sixth Edition)
 FNAME := "FN" LETTER [ "$" ]                                           ("$": a string function, FNK_STRING)
 PLIST := "-" | PVAR { "," PVAR }                                       ("-" = no parameters)
 PVAR  := VAR [ "$" ]                                                   ("$": a string parameter)
@@ -530,7 +698,14 @@ G17 := the value formatted exactly as C printf("%.17g")
 ```
 
 * `funcs=` counts present functions (main + defined FNs). Functions are dumped `main` first, then
-  FNA…FNZ in letter order, skipping absent ones.
+  FNA…FNZ in letter order, skipping absent ones. Sixth Edition: then each SUB unit, unit 0 first:
+  its `sub` and `unit` lines (`funcs=` counts the SUB body and the unit's FNs; `slots=` and
+  `fors=` are the unit's), its arrays and string arrays in letter order (a parameter array with
+  the `param` form), its `stemps` line if its `NSTEMPS > 0`, its SUB body (`func SUB`) and its FN
+  functions in letter order, then `endsub`. A dump of a program without SUB blocks has no unit
+  section, and with no Sixth Edition feature at all it is byte-identical to the Fifth Edition
+  format. The text forms of the §3.4 opcodes are in its table; `callsub` names the unit by its
+  quoted name. See `tests/ir/ed6_*.ir`.
 * `const` lines end with `" ; " G17` like data lines.
 * MAT opcodes print as in §3 (`matprint A, zoned`, `matscale C, t3, A`, …); see
   `tests/ir/mat_ops.ir` for every form. The §3.2 opcodes print as in their table; see
@@ -657,6 +832,43 @@ internal error (exit 4). Checks:
      and the verifier does not check them — the `fnkinds` word of an absent function (0: only a
      DEFined function gets one), and that no cell is shared by two `scell` instructions (§4.1).
 
+9. Sixth Edition:
+   * Every check above applies to each SUB unit as to the main module, with the unit's own
+     `NSLOTS`, arrays, sarrays, functions, `fnkinds` and `NSTEMPS`, and the main module's string
+     table (`slit`, `prstr` ids `< NSTRINGS` of the main module). The main module: unit fields 0,
+     each `IRM_SUBS[u]` non-null. Each unit: `PARENT` = the main module, `UNITIDX` = u, `NSUBS`,
+     `NSTRINGS`, `NDATA`, `NSDATA`, `NFILES` 0, `SUBNAMELEN ≥ 1`, `SUBLINE < SUBENDLINE`,
+     `SUBNPARAMS ≤ LIM_SUB_PARAMS`, `SUBPKINDS[k] ≤ SUBP_SARR`; `SUBPARAMS[k]` `< 286` for
+     `SUBP_NUM`/`SUBP_STR`, a letter `< 26` whose `arrays` (`SUBP_ARR`) or `sarrays`
+     (`SUBP_SARR`) entry has `IRA_FLAG_PARAM`; no two parameters equal (same kind and number);
+     every entry with `IRA_FLAG_PARAM` is a parameter, has `B1` = `B2` = 0 and `DIMS` 1, 2 or
+     `IRA_DIMS_ANY`; entries without the flag never have `DIMS` 3, and the flag never occurs in
+     the main module. `funcs[0]` is present with `KIND` = `FUNC_KIND_SUB`, `NPARAMS` 0,
+     `DEFLINE` = `SUBLINE`, `ENDLINE` = `SUBENDLINE`, `fnkinds[0]` = 0; the units' functions 1…26
+     are FN kinds; `FUNC_KIND_SUB` never occurs elsewhere.
+   * Placement (§3): the SUB body ends with `subret`; `subret` only in a SUB body; `end` only in
+     the main module's `main`.
+   * Kinds: `vaddr` X `< 286`; `aaddr1` X a numeric array with `DIMS` 1, `aaddr2` with `DIMS` 2
+     (parameter arrays included); `ald1`/`ast1`/`ald2`/`ast2`/`sald1`/`sald2` and the element
+     forms likewise accept parameter arrays of the right `DIMS`; the MAT opcodes accept `DIMS` 1, 2
+     and `IRA_DIMS_ANY` (`matredim`, `matread`, `smatread`, `matprint`, `smatprint`, the MAT
+     assignments); `matinput`, `chgs2n`, `chgn2s`, `smatinput` need `DIMS` 1, `smatredim` `DIMS` 1
+     without B and 2 with B — for parameter arrays exactly as for other arrays, so a parameter
+     array used by one of them never has `IRA_DIMS_ANY` (LANGUAGE.md §7.27); `aref` X a
+     numeric array and `saref` X a string array with `DIMS ≠ 0`; `taddr` A a number temp;
+     `scat` A and B srefs, A never defined by `slit`; `sseg` X `< NSTEMPS` of its unit, A an sref,
+     B and C numbers; `pos` A and B srefs, C a number. Rule 6's storage limit concerns only
+     entries without `IRA_FLAG_PARAM`.
+   * `subarg` instructions are consecutive, numbered 1, 2, … (IMM `< LIM_SUB_PARAMS`) and
+     immediately followed by a `callsub`; `callsub` X `< NSUBS` of the main module; the number of
+     arguments equals the callee's `SUBNPARAMS`; argument k's temp kind is nref / sref / aref /
+     saref exactly for `SUBP_NUM` / `SUBP_STR` / `SUBP_ARR` / `SUBP_SARR` of the callee, and an
+     sref argument is never defined by `slit`; for an aref or saref argument whose callee
+     parameter has `DIMS` 1 or 2 nothing more is checked (the runtime checks at entry, LANGUAGE.md
+     §7.27).
+   * Not checked (guaranteed by the frontend): that no cell is allocated by two instructions
+     (`scell`, `sseg`), and that a `taddr` temp is not read after its `callsub`.
+
 ## 7. Writing a new backend
 
 A backend translates one Module into one assembly text file (see `docs/DESIGN.md` §Backend
@@ -688,6 +900,17 @@ interface for the descriptor and §Runtime ABI for the calls). A minimal, correc
    for string parameters and string functions the register convention of DESIGN.md §5.3
    (string argument k in the k-th integer argument register, the result descriptor's address in
    a hidden register).
+
+8. The §3.4 opcodes (Sixth Edition): `scat`, `sseg`, `pos` are runtime calls (DESIGN.md §6.9).
+   A CALL passes the addresses of its arguments in an **argument vector** in the caller's frame
+   and calls the unit's SUB body, whose prologue asks the runtime for an activation block
+   (`_bsk_sub_enter`) and keeps its address in the globals base register, so that the unit's
+   variables are addressed exactly like `main`'s globals but relative to the block; parameters
+   are reached through the pointers the runtime copied into the block; `subret` calls
+   `_bsk_sub_leave`. The block layout, the `SUBL_*` record and the unit's **cost** (`SUBL_COST`:
+   block words + the SUB body's frame words + its longest FN chain, computed from the IR exactly
+   as specified there, so every backend emits the same number and `TOO MANY CALLS` happens at
+   the same point on every target) are in DESIGN.md §5.3.1.
 
 Nothing else is needed; all language rules live in the runtime or are explicit opcodes.
 

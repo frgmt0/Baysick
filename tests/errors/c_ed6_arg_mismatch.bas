@@ -1,0 +1,5 @@
+10 DIM L(3)
+20 CALL "S": L()
+30 END
+40 SUB "S": X
+50 SUBEND

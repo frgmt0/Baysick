@@ -1,0 +1,6 @@
+10 DIM T(2, 2)
+20 CALL "S": T()
+30 END
+40 SUB "S": L()
+50 PRINT L(1)
+60 SUBEND

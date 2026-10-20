@@ -1,0 +1,8 @@
+C = 1    I = 0
+C = 1    I = 0
+LOWER
+UPPER
+SPACE
+IN SUB GOSUB 42
+BACK IN MAIN 101
+ 1     2     3

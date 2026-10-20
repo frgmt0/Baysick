@@ -1,0 +1,2 @@
+10 LET X = POS(A$)
+20 END

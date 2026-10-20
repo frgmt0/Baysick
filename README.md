@@ -63,6 +63,11 @@ two-dimensional string arrays. Specified in `docs/LANGUAGE.md` ("The Fifth Editi
 §6.8, §8.5). Its tests are `tests/programs/ed5_*`, `manual5_*`, `tests/errors/c_ed5_*`,
 `r_ed5_*` and `tests/ir/ed5_*`.
 
+Sixth Edition (1971): specified, being implemented — `SEG$`, `POS`, `&` and `CALL`/`SUB`/`SUBEND`
+subprograms (`docs/LANGUAGE.md` "The Sixth Edition", §6.2, §7.27; work packages `docs/DESIGN.md`
+§2.5; tests `ed6_*`, `manual6_*`, `c_ed6_*`, `r_ed6_*`, `tests/ir/ed6_*`, expected to fail until
+then).
+
 ## Documents
 
 * `docs/LANGUAGE.md` — normative language spec (statements, MAT, number format, errors,

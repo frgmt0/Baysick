@@ -1,0 +1,2 @@
+10 CALL "NOPE"
+20 END

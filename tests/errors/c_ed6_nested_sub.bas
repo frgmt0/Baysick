@@ -1,0 +1,4 @@
+10 END
+20 SUB "A"
+30 SUB "B"
+40 SUBEND

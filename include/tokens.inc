@@ -18,8 +18,19 @@
 // FNx$) and TK_BUILTIN for LEN ASC VAL STR$ (BI_LEN..BI_STR); `#` after
 // PRINT, INPUT, IF END, SCRATCH, RESTORE is read by the statement parsers.
 // =====================================================================
+// Sixth Edition: operator mode also yields TK_AMP ('&', string
+// concatenation, only after a string operand); operand mode yields
+// TK_BUILTIN for SEG$ and POS (BI_SEG, BI_POS); statements CALL, SUBEND,
+// SUB (KW_CALL..KW_SUB; SUBEND is tested before SUB).
+// =====================================================================
 .ifndef BSK_TOKENS_INC
 .equ BSK_TOKENS_INC, 1
+
+// Contract staging switch of the Sixth Edition (DESIGN.md 2.2): selects
+// TK_COUNT, BI_COUNT and KW_COUNT below. Defined identically in ir.inc.
+.ifndef BSK_ED6_CONTRACT
+.equ BSK_ED6_CONTRACT, 0
+.endif
 
 // ---- Scanner modes ----------------------------------------------------
 .equ SCAN_OPERAND,      0
@@ -61,7 +72,13 @@
 .equ TK_SFN,            30  /* FNx$ immediately followed by '('; TOK_INDEX = 0..25 ('(' consumed) */
 .equ TK_SFN0,           31  /* FNx$ NOT followed by '('; TOK_INDEX = 0..25 */
 
+.equ TK_AMP,            32  /* Sixth Edition: '&' (operator mode, after a string operand only; LANGUAGE.md 4.6) */
+
+.if BSK_ED6_CONTRACT
+.equ TK_COUNT,          33
+.else
 .equ TK_COUNT,          32
+.endif
 
 // ---- Token record (filled by the scanner), 40 bytes --------------------
 .equ TOK_KIND,          0   /* u32 TK_* */
@@ -92,7 +109,13 @@
 .equ BI_ASC,            15  /* Fifth Edition: ASC(string expression), numeric value */
 .equ BI_VAL,            16  /* Fifth Edition: VAL(string expression), numeric value */
 .equ BI_STR,            17  /* Fifth Edition: STR$(expression), STRING value; the scanner consumes "STR$(" */
+.equ BI_SEG,            18  /* Sixth Edition: SEG$(string, first, last), STRING value; the scanner consumes "SEG$(" */
+.equ BI_POS,            19  /* Sixth Edition: POS(string, string [, start]), numeric value */
+.if BSK_ED6_CONTRACT
+.equ BI_COUNT,          20
+.else
 .equ BI_COUNT,          18
+.endif
 
 // ---- Statement keyword ids (matched as prefixes of the compacted text
 //      after the line number, in exactly this order) --------------------
@@ -121,7 +144,15 @@
 .equ KW_FILES,          22  /* Fifth Edition (LANGUAGE.md 7.21) */
 .equ KW_SCRATCH,        23  /* Fifth Edition (7.22) */
 
+.equ KW_CALL,           24  /* Sixth Edition (LANGUAGE.md 7.27) */
+.equ KW_SUBEND,         25  /* Sixth Edition (7.27); tested before SUB, which is a prefix of it */
+.equ KW_SUB,            26  /* Sixth Edition (7.27) */
+
+.if BSK_ED6_CONTRACT
+.equ KW_COUNT,          27
+.else
 .equ KW_COUNT,          24
+.endif
 
 // ---- MAT sub-keywords (after "MAT", in this order) and MAT function ids --
 // "MAT" is followed by READ, PRINT, INPUT (Fourth Edition), or an

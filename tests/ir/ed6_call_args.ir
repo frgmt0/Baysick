@@ -1,0 +1,67 @@
+; baysick-ir 1
+module slots=286 fors=0 funcs=1 strings=1 data=0
+array A dims=1 b1=3
+string s0 "Q"
+stemps 1
+func main temps=11 labels=4
+  line 10
+  line 20
+  t0 = const 0x3FF0000000000000 ; 1
+  stv I, t0
+  line 30
+  t1 = vaddr X
+  t2 = ldv I
+  t3 = aaddr1 A, t2
+  t4 = const 0x4000000000000000 ; 2
+  t5 = ldv X
+  t6 = mul t4, t5
+  t7 = taddr t6
+  t8 = svar B$
+  t9 = slit s0
+  t10 = scell %s0
+  sset t10, t9
+  subarg 1, t3
+  subarg 2, t7
+  subarg 3, t8
+  subarg 4, t10
+  callsub "S", t1
+  line 40
+  end
+endfunc
+sub "S" params=P,Q,R,S$,T$ def=50 subend=80
+unit slots=286 fors=0 funcs=2
+stemps 2
+func SUB temps=13 labels=4
+  line 50
+  line 60
+  line 70
+  t0 = vaddr P
+  t1 = ldv Q
+  t2 = taddr t1
+  t3 = ldv R
+  t4 = callfn FNA, t3
+  t5 = taddr t4
+  t6 = svar S$
+  t7 = scell %s0
+  sset t7, t6
+  t8 = svar T$
+  scat t7, t8
+  t9 = svar T$
+  t10 = const 0x3FF0000000000000 ; 1
+  t11 = const 0x3FF0000000000000 ; 1
+  t12 = sseg %s1, t9, t10, t11
+  subarg 1, t2
+  subarg 2, t5
+  subarg 3, t7
+  subarg 4, t12
+  callsub "S", t0
+  line 80
+  subret
+endfunc
+func FNA param=Y temps=3 labels=0
+  t0 = param
+  t1 = ldv P
+  t2 = add t0, t1
+  ret t2
+endfunc
+endsub
