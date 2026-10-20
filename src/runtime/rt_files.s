@@ -164,8 +164,11 @@ Lrt_files_open:
 
 // ---------------------------------------------------------------------
 // _bsk_fsel -- select the file of the next print or input entry point
-//   (DESIGN.md 6.8): the designator is checked, then the pending
-//   selection _bsk_rt_fsel := k + 1.
+//   (DESIGN.md 6.8, 6.10): k = trunc(x), compared as a double,
+//   FILE_NUM_STDERR (-1) <= k <= _bsk_files_count, else INVALID FILE
+//   NUMBER; then the pending selection _bsk_rt_fsel := k + 2 (0 means
+//   "none", 1 is standard error). The print entry points accept -1;
+//   the input entry points reject it (error 49) when they take it.
 //   Inputs  : d0 = designator value
 //   Outputs : none
 //   Errors  : INVALID FILE NUMBER
@@ -178,12 +181,21 @@ Lrt_files_open:
 _bsk_fsel:
     stp x29, x30, [sp, #-16]!
     mov x29, sp
-    bl Lrt_files_number             // w0 = k
-    add w0, w0, #1                  // 0 means "none"
+    frintz d0, d0                   // k = trunc(x), exact
+    fmov d1, #-1.0                  // FILE_NUM_STDERR
+    fcmp d0, d1
+    mov w0, #(FILE_NUM_STDERR + 2)  // standard error's selection value
+    b.eq 1f                         // k = -1 (a NaN is unordered: no)
+    bl Lrt_files_number             // w0 = k, 0 .. N (else error 49)
+    add w0, w0, #2                  // 0 means "none", 1 standard error
+1:
     adrp x9, _bsk_rt_fsel@PAGE
     str w0, [x9, _bsk_rt_fsel@PAGEOFF]
     ldp x29, x30, [sp], #16
     ret
+.if FILE_NUM_STDERR != -1
+    .error "rt_files.s: _bsk_fsel compares with the constant -1.0"
+.endif
 
 // ---------------------------------------------------------------------
 // _bsk_rt_file_wcheck -- PRINT #k (k >= 1): the file must be in write

@@ -19,16 +19,20 @@
 #   bsk_rt_out_failed       file k: has a write to it failed? (rt_files.s)
 #   bsk_rt_out_finish       file k: newline if col != 0, then flush
 #                           (RESTORE #, termination)
-# Uses: bsk_rt_fsel (the pending file selection) and bsk_rt_file_wcheck
+#   bsk_rt_err_newline      end standard error's pending line (before a
+#                           BASIC message, at termination)
+# Uses: bsk_rt_fsel (the pending file selection: 0 none, k + 1 file k,
+# FILE_NUM_STDERR standard error) and bsk_rt_file_wcheck
 # (rt_files.s), bsk_rt_fmtnum (rt_numfmt.s).
 #
 # Output records. Standard output and each file k (1 .. LIM_FILES) have
 # one output record (OR_* below): the column state `col` / `out`, the
 # output buffer, its fill count and capacity, the file descriptor and a
 # "failed" flag. Record k is .Lrt_print_recs + k * OR_SIZE; record 0 is
-# stdout. The column logic is one set of routines taking a record
-# pointer, so the rules for stdout and for the files cannot drift apart
-# (DESIGN.md 6.8).
+# stdout. Standard error has one more record (.Lrt_print_errrec, fd 2,
+# LANGUAGE.md 15.3, DESIGN.md 6.10). The column logic is one set of
+# routines taking a record pointer, so the rules for stdout, standard
+# error and the files cannot drift apart (DESIGN.md 6.8).
 #
 # Column model (LANGUAGE.md section 8): `col` is the logical column,
 # `out` the number of characters physically written on this line.
@@ -39,7 +43,8 @@
 # writes a full buffer: as soon as a byte makes the fill count equal to
 # the capacity (RT_OUTBUF_SIZE for stdout, RT_FILEBUF_SIZE for a file),
 # the whole buffer is written. Otherwise stdout is written at
-# termination, by the INPUT prompt and diagnostics; a file only at
+# termination, by the INPUT prompt and diagnostics and before every
+# write to standard error; a file only at
 # RESTORE # and at termination (bsk_rt_out_finish).
 #
 # Broken stdout (LANGUAGE.md section 10): if write(2) to fd 1 fails with
@@ -50,6 +55,15 @@
 # flag, empties its buffer and remembers that output was lost (exit
 # status 1); while printing it raises CAN'T WRITE FILE, while finishing
 # it is only reported to the caller.
+#
+# Standard error (PRINT #-1) is not buffered between entry points: a
+# print entry point on its record that put at least one byte into its
+# buffer writes the buffer before it returns, and a full buffer is
+# written as soon as it fills. Every write of the standard-error buffer
+# (.Lrt_print_drain) first flushes stdout, so the bytes of both streams
+# appear in program order on a shared file. A failed write to fd 2 drops
+# the bytes and is otherwise ignored (no flag, no error, no status).
+# SIGPIPE keeps the action the process inherited (no handler).
 # =====================================================================
 .include "baysick.inc"
 
@@ -135,10 +149,13 @@ bsk_rt_write_all:
 # .Lrt_print_drain -- write a record's buffered bytes, empty the buffer.
 #   Purpose : once the record has failed (stdout broken) the bytes are
 #             discarded. A failed write sets OR_FAILED; for a file it
-#             also reports failure.
+#             also reports failure. Standard error's record: stdout is
+#             flushed first (this routine on record 0), then the bytes
+#             go to fd 2; a failure there is ignored (never a flag).
 #   Inputs  : %rdi = output record
 #   Outputs : %eax = 1 if a file write failed now, else 0 (a stdout
-#             failure is silent: it only marks stdout broken)
+#             failure is silent: it only marks stdout broken; a
+#             standard-error failure is ignored)
 #   Clobbers: all caller-saved registers
 #   Callee-saved used: %rbx = record, %rbp = frame pointer
 #   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad)
@@ -154,6 +171,9 @@ bsk_rt_write_all:
     movq OR_FILL(%rbx), %rdx        # number of buffered bytes
     testq %rdx, %rdx
     jz 1f                           # nothing to write
+    leaq .Lrt_print_errrec(%rip), %rcx
+    cmpq %rcx, %rbx
+    je .Lrt_print_drain_err         # standard error: its own rules
     movq $0, OR_FILL(%rbx)          # the buffer is empty afterwards
     cmpl $0, OR_FAILED(%rbx)
     jne 1f                          # broken / failed: discard
@@ -173,6 +193,19 @@ bsk_rt_write_all:
     popq %rbx
     popq %rbp
     ret
+.Lrt_print_drain_err:
+    # Standard output's buffered bytes go first (LANGUAGE.md 15.3).
+    leaq .Lrt_print_recs(%rip), %rdi
+    call .Lrt_print_drain           # stdout: a failure only marks it broken
+    # Then every byte of the standard-error buffer, which is emptied
+    # whatever happens: a failed write drops the rest, silently.
+    movl OR_FD(%rbx), %edi          # fd 2
+    movq OR_BUF(%rbx), %rsi
+    movq OR_FILL(%rbx), %rdx
+    movq $0, OR_FILL(%rbx)
+    call bsk_rt_write_all           # result ignored (DESIGN.md 6.10)
+    xorl %eax, %eax                 # never a reported failure
+    jmp 1b
 
 # ---------------------------------------------------------------------
 # .Lrt_print_putc -- append one byte to a record's buffer.
@@ -287,8 +320,10 @@ bsk_rt_write_all:
 # ---------------------------------------------------------------------
 # .Lrt_print_select -- the output record of a print entry point.
 #   Purpose : read the pending file selection (bsk_rt_fsel: 0 = none,
-#             k + 1 = file k) and reset it to none; none or file 0 ->
-#             stdout's record; file k >= 1 -> it must be in write mode
+#             k + 1 = file k, FILE_NUM_STDERR = standard error) and
+#             reset it to none; none or file 0 -> stdout's record;
+#             standard error -> its record (always writable, DESIGN.md
+#             6.10); file k >= 1 -> it must be in write mode
 #             (bsk_rt_file_wcheck: else ILLEGAL FILE COMMAND), then its
 #             record (DESIGN.md 6.8 "Pending selection").
 #   Inputs  : none
@@ -302,6 +337,8 @@ bsk_rt_write_all:
 .Lrt_print_select:
     movl bsk_rt_fsel(%rip), %eax    # pending selection
     movl $0, bsk_rt_fsel(%rip)      # reset on entry, before anything else
+    cmpl $FILE_NUM_STDERR, %eax
+    je 2f                           # standard error: no mode check
     cmpl $1, %eax
     jbe 1f                          # none, or file 0: stdout
     pushq %rbp
@@ -320,6 +357,28 @@ bsk_rt_write_all:
     ret
 1:
     leaq .Lrt_print_recs(%rip), %rax    # record 0: stdout
+    ret
+2:
+    leaq .Lrt_print_errrec(%rip), %rax  # standard error's record
+    ret
+
+# ---------------------------------------------------------------------
+# .Lrt_print_release -- the end of a print entry point that may have
+#   put bytes into its record: standard error's record is written now
+#   (stdout first, .Lrt_print_drain), so it never holds a byte between
+#   two entry-point calls; an empty buffer writes nothing anywhere.
+#   Any other record is left alone (buffered).
+#   Inputs  : %rdi = output record
+#   Outputs : none
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: none
+#   Frame   : none (tail jump; .Lrt_print_drain aligns itself)
+# ---------------------------------------------------------------------
+    .p2align 4
+.Lrt_print_release:
+    leaq .Lrt_print_errrec(%rip), %rax
+    cmpq %rax, %rdi
+    je .Lrt_print_drain             # standard error: write it now
     ret
 
 # ---------------------------------------------------------------------
@@ -357,6 +416,8 @@ bsk_print_str:
     call .Lrt_print_emit
     jmp .Lrt_print_str_loop
 .Lrt_print_str_done:
+    movq %r13, %rdi
+    call .Lrt_print_release         # standard error: written now
     addq $8, %rsp
     popq %r13
     popq %r12
@@ -411,6 +472,8 @@ bsk_print_num:
     call .Lrt_print_emit
     jmp .Lrt_print_num_loop
 .Lrt_print_num_done:
+    movq %r13, %rdi
+    call .Lrt_print_release         # standard error: written now
     addq $RT_NUMBUF + 8, %rsp
     popq %r13
     popq %r12
@@ -427,8 +490,8 @@ bsk_print_num:
 #   Outputs : none
 #   Errors  : ILLEGAL FILE COMMAND, CAN'T WRITE FILE (selected file)
 #   Clobbers: all caller-saved registers
-#   Callee-saved used: %rbp = frame pointer
-#   Frame   : 8 bytes (saved %rbp)
+#   Callee-saved used: %rbx = output record, %rbp = frame pointer
+#   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad)
 # ---------------------------------------------------------------------
     .globl bsk_print_comma
     .type bsk_print_comma, @function
@@ -436,19 +499,26 @@ bsk_print_num:
 bsk_print_comma:
     pushq %rbp
     movq %rsp, %rbp
+    pushq %rbx
+    subq $8, %rsp                   # %rsp = 0 (mod 16)
     call .Lrt_print_select
-    movq %rax, %rdi                 # output record
-    movq OR_COL(%rdi), %rax
+    movq %rax, %rbx                 # output record
+    movq OR_COL(%rbx), %rax
     movl $PRINT_ZONE_WIDTH, %ecx
     xorl %edx, %edx
     divq %rcx                       # %rax = current zone index
     addq $1, %rax                   # next zone
     imulq %rcx, %rax                # its first column
-    movq %rax, OR_COL(%rdi)
+    movq %rax, OR_COL(%rbx)
     cmpq $PRINT_LINE_WIDTH, %rax
-    jb 1f                           # still on this line
-    call .Lrt_print_newline         # %rdi = the record
+    jb 1f                           # still on this line: nothing written
+    movq %rbx, %rdi
+    call .Lrt_print_newline         # the line is full
+    movq %rbx, %rdi
+    call .Lrt_print_release         # standard error: written now
 1:
+    addq $8, %rsp
+    popq %rbx
     popq %rbp
     ret
     .size bsk_print_comma, . - bsk_print_comma
@@ -489,8 +559,8 @@ bsk_print_semi:
 #   Outputs : none
 #   Errors  : ILLEGAL FILE COMMAND, CAN'T WRITE FILE (selected file)
 #   Clobbers: all caller-saved registers
-#   Callee-saved used: %rbp = frame pointer
-#   Frame   : 8 bytes (saved %rbp)
+#   Callee-saved used: %rbx = output record, %rbp = frame pointer
+#   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad)
 # ---------------------------------------------------------------------
     .globl bsk_print_nl
     .type bsk_print_nl, @function
@@ -498,9 +568,16 @@ bsk_print_semi:
 bsk_print_nl:
     pushq %rbp
     movq %rsp, %rbp
+    pushq %rbx
+    subq $8, %rsp                   # %rsp = 0 (mod 16)
     call .Lrt_print_select
-    movq %rax, %rdi                 # output record
+    movq %rax, %rbx                 # output record
+    movq %rbx, %rdi
     call .Lrt_print_newline
+    movq %rbx, %rdi
+    call .Lrt_print_release         # standard error: written now
+    addq $8, %rsp
+    popq %rbx
     popq %rbp
     ret
     .size bsk_print_nl, . - bsk_print_nl
@@ -714,6 +791,46 @@ bsk_rt_finish_output:
     ret
     .size bsk_rt_finish_output, . - bsk_rt_finish_output
 
+# ---------------------------------------------------------------------
+# bsk_rt_err_newline -- end standard error's pending line (DESIGN.md
+#   6.10, LANGUAGE.md 15.3, 15.5 step 3): if its col != 0, an LF is
+#   written to fd 2 (stdout flushed first, as before every write to
+#   standard error; a failure is ignored) and col = out = 0. Called
+#   before every BASIC message (bsk_err, the INPUT and MAT INPUT
+#   diagnostics) and at termination after stdout's flush.
+#   Inputs  : none
+#   Outputs : none
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: %rbx = standard error's record, %rbp = frame
+#             pointer
+#   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad); none when
+#             col = 0
+# ---------------------------------------------------------------------
+    .globl bsk_rt_err_newline
+    .hidden bsk_rt_err_newline
+    .type bsk_rt_err_newline, @function
+    .p2align 4
+bsk_rt_err_newline:
+    leaq .Lrt_print_errrec(%rip), %rax
+    cmpq $0, OR_COL(%rax)
+    jne 1f
+    ret                             # at column 0: nothing pending
+1:
+    pushq %rbp
+    movq %rsp, %rbp
+    pushq %rbx
+    subq $8, %rsp                   # %rsp = 0 (mod 16)
+    movq %rax, %rbx
+    movq %rbx, %rdi
+    call .Lrt_print_newline         # LF into the buffer, col = out = 0
+    movq %rbx, %rdi
+    call .Lrt_print_drain           # stdout first, then the LF to fd 2
+    addq $8, %rsp
+    popq %rbx
+    popq %rbp
+    ret
+    .size bsk_rt_err_newline, . - bsk_rt_err_newline
+
 # RT_PRINT_FREC: %rax = output record of file k (%edi = k, 1 ..
 # LIM_FILES). Clobbers %rax, %rcx.
 .macro RT_PRINT_FREC
@@ -872,7 +989,9 @@ bsk_rt_out_finish:
 #                      stdout (static buffer, fd 1), records 1 ..
 #                      LIM_FILES the files (zero until their first
 #                      SCRATCH)
+#   .Lrt_print_errrec  standard error's output record (fd 2)
 #   .Lrt_print_buf     RT_OUTBUF_SIZE bytes of stdout buffer
+#   .Lrt_print_errbuf  RT_OUTBUF_SIZE bytes of standard-error buffer
 # ---------------------------------------------------------------------
     .data
     .p2align 3
@@ -885,10 +1004,21 @@ bsk_rt_out_finish:
     .long 1                         # OR_FD: stdout
     .long 0                         # OR_FAILED: not broken
     .zero OR_SIZE * LIM_FILES       # files 1 .. LIM_FILES
+.Lrt_print_errrec:                  # standard error (PRINT #-1)
+    .quad 0                         # OR_COL
+    .quad 0                         # OR_OUT
+    .quad 0                         # OR_FILL: empty between entry points
+    .quad .Lrt_print_errbuf         # OR_BUF
+    .quad RT_OUTBUF_SIZE            # OR_CAP
+    .long 2                         # OR_FD: standard error
+    .long 0                         # OR_FAILED: never set (failures ignored)
 
     .bss
     .p2align 4
 .Lrt_print_buf:
+    .zero RT_OUTBUF_SIZE
+    .p2align 4
+.Lrt_print_errbuf:
     .zero RT_OUTBUF_SIZE
 
     .section .note.GNU-stack,"",@progbits

@@ -26,15 +26,22 @@ private variables and recursion (rows 13, 14, 16). The rows of §2 marked "Sixth
 ([B85], [B80], [C74]); every detail they leave open is a Baysick decision. Not covered: separate
 compilation and libraries (row 14's second half; a whole program is still one source file), the
 run-time `FILE` statement (row 4 stays covered by `FILES`), and the Baysick extensions of item 3
-(rows 2, 17), which remain the next step.
+(rows 2, 17), taken next (below).
 
-**Update (Baysick extensions):** item 3 of §4 has been taken as a design: LANGUAGE.md §15 specifies
-three Baysick extensions, outside every edition and labelled so, and DESIGN.md §2.6 splits their
-implementation (status: **specified, being implemented**). Row 2: `LINPUT [#k,] A$` reads the next
-line of standard input or of a file verbatim, and `IF END #k` tests its end (§15.2). Row 17:
+**Update (Baysick extensions):** item 3 of §4 has been taken too: LANGUAGE.md §15 specifies
+three Baysick extensions, outside every edition and labelled so, and Baysick implements them on
+both targets (DESIGN.md §2.6; version 0.6.0). Rows 2 and 17 are covered now; the only uncovered
+needs of §2 are the ones left out on purpose (separate compilation in row 14, row 18, and row
+19, which a compiler does not need). Row 2: `LINPUT [#k,] A$` reads the next line of standard
+input or of a file verbatim, and `IF END #k` tests its end (§15.2). Row 17:
 `PRINT #-1` writes standard error with every PRINT rule (§15.3), and `END e` / `STOP e` end the
 program with exit status e in 0–255 (§15.4). Row 18 stays uncovered on purpose: no command-line
 arguments or environment (§15.1; Sea's driver passes everything on standard input).
+
+**Next:** every item of §4 is done. The next step is not another Baysick edition but the Sea
+language design document (in the `sea/` submodule), to be agreed before any Sea compiler code is
+written; a feature the Sea compiler then turns out to need is added to Baysick the same way as
+these (a later Dartmouth edition where one has it, otherwise a labelled Baysick extension).
 
 ## 1. Sources
 
@@ -84,7 +91,7 @@ Edition as specified in LANGUAGE.md; **(b)** covered by the Fifth or Sixth Editi
 | # | Need | Class | How / where |
 |--:|------|:-----:|-------------|
 | 1 | Read the source one line at a time | (a), limited | `INPUT A$` reads one field of a line (§7.15). See §3: only lines without `,` and `"` and not empty |
-| 2 | Read a line **verbatim** — commas, quotes, `&`, leading blanks, empty lines | **(c)** | INPUT and MAT INPUT always split at commas and interpret quotes ([M68] p. 65); the Fifth/Sixth Edition file INPUT is the same statement on a file ([K81] p. 529). `LINPUT` is unverified ([W]). **Baysick extension (specified, being implemented):** `LINPUT [#k,] A$` with `IF END #k` (LANGUAGE.md §15.2). Not byte-exact in three points: a CR right before an LF is dropped; a program cannot tell whether the last line ended with LF; a line over 65 536 bytes is the fatal `INPUT LINE TOO LONG`. Read with `IF END #0` + `LINPUT #0`, not plain `LINPUT`: plain `LINPUT` at the end of the input ends the program with exit 0 (`END OF INPUT`), so a truncated run could report success, while `LINPUT #0` past the end is `END OF FILE`, exit 1 |
+| 2 | Read a line **verbatim** — commas, quotes, `&`, leading blanks, empty lines | **(c)** | INPUT and MAT INPUT always split at commas and interpret quotes ([M68] p. 65); the Fifth/Sixth Edition file INPUT is the same statement on a file ([K81] p. 529). `LINPUT` is unverified ([W]). **Baysick extension (implemented):** `LINPUT [#k,] A$` with `IF END #k` (LANGUAGE.md §15.2). Not byte-exact in three points: a CR right before an LF is dropped; a program cannot tell whether the last line ended with LF; a line over 65 536 bytes is the fatal `INPUT LINE TOO LONG`. Read with `IF END #0` + `LINPUT #0`, not plain `LINPUT`: plain `LINPUT` at the end of the input ends the program with exit 0 (`END OF INPUT`), so a truncated run could report success, while `LINPUT #0` past the end is `END OF FILE`, exit 1 |
 | 3 | Detect the end of the input and continue running | (b) | Fourth Edition: end of input ends the program (LANGUAGE.md §7.15, `END OF INPUT`, exit 0), so nothing can run after the last line. Fifth Edition: `IF END` on sequential files [K81 p. 529]. **Fifth (implemented):** `IF END #0` / `INPUT #0` read standard input as file 0 and test its end (LANGUAGE.md §7.21, §7.26) |
 | 4 | Several input files (modules, a prelude) / several outputs (assembly + listing) | (b) | Fifth Edition `FILES`/`FILE`, `INPUT #`, `PRINT #` [K81 p. 528–529]; Sixth Edition run-time `FILE` [K81 p. 530; U72 §11.2.3]. **Fifth (implemented):** `FILES` (names fixed at compile time, up to 8), `SCRATCH #`, `RESTORE #`, `PRINT #`, `INPUT #` (LANGUAGE.md §7.21–§7.25); run-time `FILE` stays a Sixth Edition feature |
 | 5 | Write arbitrary text to the output | (a) | `PRINT A$` writes any bytes (§8); a byte that BASIC cannot type (`"`, control characters) is built with `CHANGE` (§7.19). Lines may exceed 75 columns (never wrapped). Trailing blanks are never written (lazy spaces, §8) — harmless for assembly text |
@@ -99,7 +106,7 @@ Edition as specified in LANGUAGE.md; **(b)** covered by the Fifth or Sixth Editi
 | 14 | Procedures with private variables, separate compilation | (b) | Sixth Edition `CALL`/`SUB`/`SUBEND` [K81 p. 530] (**implemented**, LANGUAGE.md §7.27; separate compilation left out, LANGUAGE.md "The Sixth Edition") |
 | 15 | Records, 2-D tables of strings (AST nodes, token tables) | (a) / (b) | Fourth: parallel numeric lists/tables and 1-D string lists. Fifth: two-dimensional string arrays [K81 p. 529] (**implemented**, LANGUAGE.md §4.4) |
 | 16 | Program size of a real compiler (thousands of lines) | (a), with limits | Baysick limits (§12): 10 000 lines of ≤ 255 bytes, line numbers ≤ 99999. Fifth `CHAIN`/subprograms and Sixth `SUB` allow splitting [K81 p. 529–530] (**implemented**: SUB units within one source file, LANGUAGE.md §7.27) |
-| 17 | Report errors on stderr and fail the build with a non-zero exit status | **(c)** | A program's only stderr output and only non-zero exit are BASIC run-time errors (§10). A deliberate run-time error (e.g. `ON 0 GO TO 10`) exits 1 with `ON EVALUATED OUT OF RANGE IN n` — usable as a last resort, not as diagnostics. **Baysick extension (specified, being implemented):** `PRINT #-1` to stderr, `STOP 1` / `END e` (LANGUAGE.md §15.3, §15.4) |
+| 17 | Report errors on stderr and fail the build with a non-zero exit status | **(c)** | A program's only stderr output and only non-zero exit are BASIC run-time errors (§10). A deliberate run-time error (e.g. `ON 0 GO TO 10`) exits 1 with `ON EVALUATED OUT OF RANGE IN n` — usable as a last resort, not as diagnostics. **Baysick extension (implemented):** `PRINT #-1` to stderr, `STOP 1` / `END e` (LANGUAGE.md §15.3, §15.4) |
 | 18 | Command-line arguments, environment (input file name, options) | **(c)** | No Dartmouth edition has them (programs ran under a time-sharing command system). Use stdin/stdout redirection. **Not provided, by decision** (LANGUAGE.md §15.1): Sea's driver passes everything on stdin |
 | 19 | Elapsed time (the workloads time themselves; a compiler does not need it) | (b) | Fifth `TIM`, `CLK$` [K81 p. 529]; **not** in Baysick's Fifth Edition (left out, LANGUAGE.md "The Fifth Edition") |
 | 20 | Unpredictable random seed (not needed by a compiler) | (a) | `RANDOMIZE` (§7.18) |

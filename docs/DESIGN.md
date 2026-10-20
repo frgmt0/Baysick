@@ -255,7 +255,7 @@ sizes, so each contract change was staged behind a temporary assembler switch wh
 were implemented, and the switch was removed at integration in one commit. The integrated
 values:
 
-| Constant | Second Edition (MAT) | Fourth Edition | Fifth Edition | Sixth Edition (current) | Baysick extensions (staged, switch 1) |
+| Constant | Second Edition (MAT) | Fourth Edition | Fifth Edition | Sixth Edition | Baysick extensions (current) |
 |----------|----------------------|----------------|-----------------------------------|--------------------------|--------------------------|
 | `OP_COUNT` | 55 | 85 (`OP_STFV + 1`) | 99 (`OP_FRESTORE + 1`) | 111 (`OP_SUBRET + 1`) | 113 (`OP_EXIT + 1`) |
 | `KW_COUNT` | 16 | 22 (`KW_FNEND + 1`) | 24 (`KW_SCRATCH + 1`) | 27 (`KW_SUB + 1`) | 28 (`KW_LINPUT + 1`) |
@@ -323,34 +323,40 @@ single-unit FN check `_fe_check_fns` it called, now done per unit by `_fe_sub_ch
 `tests/include_asserts.inc` kept the Sixth Edition assertions; `--version` changed (§4.1).
 No earlier test's text became legal (LANGUAGE.md §14.1), so no earlier test was rewritten.
 
-**How the Baysick extensions are staged** (current; LANGUAGE.md §15, §2.6). Exactly as the Sixth
-Edition was: the switch `BSK_EXT_CONTRACT`, defined in `include/ir.inc` and `include/tokens.inc`
-with default 0, selects only `OP_COUNT` (111 → 113) and `KW_COUNT` (27 → 28); `TK_COUNT`,
-`BI_COUNT`, `IRF_SIZE` and `IRM_SIZE` do not change (the extensions add no token, builtin or
-record field). The rest of the extension contract is unconditional from the design commit: the
-opcode values `OP_LINPUT` 111 and `OP_EXIT` 112, `KW_LINPUT` 27, the error code
-`ERR_EXIT_RANGE` 62 with `ERR_EXT_FIRST`, `ERR_EXT_FIRST_RUNTIME` 62, `ERR_EXT_END_RUNTIME` 63 and
-`ERR_TABLE_SIZE` 63 (its message text in `BSK_EMIT_ERRMSG_TABLE`), `FILE_NUM_STDERR` −1,
-`LIM_EXIT_STATUS` 255, and the runtime names in `runtime.inc`. `make BSK_EXT=1` assembles every
-compiler and runtime file with the switch 1, `make check-includes` assembles the include check
-with both values, and the GNU `as` include check is run with both values by hand on Linux
-(`as --64 -I include -I tests --defsym BSK_EXT_CONTRACT=1 tests/include_check_x86_64.s`;
-`Makefile.linux` never sets the switch). While the packages (§2.6) are implemented, plain `make
-test` (switch 0) keeps passing every earlier test (384 on the Mac, 210 cross) and the extension
-corpus fails by design (the expected-failure set of §2.6): each **compiler** module (F, D, B, BX)
-keeps its extension code out of the switch-0 build with `.if BSK_EXT_CONTRACT` blocks. The
-**runtime** code (R, RX) is never under the switch: neither runtime has a table sized by
-`OP_COUNT` or `KW_COUNT`, the new entry points are called only by programs of the switch-1
-compiler, and the changed behaviour of existing entry points (`_bsk_fsel` accepting −1, the
-standard-error newline at termination, code 62 in `_bsk_err`) is invisible to every earlier test
-(none prints to designator −1: `tests/errors/r_ed5_invalid_negative` uses `INPUT #-1`, which
-stays `INVALID FILE NUMBER`). Because the switch-0 compiler already accepts `PRINT #-1` (any formula is a
-designator), the 12 extension tests whose only extension is `PRINT #-1` leave the expected-failure
-set at switch 0 as soon as R (Mac) or RX (cross) is in, the 3 `streams=merged` ones among them once
-T is in too (the list and counts are in §2.6). The switch-1 compiler is cross-tested by building the bundle with
-the switch on (`make clean; make BSK_EXT=1 cross`; the Linux runtime is built as always). The
-design and implementation commits stay local until the integration commit, so CI on the pushed
-branch stays green.
+**How the Baysick extensions were staged** (history; LANGUAGE.md §15, §2.6). Exactly as the Sixth
+Edition was: the switch, defined in `include/ir.inc` and `include/tokens.inc` with default 0,
+selected only `OP_COUNT` (111 → 113) and `KW_COUNT` (27 → 28); `TK_COUNT`, `BI_COUNT`,
+`IRF_SIZE` and `IRM_SIZE` did not change (the extensions add no token, builtin or record field).
+The rest of the extension contract was unconditional from the design commit: the opcode values
+`OP_LINPUT` 111 and `OP_EXIT` 112, `KW_LINPUT` 27, the error code `ERR_EXIT_RANGE` 62 with
+`ERR_EXT_FIRST`, `ERR_EXT_FIRST_RUNTIME` 62, `ERR_EXT_END_RUNTIME` 63 and `ERR_TABLE_SIZE` 63 (its
+message text in `BSK_EMIT_ERRMSG_TABLE`), `FILE_NUM_STDERR` −1, `LIM_EXIT_STATUS` 255, and the
+runtime names in `runtime.inc`. A `make` variable assembled every compiler and runtime file with
+the switch 1, `make check-includes` assembled the include check with both values, and the
+switch-1 GNU `as` include check was run on Linux by hand (`Makefile.linux` never set the
+switch). While the packages (§2.6) were implemented, plain `make test` (switch 0) kept passing
+every earlier test (384 on the Mac, 210 cross) and the extension corpus failed by design (the
+expected-failure set of §2.6): each **compiler** module (F, D, B, BX) kept its extension code out
+of the switch-0 build with `.if` blocks. The **runtime** code (R, RX) was never under the switch:
+neither runtime has a table sized by `OP_COUNT` or `KW_COUNT`, the new entry points were called
+only by programs of the switch-1 compiler, and the changed behaviour of existing entry points
+(`_bsk_fsel` accepting −1, the standard-error newline at termination, code 62 in `_bsk_err`) is
+invisible to every earlier test (none prints to designator −1:
+`tests/errors/r_ed5_invalid_negative` uses `INPUT #-1`, which stays `INVALID FILE NUMBER`).
+Because the switch-0 compiler already accepted `PRINT #-1` (any formula is a designator), the 12
+extension tests whose only extension is `PRINT #-1` left the expected-failure set at switch 0 as
+soon as R (Mac) or RX (cross) was in, the 3 `streams=merged` ones among them once T was in too.
+The switch-1 compiler was cross-tested by building the bundle with the switch on (the Linux
+runtime built as always). The design and implementation commits stayed local until the
+integration commit, so CI on the pushed branch stayed green.
+
+Integration (§2.6 step 2) deleted the switch, its `.if` blocks (among them the one around the
+whole of `fe_ext.s`) and Makefile lines, and the code only the switch-0 build used (END and STOP
+requiring the end of the line, the verifier's input-group mask without `linput`); the order assert
+of `a64_insn.s` now requires `OP_COUNT == OP_EXIT + 1`; `tests/include_asserts.inc` kept the
+switch-1 assertions; `--version` and the help line changed (§4.1). No earlier test's text became
+legal (LANGUAGE.md §14.1), so no earlier test was rewritten. No staging switch is left: every
+count and record size above is a plain constant.
 
 ### 2.3 Third and Fourth Edition work packages
 
@@ -467,11 +473,11 @@ The Sixth Edition tests are `tests/programs/ed6_*`, `tests/programs/manual6_*`,
 ### 2.6 Baysick extensions work packages
 
 LANGUAGE.md §15 (with §3, §7.3, §7.13, §7.15, §7.21, §7.24, §7.26, §8, §10–§14: `LINPUT`,
-`PRINT #-1`, `END e` / `STOP e`) touches every compiler and runtime module and the harness; each
-implementer changes only its own files, and everything is built and tested with the staging
-switch on until integration (§2.2). The contracts are complete in `include/*.inc`, IR.md §3.5,
+`PRINT #-1`, `END e` / `STOP e`) touched every compiler and runtime module and the harness; each
+implementer changed only its own files, and everything was built and tested with the staging
+switch on until integration (§2.2). The contracts were complete in `include/*.inc`, IR.md §3.5,
 §4.3, §5, §6 rule 10, and this document (§5.3, §5.3.1, §5.4.5, §5.4.6, §6.2, §6.4.2, §6.10,
-§8.6), so the packages need no other agreement.
+§8.6), so the packages needed no other agreement.
 
 | Owner | Files | Work |
 |-------|-------|------|
@@ -479,62 +485,64 @@ switch on until integration (§2.2). The contracts are complete in `include/*.in
 | D | `src/ir/`, `src/driver/` | dumper: the text forms `linput tA`, `linput L$, tB`, `exit tA` (IR.md §3.5, §5); verifier: rule 10 (field kinds, element form, `fsel` + `linput`, `exit` in group T as an unconditional transfer); driver: `--version` and the help line at integration (§4.1); pad the dumper's and verifier's opcode tables to `OP_COUNT` at switch 1 (step 0) |
 | B | `src/backend/arm64_macos/` | §5.3: the rows of `linput` (plain and element form; in SUB units with the §5.3.1 `Lsdesc` addressing) and `exit`; pad the dispatch table at switch 1 and rewrite the Sixth Edition order assert of `a64_insn.s` (`OP_COUNT != OP_SUBRET + 1`) so that it holds at both switch values (step 0) |
 | BX | `src/backend/x86_64_linux/` | §5.4.5 and §5.4.6: the same rows for x86_64; pad the dispatch table at switch 1 (step 0) |
-| R | `src/runtime/` (new `rt_ext.s`; changes in `rt_files.s`, `rt_print.s`, `rt_input.s`, `rt_main.s`, `rt_error.s`) | §6.10: `_bsk_linput`, `_bsk_linput_el`, `_bsk_exit`; `_bsk_fsel` accepting −1; the standard-error output record and the print entry points on it (stdout flushed first, written at once); −1 rejected by every input entry point and by `_bsk_linput*` (error 49); termination (§6.10): the standard-error newline in `_bsk_end`, `_bsk_exit`, `_bsk_err` and before the INPUT diagnostics; `_bsk_err` accepting code 62. All unconditional (never under the switch, §2.2) |
+| R | `src/runtime/` (new `rt_ext.s`; changes in `rt_files.s`, `rt_print.s`, `rt_input.s`, `rt_main.s`, `rt_error.s`) | §6.10: `_bsk_linput`, `_bsk_linput_el`, `_bsk_exit`; `_bsk_fsel` accepting −1; the standard-error output record and the print entry points on it (stdout flushed first, written at once); −1 rejected by every input entry point and by `_bsk_linput*` (error 49); termination (§6.10): the standard-error newline in `_bsk_end`, `_bsk_exit`, `_bsk_err` and before the INPUT diagnostics; `_bsk_err` accepting code 62. All of it was unconditional (never under the switch, §2.2) |
 | RX | `src/runtime_x86_64_linux/` (new `rt_ext.s`; the same files) | the x86_64 counterparts (§6.4, §6.10); unconditional, like R |
 | T | `tests/run.sh`, `tests/cross_run.sh` | §8.6: the `streams=` key of a run-phase `.meta` (`merged`, `no-stdout`); `tests/cross_pack.sh` and CI need nothing (the bundle already carries `.meta`) |
 | BENCH | `bench/` | nothing |
 
-**Expected-failure set** (until the packages are in; every other test must keep passing with
-plain `make test` and `make cross`): every test named `ext_*`, `c_ext_*`, `r_ext_*` and
-`tests/ir/ext_*` — on the Mac all of them (`tests/programs/ext_*`, `tests/errors/c_ext_*`,
+**Expected-failure set** (history: until the packages were in; every other test had to keep
+passing with plain `make test` and `make cross`): every test named `ext_*`, `c_ext_*`, `r_ext_*`
+and `tests/ir/ext_*` — on the Mac all of them (`tests/programs/ext_*`, `tests/errors/c_ext_*`,
 `tests/errors/r_ext_*`, `tests/ir/ext_*`), in the cross run the program and run-phase ones
-(compile-phase and IR tests are not cross-run). They fail cleanly today: the switch-0 compiler
-rejects `LINPUT` (`ILLEGAL INSTRUCTION`) and `END e` / `STOP e` (`INCORRECT FORMAT`), so most
-cases fail at their compile step (on the Mac "compile failed", in the cross bundle a
-`.packfail`); the 15 `c_ext_*` cases fail on the compiler's message, the 2 `tests/ir/ext_*` on
-`--emit-ir`, and the 12 cases whose only extension is `PRINT #-1` compile and fail at run time
-with `INVALID FILE NUMBER`. Of these 12, 9 need only the runtime and pass with plain `make test`
-(switch 0) as soon as R (Mac) or RX (cross) is in: `ext_stderr_print`, `ext_stderr_input_diag`,
+(compile-phase and IR tests are not cross-run). They failed cleanly at the design commit: the
+switch-0 compiler rejected `LINPUT` (`ILLEGAL INSTRUCTION`) and `END e` / `STOP e`
+(`INCORRECT FORMAT`), so most cases failed at their compile step (on the Mac "compile failed", in the cross bundle a
+`.packfail`); the 15 `c_ext_*` cases failed on the compiler's message, the 2 `tests/ir/ext_*` on
+`--emit-ir`, and the 12 cases whose only extension is `PRINT #-1` compiled and failed at run time
+with `INVALID FILE NUMBER`. Of these 12, 9 needed only the runtime and passed with plain `make test`
+(switch 0) as soon as R (Mac) or RX (cross) was in: `ext_stderr_print`, `ext_stderr_input_diag`,
 `ext_stderr_wrap`, `ext_stderr_in_file_print`, `r_ext_ifend_stderr`, `r_ext_print_minus2`,
 `r_ext_scratch_stderr`, `r_ext_stderr_error_newline`, `r_ext_restore_stderr`; the other 3
 (`r_ext_stderr_merged`, `r_ext_stderr_error_merged`, `r_ext_stderr_long_merged`, all
-`streams=merged`) pass at switch 0 once R or RX and T are in. Counts at the design commit: on the
+`streams=merged`) passed at switch 0 once R or RX and T were in. Counts at the design commit: on the
 Mac 384 passed and 60 failed (12 `tests/programs/ext_*`, 15 `c_ext_*`, 31 `r_ext_*`, 2
 `tests/ir/ext_*`), cross 210 passed and 43 failed (the 12 programs and the 31 run-phase cases).
-After R and RX the switch-0 failures are 51 on the Mac and 34 cross, after T as well 48 and 31.
+After R and RX the switch-0 failures were 51 on the Mac and 34 cross, after T as well 48 and 31.
 The 5 `streams=` cases (`r_ext_exit_stdout_closed`, `r_ext_end_stdout_closed`: `no-stdout`; the 3
-`merged` ones above) fail until T is in, even with every other package in.
+`merged` ones above) failed until T was in, even with every other package in. At integration
+every test passed: 444 on the Mac, 253 cross. The review then added 19 Mac / 14 cross cases (all passing): 463 on the Mac, 267 cross.
 
-Order:
+Order (history; the packages are implemented and integrated, §2.2):
 
 0. **Step 0 — switch-1 build skeleton (F, D, B, BX, before any feature work).** With the switch 1
-   the build stops at exactly seven table asserts (verified at the design commit with
-   `make -k BSK_EXT=1`): `src/frontend/fe_stmt.s` line 2230 ("the keyword table does not have
+   the build first stopped at exactly seven table asserts (verified at the design commit with
+   `make -k` and the switch 1): `src/frontend/fe_stmt.s` line 2230 ("the keyword table does not have
    KW_COUNT entries") and line 2266 ("the statement handler table does not have KW_COUNT
    entries"); `src/ir/ir_dump.s` line 1305 ("template table does not match OP_COUNT");
    `src/ir/ir_verify.s` line 1627 ("spec table does not match OP_COUNT");
    `src/backend/arm64_macos/a64_insn.s` line 1523 ("dispatch table does not cover OP_COUNT
    opcodes") and line 1532 ("Sixth Edition tables assume opcodes 99..110 in contract order", its
    `OP_COUNT != OP_SUBRET + 1` half); `src/backend/x86_64_linux/x64_insn.s` line 1481 ("dispatch
-   table does not cover OP_COUNT opcodes"). Every runtime file assembles at both values. Each
-   owner first lands a minimal change that makes its module assemble with the switch 1: tables
+   table does not cover OP_COUNT opcodes"). Every runtime file assembled at both values. Each
+   owner first landed a minimal change that made its module assemble with the switch 1: tables
    extended to the counts, opcodes 111–112 mapped to an internal-error entry, `KW_LINPUT` to a
-   handler that reports `ILLEGAL INSTRUCTION` (the switch-0 behaviour), the `a64_insn.s` assert
-   rewritten to hold at both values. After step 0 the switch-1 build passes every test that the
-   switch-0 build passes.
-1. **Feature work.** D, R, RX and T start at once (their contracts are complete and
-   independent; T's change keeps every old test passing because no old `.meta` has a `streams=`
-   line). F needs nothing new from D's builder (the extensions use only existing builder
-   functions), so F starts at once too; B and BX need F's IR end to end (`tests/ir/ext_*` show it)
-   and R's/RX's entry points to link.
-2. **Integration commit** (done by the coordinator after every package has passed its tests with
-   the switch 1): the switch removed as §2.2 describes (the `.if` blocks, the Makefile lines and
-   the switch-0 code deleted; `tests/include_asserts.inc` keeps only the switch-1 assertions),
-   `--version` and the help line set (§4.1), and the docs updated: §2.2 and this section become
-   history, LANGUAGE.md "specified, being implemented" becomes "implemented", CLAUDE.md and
-   README.md say "implemented", SEA_BOOTSTRAP.md marks rows 2 and 17 covered. No earlier test
-   changes (LANGUAGE.md §14.1). Integration also checks by hand what the corpus cannot: `LINPUT`
-   and `LINPUT #0` on a terminal (prompt, `col` reset), and `PRINT #-1` order on a terminal.
+   handler that reported `ILLEGAL INSTRUCTION` (the switch-0 behaviour), the `a64_insn.s` assert
+   rewritten to hold at both values. After step 0 the switch-1 build passed every test that the
+   switch-0 build passed.
+1. **Feature work.** D, R, RX and T started at once (their contracts were complete and
+   independent; T's change kept every old test passing because no old `.meta` has a `streams=`
+   line). F needed nothing new from D's builder (the extensions use only existing builder
+   functions), so F started at once too; B and BX needed F's IR end to end (`tests/ir/ext_*` show
+   it) and R's/RX's entry points to link.
+2. **Integration commit** (done by the coordinator after every package had passed its tests
+   with the switch 1): the switch removed as §2.2 describes (the `.if` blocks, the Makefile lines
+   and the switch-0 code deleted; `tests/include_asserts.inc` keeping only the switch-1
+   assertions), `--version` and the help line set (§4.1), and the docs updated: §2.2 and this
+   section became history, LANGUAGE.md, CLAUDE.md and README.md say "implemented",
+   SEA_BOOTSTRAP.md marks rows 2 and 17 covered. No earlier test changed (LANGUAGE.md §14.1).
+   Integration also checked by hand, on a pseudo-terminal (`script`), what the corpus cannot:
+   `LINPUT` writes the prompt `? ` and `LINPUT #0` none, both reset `col` after the line, and
+   `PRINT #-1` output appears after every earlier stdout byte.
 
 The extension tests are `tests/programs/ext_*`, `tests/errors/c_ext_*`, `tests/errors/r_ext_*` and
 `tests/ir/ext_*`.
@@ -623,7 +631,7 @@ with GNU `as`. Both include `tests/include_asserts.inc`.
 ```
 baysick <file.bas> [-o <out>] [-S] [--emit-ir] [--target <name>] [--keep-temps]
 baysick --help | -h          usage text to stdout, exit 0
-baysick --version            "baysick 0.5.0 (Dartmouth BASIC, Sixth Edition 1971)" + LF, exit 0
+baysick --version            "baysick 0.6.0 (Dartmouth BASIC, Sixth Edition 1971, with Baysick extensions)" + LF, exit 0
 ```
 
 * The Fourth Edition integration (§2.2) changed the version text from
@@ -637,12 +645,12 @@ baysick --version            "baysick 0.5.0 (Dartmouth BASIC, Sixth Edition 1971
   `baysick 0.4.0 (Dartmouth BASIC, Fifth Edition 1970)` to
   `baysick 0.5.0 (Dartmouth BASIC, Sixth Edition 1971)`, and the edition the help text names from
   `Fifth Edition, 1970` to `Sixth Edition, 1971`. Nothing else in the usage or help text changed.
-* The Baysick extensions integration (§2.2, §2.6) changes it from
+* The Baysick extensions integration (§2.2, §2.6) changed it from
   `baysick 0.5.0 (Dartmouth BASIC, Sixth Edition 1971)` to
   `baysick 0.6.0 (Dartmouth BASIC, Sixth Edition 1971, with Baysick extensions)`, and the help
   line from `Compile a Dartmouth BASIC (Sixth Edition, 1971) program to a native executable.` to
   `Compile a Dartmouth BASIC (Sixth Edition, 1971, with Baysick extensions) program to a native
-  executable.` Nothing else in the usage or help text changes. (The edition stays the Sixth: the
+  executable.` Nothing else in the usage or help text changed. (The edition stays the Sixth: the
   extensions belong to no edition, LANGUAGE.md §15, and the minor version records the language
   change.)
 * Options and the input file may appear in any order; exactly one input file is required.
@@ -1534,7 +1542,7 @@ All AAPCS64. "Error" means `_bsk_err(code)` is called and the function does not 
 | `_bsk_aref2` | x0 desc, d0 i, d1 j | x0 addr | both subscripts checked against the current `RTA_B1`/`RTA_B2`; address `RTA_DATA + 8·(ri·RTA_ROWLEN + rj)` with the current row length |
 | `_bsk_gosub_push` | x0 code address | — | depth 1024 → error 39 |
 | `_bsk_gosub_pop` | — | x0 code address | empty → error 33. Sixth Edition: depth = the GOSUB base of the current activation (§6.9) → error 33 |
-| `_bsk_end` | — | noreturn | Fifth Edition: finish the files in write mode first (§6.8; a failure → `_bsk_err(ERR_CANT_WRITE_FILE)` after the remaining files are finished); pending-line newline, flush stdout, Baysick extensions: then a LF to fd 2 if standard error's `col ≠ 0` (§6.10); `exit(0)`; `exit(1)` instead if a stdout write failed at any time, the termination flush included (`_bsk_rt_broken`). Exactly `_bsk_exit` with status 0 |
+| `_bsk_end` | — | noreturn | Fifth Edition: finish the files in write mode first (§6.8; a failure → `_bsk_err(ERR_CANT_WRITE_FILE)` after the remaining files are finished); pending-line newline, flush stdout, Baysick extensions: then a LF to fd 2 if standard error's `col ≠ 0` (§6.10); `exit(0)`; `exit(1)` instead if a stdout write failed at any time, the termination flush included (stdout's broken flag — arm64: `OS_FAILED` of the stdout output record, record 0 in `src/runtime/rt_print.s`; x86_64: `OR_FAILED` of record 0 in `src/runtime_x86_64_linux/rt_print.s`). Exactly `_bsk_exit` with status 0 |
 | `_bsk_err` | w0 code | noreturn | precondition: code is a run-time error code, `ERR_FIRST_RUNTIME` … `ERR_END_RUNTIME` − 1 = 32..56 or (Baysick extensions) `ERR_EXT_FIRST_RUNTIME` … `ERR_EXT_END_RUNTIME` − 1 = 62; any other code exits 1 with no message. Fifth Edition: finish the files in write mode not yet finished (§6.8; a failure only forces exit status 1). Pending-line newline, flush stdout, (Baysick extensions) a LF to fd 2 if standard error's `col ≠ 0`, then write `<MESSAGE> IN <_bsk_curline>` + LF to fd 2, `exit(1)` (codes 34 OUT OF DATA and 43 END OF INPUT exit 0, unless a stdout write or a file write failed earlier, then 1; 51 END OF FILE exits 1) |
 
 The MAT entry points (`_bsk_mat_*`) are specified in §6.5, the matrix kernels and their dispatch
@@ -2032,7 +2040,7 @@ LANGUAGE.md §7.21). Files: `src/runtime/rt_files.s` and `rt_ed5.s` (arm64),
 | `_bsk_len` | x0 SD | d0 | `SD_LEN` as a double (`ucvtf` / `cvtsi2sdq` of the zero-extended u32) |
 | `_bsk_asc` | x0 SD | d0 | LEN = 0 → error 55; else the first byte (unsigned) as a double |
 | `_bsk_val` | x0 SD | d0 | §6.1: the numeric-field check of §6.7 ("Fields") on the whole value (every `0x20` removed, then `[+|-] mantissa [E [+|-] digits]` with the §4.1 limits); invalid or empty → error 54; else `strtod` on the blank-free text (the scratch buffer of the input reader may be reused: a VAL argument has at most `LIM_STRING_LEN` bytes, and a valid one at most 15 after blank removal, so longer blank-free text is rejected before copying). Implementation: the arm64 `_bsk_val` calls `_bsk_rt_parsenum`, which has a 48-byte stack frame (frame record plus the 32-byte `RT_IN_NUMBUF` text buffer) and rejects blank-free text longer than 31 bytes; the x86_64 `bsk_val` calls `bsk_rt_numtext`, which copies at most 16 non-blank bytes. The behaviour is the same on both, since a valid constant is at most 15 bytes |
-| `_bsk_fsel` | d0 x | — | `k = trunc(x)` compared as a double: `0 ≤ k ≤ _bsk_files_count` else error 49; the pending selection := k |
+| `_bsk_fsel` | d0 x | — | `k = trunc(x)` compared as a double: `0 ≤ k ≤ _bsk_files_count` else error 49 (Baysick extensions: −1 = `FILE_NUM_STDERR`, standard error, is accepted too, §6.10; the number checks of `_bsk_feof`, `_bsk_scratch` and `_bsk_frestore` below keep 0 ≤ k, so −1 is error 49 there); the pending selection := k |
 | `_bsk_feof` | d0 x | w0 | LANGUAGE.md §7.26: number check as `_bsk_fsel` (error 49); k ≥ 1 in write mode → 0; k ≥ 1 in read mode → open if needed (error 48), then 1 if the reader has no unread byte (a refill `read` returns 0), else 0; k = 0 → the same on the standard-input reader (on a terminal stdout is flushed before the refill `read`; `col` and `out` are not reset — only a line read by INPUT or INPUT #0 resets them) |
 | `_bsk_scratch` | d0 x | — | §7.22, in this order: number check (error 49; k = 0 → error 49); close the file if open (write mode: buffered output discarded, not written); empty file k's reader (buffer, current line, cursor); `open(path, O_WRONLY|O_CREAT|O_TRUNC, 0666)` (failure → error 48); only then, if the file has no output buffer yet, `malloc(RT_FILEBUF_SIZE)` (failure → error 47); write mode, `col = out = 0`, buffer empty |
 | `_bsk_frestore` | d0 x | — | §7.23: number check (error 49); k = 0 → error 49; write mode: `col ≠ 0` → LF into the buffer, flush (failure → error 53), `close`; read mode, open: `close`; the file becomes "read, not open" and its reader state (buffer, current line, cursor) is emptied |
@@ -2203,7 +2211,7 @@ unconditional (§2.2). LANGUAGE.md §15 is normative; this section fixes how.
 |----------|----|-----|-------------------------|
 | `_bsk_linput` | x0 SD | — | §15.2. An input entry point: it reads the pending selection and resets it to none on entry (§6.8). **None:** the standard-input reader with the INPUT dialogue's line request of §6.7 (prompt on a terminal, `col = out = 0` after the line; none → error 43 END OF INPUT, exit 0). **k = −1** → error 49. **k = 0 or k ≥ 1:** the INPUT # line request of §6.8 on the selected reader (k ≥ 1: read mode else error 50, open if needed, error 48; k = 0 on a terminal: stdout flushed before the read, `col = out = 0` after; none → error 51 END OF FILE). Over-long line → error 46. Then the **whole** line (the line buffer's bytes after the CR removal, no field scan) is stored into the SD with `_bsk_str_set` semantics (error 47), and the reader has no current line left (the next line request reads the following line, exactly as after `_bsk_input_end`). The line read is always the reader's next unread line: if the reader holds a partly scanned current line (an INPUT or INPUT # in progress called a function from a target subscript), its rest is discarded first; the enclosing `_bsk_input_num` / `_bsk_input_str` / `_bsk_input_str_el` then finds no field left and proceeds exactly as for an exhausted line (INPUT: `NOT ENOUGH INPUT` and a new line; INPUT #: the next line silently) |
 | `_bsk_linput_el` | x0 slist, d0 i | — | the element form: the line is read exactly as by `_bsk_linput` (every error of that first), then element i is addressed by `_bsk_saref1` (error 32 at the store), then the line is stored into it |
-| `_bsk_exit` | d0 x | noreturn | §15.4: k = trunc(x) (`frintz` / libm `trunc`), compared as a double: k < 0 or k > `LIM_EXIT_STATUS` → `_bsk_err(ERR_EXIT_RANGE)`; else exactly the `_bsk_end` sequence (§6.2: files finished, a failure → `_bsk_err(ERR_CANT_WRITE_FILE)`; stdout's pending newline and flush; standard error's pending newline) and `exit(k)`, or `exit(1)` if a stdout write failed at any time, the termination flush included (`_bsk_rt_broken` read after that flush). `_bsk_end` is `_bsk_exit` with status 0 (one shared termination routine taking the status as an integer) |
+| `_bsk_exit` | d0 x | noreturn | §15.4: k = trunc(x), compared as a double: k < 0 or k > `LIM_EXIT_STATUS` → `_bsk_err(ERR_EXIT_RANGE)` (equivalently −1 < x < `LIM_EXIT_STATUS` + 1 compared as doubles; a NaN is out of range). arm64 truncates first (`frintz`) and compares k with 0 and `LIM_EXIT_STATUS`; x86_64 compares x with −1 and `LIM_EXIT_STATUS` + 1 directly and then truncates (`cvttsd2si`); both give the same results; else exactly the `_bsk_end` sequence (§6.2: files finished, a failure → `_bsk_err(ERR_CANT_WRITE_FILE)`; stdout's pending newline and flush; standard error's pending newline) and `exit(k)`, or `exit(1)` if a stdout write failed at any time, the termination flush included (stdout's broken flag, read after that flush; see `_bsk_end`, §6.2). `_bsk_end` is `_bsk_exit` with status 0 (one shared termination routine taking the status as an integer) |
 
 **Changed entry points.**
 
@@ -2215,7 +2223,7 @@ unconditional (§2.2). LANGUAGE.md §15 is normative; this section fixes how.
   §8 column logic on the **standard-error output record** — a runtime-private output record like
   a file's (§6.8: `col`, `out`, a buffer of `RT_OUTBUF_SIZE` bytes and its fill count), `col =
   out = 0` at startup — and before returning, **if** the call put at least one byte into that buffer, first flush
-  stdout's buffer (as at termination; a failure sets `_bsk_rt_broken` as always) and then write
+  stdout's buffer (as at termination; a failure sets stdout's broken flag as always) and then write
   every byte of the stderr buffer to fd 2 (`write(2, …)`, `EINTR` retried, partial writes continued; any other failure or a write of
   0 bytes drops the rest of the bytes and is otherwise ignored: no flag, no error, no status
   change). A full buffer is written as soon as it fills, like a file's (stdout
@@ -2240,7 +2248,7 @@ unconditional (§2.2). LANGUAGE.md §15 is normative; this section fixes how.
 inherits (as today for stdout; LANGUAGE.md §10, §15.3): with the default action a write to a pipe
 without a reader, on fd 1 or fd 2, ends the process by the signal; with `SIGPIPE` ignored by the
 parent, `write` returns `EPIPE`, which on fd 2 is ignored like every other failure and on fd 1 sets
-`_bsk_rt_broken`. R and RX add no code for it.
+stdout's broken flag. R and RX add no code for it.
 
 **Termination order** (both runtimes, every path: `_bsk_end`, `_bsk_exit`, `_bsk_err`): files
 (§6.8 finishing, once) → stdout's pending newline and flush → standard error's pending newline →
@@ -2502,8 +2510,8 @@ The harness compares a run-phase case's standard output and standard error as tw
 captures, so it cannot see their relative order, and it cannot make a write fail. The Baysick
 extensions specify both (LANGUAGE.md §15.3: standard output is written before every
 standard-error write; §15.4: a failed write forces exit status 1 whatever `END e` / `STOP e`
-chose). An optional third line of a run-phase `tests/errors/NAME.meta` selects how the program's
-output streams are connected:
+chose). An optional `streams=` line of a run-phase `tests/errors/NAME.meta` (customarily the
+third) selects how the program's output streams are connected:
 
 ```
 phase=run
@@ -2511,7 +2519,8 @@ exit=<status>
 streams=merged | no-stdout
 ```
 
-* No `streams=` line (every existing case): unchanged — `>"$OUT" 2>"$ERR"`.
+* No `streams=` line (every case without a stream mode), or an empty value (`streams=`): unchanged
+  — `>"$OUT" 2>"$ERR"`.
 * `streams=merged`: the program runs with standard error on the same open file as standard
   output, `>"$OUT" 2>&1` (one file description, so the bytes land in write order). `NAME.out` (absent
   = empty) is compared with that file. The separate stderr capture `$TMP/r.err` is reused across
@@ -2524,9 +2533,20 @@ streams=merged | no-stdout
   `NAME.out` must be absent (or empty). A case with
   this mode must not open files (no `FILES` used), because a file opened while fd 1 is closed
   would receive descriptor 1.
-* Any other value → `FAIL NAME: bad streams '<value>' in NAME.meta`. A `streams=` line in a
+* Any other value is a **setup error, not a per-test FAIL**: the script writes
+  `run.sh: errors/NAME: bad streams '<value>' in NAME.meta` (`cross_run.sh: …` in the cross run)
+  to standard error and exits at once with status 2 (the harness's setup-error status), running
+  neither that case nor the rest of the corpus. The value is checked only when a selected case
+  reaches its run step, after its program compiled (Mac) or was assembled and linked (cross); a
+  case that fails earlier is reported as that failure. A `streams=` line in a
   compile-phase case is ignored (it never runs a program), as are `streams=` lines in
   `tests/programs` (they have no `.meta`).
+
+**Reading the key.** Both scripts read it with their `meta_get`, which takes the first line
+that starts with `streams=` (`sed -n "s/^streams=//p"`, then `head -1`): the line may
+stand anywhere in the `.meta`, only a line that starts with `streams=` counts, and the first one
+wins (as for `phase=` and `exit=`); the value is the rest of that line byte for byte, so
+`streams=merged ` with a trailing blank is a bad value.
 
 **Where:** `tests/run.sh` and `tests/cross_run.sh` read the key with their `meta_get` and choose
 the redirection in their run-phase branch (the `run_limited` call is unchanged; only the

@@ -5,8 +5,6 @@
 #   make                  build build/baysick and build/libbaysickrt.a
 #   make test             build, then run tests/run.sh
 #   make check-includes   assemble the contract include files (layout assertions)
-#   make BSK_EXT=1 ...    build/test with the Baysick extensions contract switch on (DESIGN.md 2.2,
-#                         2.6); cross-test that compiler with `make clean; make BSK_EXT=1 cross`
 #   make cross-pack       pack the x86_64-linux test bundle into build/x86_64-linux-bundle
 #   make cross            pack and run the bundle on a Linux host (tests/cross.sh)
 #   make bench            matrix kernel benchmarks vs Accelerate (bench/run_mac.sh, docs/BENCH.md)
@@ -21,16 +19,7 @@ LD      := ld
 AR      := ar
 BUILD   := build
 
-ASFLAGS_BASE := -arch arm64 -mmacosx-version-min=11.0 -I include
-ASFLAGS      := $(ASFLAGS_BASE)
-# Baysick extensions contract staging (docs/DESIGN.md sections 2.2, 2.6): `make BSK_EXT=1 ...`
-# assembles everything with BSK_EXT_CONTRACT=1 (OP_COUNT 113, KW_COUNT 28).
-# Objects do not record the setting: run `make clean` when switching.
-# Only the compiler depends on the switch; the runtimes (and Makefile.linux,
-# which never sets it) are the same for both values.
-ifeq ($(BSK_EXT),1)
-ASFLAGS += -Wa,-defsym,BSK_EXT_CONTRACT=1
-endif
+ASFLAGS := -arch arm64 -mmacosx-version-min=11.0 -I include -I src/frontend
 # Evaluated only when a link actually happens (recursive variable).
 SDK      = $(if $(SDKROOT),$(SDKROOT),$(shell xcrun --show-sdk-path))
 LDFLAGS  = -lSystem -syslibroot $(SDK) -e _main -arch arm64 -platform_version macos 11.0 11.0
@@ -80,9 +69,8 @@ check-includes: $(INCLUDES) tests/include_check.s tests/include_asserts.inc
 	@if grep -nE '^[[:space:]]*[^[:space:]/].*//' $(INCLUDES) tests/include_asserts.inc; then \
 	  echo "make: trailing // comment in a shared include file (use /* ... */)" >&2; exit 1; \
 	fi
-	$(AS) $(ASFLAGS_BASE) -I tests -o $(BUILD)/include_check.o tests/include_check.s
-	$(AS) $(ASFLAGS_BASE) -Wa,-defsym,BSK_EXT_CONTRACT=1 -I tests -o $(BUILD)/include_check_ext.o tests/include_check.s
-	@echo "include files assemble and layout assertions hold (BSK_EXT_CONTRACT=0 and 1)"
+	$(AS) $(ASFLAGS) -I tests -o $(BUILD)/include_check.o tests/include_check.s
+	@echo "include files assemble and layout assertions hold"
 
 test: check-includes all
 	sh tests/run.sh

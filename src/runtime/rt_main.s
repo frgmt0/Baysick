@@ -3,6 +3,8 @@
 // current-line variable shared with compiled code.
 //
 // Defines: _main, _bsk_end, _bsk_curline   (docs/DESIGN.md section 6)
+// Defines (private): _bsk_rt_terminate, the END / STOP sequence shared
+// with _bsk_exit (rt_ext.s, Baysick extensions)
 //
 // All other runtime state is initialised statically in the file that
 // owns it (print counters and buffer: rt_print.s, RND state: rt_rnd.s,
@@ -90,24 +92,45 @@ Lrt_main_oom:
     bl _bsk_err                     // noreturn
 
 // ---------------------------------------------------------------------
-// _bsk_end -- END / STOP: normal termination.
-//   Purpose : Fifth Edition: finish the files in write mode first
-//             (_bsk_rt_files_finish, DESIGN.md 6.8); if that fails, the
-//             run ends as the error CAN'T WRITE FILE. Then write the
-//             pending-line newline (if col != 0), flush the stdout
-//             buffer, exit with status EXIT_RUN_OK, or EXIT_RUN_ERROR if
-//             writing stdout failed (LANGUAGE.md 10).
+// _bsk_end -- END / STOP: normal termination with exit status 0
+//   (LANGUAGE.md 10). Exactly _bsk_exit with status 0 (DESIGN.md 6.2,
+//   6.10): the shared sequence _bsk_rt_terminate.
 //   Inputs  : none
 //   Outputs : never returns
 //   Clobbers: everything
 //   Callee-saved used: none
-//   Frame   : 16 bytes (frame record only)
+//   Frame   : none (tail call)
 // ---------------------------------------------------------------------
     .globl _bsk_end
     .p2align 2
 _bsk_end:
-    stp x29, x30, [sp, #-16]!       // frame record (keeps sp aligned)
+    mov w0, #EXIT_RUN_OK            // END and STOP exit 0 ...
+    b _bsk_rt_terminate             // ... unless output was lost
+
+// ---------------------------------------------------------------------
+// _bsk_rt_terminate -- the termination sequence of END and STOP, with
+//   or without a status (LANGUAGE.md 10, 15.4, 15.5; DESIGN.md 6.10).
+//   Purpose : 1. finish the files in write mode (_bsk_rt_files_finish,
+//             DESIGN.md 6.8); if that fails, the run ends as the error
+//             CAN'T WRITE FILE at this END / STOP line instead
+//             (_bsk_err repeats the remaining steps, exit 1);
+//             2. stdout's pending-line newline (if col != 0) and flush;
+//             3. standard error's pending-line newline (_bsk_rt_err_bol);
+//             4. exit with the status, or EXIT_RUN_ERROR if a stdout
+//             write failed at any time, the flush of step 2 included.
+//   Inputs  : w0 = exit status, 0 .. LIM_EXIT_STATUS (already checked)
+//   Outputs : never returns
+//   Clobbers: everything
+//   Callee-saved used: x19 = status, x20 = 1 if stdout broke
+//   Frame   : 32 bytes (frame record + x19, x20)
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_terminate
+    .p2align 2
+_bsk_rt_terminate:
+    stp x29, x30, [sp, #-32]!       // frame record (keeps sp aligned)
     mov x29, sp
+    stp x19, x20, [sp, #16]
+    mov w19, w0                     // the status chosen by the program
     // The files in write mode first, in ascending order; a failure
     // ends the run as CAN'T WRITE FILE at this END / STOP line (the
     // remaining files were still finished; stdout follows in _bsk_err).
@@ -117,10 +140,11 @@ _bsk_end:
     bl _bsk_err                     // noreturn
 1:
     bl _bsk_rt_finish_output        // newline if mid-line, then flush
-    cmp w0, #0                      // w0 = 1 if stdout broke
-    mov w0, #EXIT_RUN_OK            // END and STOP exit 0 ...
+    mov w20, w0                     // 1 if stdout broke (at any time)
+    bl _bsk_rt_err_bol              // standard error's pending line
+    cmp w20, #0
     mov w9, #EXIT_RUN_ERROR
-    csel w0, w0, w9, eq             // ... or 1 if output was lost
+    csel w0, w19, w9, eq            // the status, or 1 if output was lost
     bl _exit                        // libc exit(3); does not return
 
 // ---------------------------------------------------------------------

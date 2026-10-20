@@ -31,12 +31,6 @@
 .ifndef BSK_TOKENS_INC
 .equ BSK_TOKENS_INC, 1
 
-// Contract staging switch of the Baysick extensions (DESIGN.md 2.2, 2.6):
-// selects KW_COUNT below. Defined identically in ir.inc.
-.ifndef BSK_EXT_CONTRACT
-.equ BSK_EXT_CONTRACT, 0
-.endif
-
 // ---- Scanner modes ----------------------------------------------------
 .equ SCAN_OPERAND,      0
 .equ SCAN_OPERATOR,     1
@@ -147,11 +141,7 @@
 
 .equ KW_LINPUT,         27  /* Baysick extension (LANGUAGE.md 15.2); no other keyword is a prefix of it or has it as a prefix */
 
-.if BSK_EXT_CONTRACT
 .equ KW_COUNT,          28
-.else
-.equ KW_COUNT,          27
-.endif
 
 // ---- MAT sub-keywords (after "MAT", in this order) and MAT function ids --
 // "MAT" is followed by READ, PRINT, INPUT (Fourth Edition), or an

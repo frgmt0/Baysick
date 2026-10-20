@@ -908,7 +908,9 @@ internal error (exit 4). Checks:
      a number temp in B and in X a declared string **list** (`DIMS` = 1; in a SUB unit a parameter
      string array with `DIMS` 1 too, rule 9); IMM 0, DST and C `IR_NONE` in both.
    * `exit` has a number temp in A and every other field unused; it is allowed where `stop` is
-     (group T, §3) and is an unconditional transfer.
+     (group T, §3) and is an unconditional transfer. The verifier enforces only its placement and
+     fields; it has no reachability analysis, so it neither requires nor checks that nothing
+     after an `exit` is reached except through a label.
    * `fsel` may also be immediately followed by `linput` (rule 8).
    * Opcodes are `< OP_COUNT` (rule 1): with the extensions `OP_COUNT` is 113.
 

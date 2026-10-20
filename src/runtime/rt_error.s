@@ -19,17 +19,20 @@
 // _bsk_err -- report a run-time error and terminate.
 //   Purpose : Fifth Edition: first finish the files in write mode not
 //             yet finished (_bsk_rt_files_finish, DESIGN.md 6.8). Then
-//             pending-line newline + flush of stdout, then write
+//             pending-line newline + flush of stdout, then (Baysick
+//             extensions) standard error's pending-line newline
+//             (_bsk_rt_err_bol, LANGUAGE.md 15.5 step 3), then write
 //             "<MESSAGE> IN <_bsk_curline>" + LF to fd 2 and exit.
 //             Exit status EXIT_RUN_OK (0) for ERR_OUT_OF_DATA and
 //             ERR_END_OF_INPUT, else EXIT_RUN_ERROR (1); those two
 //             also exit 1 if writing stdout or a file failed
 //             (LANGUAGE.md 10).
 //   Inputs  : w0 = ERR_* code; must be a run-time code, exactly
-//             ERR_FIRST_RUNTIME..ERR_END_RUNTIME-1 (32..56). Any other
-//             code (a caller bug, including the Sixth Edition
-//             compile-time codes 57..61) prints nothing and exits with
-//             status 1 (DESIGN.md 6.2, 6.9).
+//             ERR_FIRST_RUNTIME..ERR_END_RUNTIME-1 (32..56) or, Baysick
+//             extensions, ERR_EXT_FIRST_RUNTIME..ERR_EXT_END_RUNTIME-1
+//             (62). Any other code (a caller bug, including the Sixth
+//             Edition compile-time codes 57..61) prints nothing and
+//             exits with status 1 (DESIGN.md 6.2, 6.9, 6.10).
 //   Outputs : never returns
 //   Clobbers: everything
 //   Callee-saved used: x19 = error code, x20 = write cursor in the
@@ -61,12 +64,21 @@ _bsk_err:
     mov w22, w0                     // 1 if stdout broke
     orr w22, w22, w23               // output lost anywhere: status 1
 
+    // Standard error's pending PRINT #-1 line is ended next, so the
+    // message (if any) starts a line of its own.
+    bl _bsk_rt_err_bol
+
     // Look up the message; a code that is not a run-time error prints
     // nothing.
     cmp w19, #ERR_FIRST_RUNTIME
     b.lo Lrt_err_exit
     cmp w19, #ERR_END_RUNTIME
-    b.hs Lrt_err_exit               // a compile-time code: nothing printed
+    b.lo 1f                         // an edition's run-time code
+    cmp w19, #ERR_EXT_FIRST_RUNTIME
+    b.lo Lrt_err_exit               // a compile-time code: nothing printed
+    cmp w19, #ERR_EXT_END_RUNTIME
+    b.hs Lrt_err_exit               // beyond the table: nothing printed
+1:
     adrp x9, Lrt_errmsg@PAGE
     add x9, x9, Lrt_errmsg@PAGEOFF
     ldr x10, [x9, w19, uxtw #3]     // x10 = message pointer or 0

@@ -6,10 +6,14 @@
 //   _bsk_print_num _bsk_print_str _bsk_print_sv _bsk_print_comma
 //   _bsk_print_semi _bsk_print_tab _bsk_print_nl
 // Defines (private to the runtime, .private_extern):
-//   _bsk_rt_fsel            u32 pending file selection (DESIGN.md 6.8):
-//                           0 = none, k + 1 = file k; written by _bsk_fsel
-//                           (rt_files.s), taken (read and reset to 0) on
-//                           entry by every print and input entry point
+//   _bsk_rt_fsel            u32 pending file selection (DESIGN.md 6.8,
+//                           6.10): 0 = none, k + 2 = file k for k >= -1
+//                           (1 = standard error, 2 = file 0); written by
+//                           _bsk_fsel (rt_files.s), taken (read and reset
+//                           to 0) on entry by every print and input entry
+//                           point
+//   _bsk_rt_err_bol         Baysick extensions: end standard error's
+//                           pending line before a BASIC message
 //   _bsk_rt_finish_output   pending-line newline + flush of stdout (END /
 //                           errors); reports whether stdout broke
 //   _bsk_rt_write_all       write(2) loop handling short writes / EINTR
@@ -49,6 +53,18 @@
 // are being finished at termination (_bsk_rt_out_end with w1 = 0), when
 // the failure is only reported to the caller. A flagged file is skipped
 // by every later flush.
+//
+// Standard error (Baysick extensions, LANGUAGE.md 15.3, DESIGN.md 6.10):
+// one more output record (Lrt_print_eos, fd 2, its own col / out and an
+// RT_OUTBUF_SIZE buffer) selected by the pending selection -1. It is
+// unbuffered as seen from the program: every print entry point that put
+// a byte into it writes the record before returning (Lrt_print_fin),
+// and a full buffer is written at once like any other. Writing it first
+// flushes stdout's buffer (so the two streams keep program order on a
+// shared file), then writes fd 2; a failed write to fd 2 drops the
+// bytes and is otherwise ignored (no flag, no error, no status change).
+// A call that only moves col writes nothing to either descriptor.
+// SIGPIPE keeps the action the process inherited (no code here).
 // =====================================================================
 .include "baysick.inc"
 
@@ -126,6 +142,9 @@ Lrt_print_wa_done:
 //             failed) the bytes are discarded. A failed write sets
 //             OS_FAILED; for a file (not record 0) it then raises CAN'T
 //             WRITE FILE unless Lrt_print_noraise is set (termination).
+//             Standard error's record (Lrt_print_eos): stdout's buffer
+//             is flushed first, then the bytes go to fd 2; a failure is
+//             ignored (its OS_FAILED stays 0).
 //   Inputs  : x0 = output state record
 //   Outputs : w0 = the record's OS_FAILED after the flush (0 or 1)
 //   Errors  : CAN'T WRITE FILE (files only, see above)
@@ -141,6 +160,10 @@ Lrt_print_flush:
     mov x19, x0
     ldr x2, [x19, #OS_FILL]         // number of buffered bytes
     cbz x2, Lrt_print_flush_done    // nothing to write
+    adrp x9, Lrt_print_eos@PAGE
+    add x9, x9, Lrt_print_eos@PAGEOFF
+    cmp x19, x9
+    b.eq Lrt_print_flush_err        // standard error: its own rule
     str xzr, [x19, #OS_FILL]        // buffer is empty afterwards
     ldr w9, [x19, #OS_FAILED]
     cbnz w9, Lrt_print_flush_done   // broken / failed: discard
@@ -159,6 +182,18 @@ Lrt_print_flush:
     cbnz w9, Lrt_print_flush_done   // termination: only report it
     mov w0, #ERR_CANT_WRITE_FILE
     bl _bsk_err                     // noreturn
+Lrt_print_flush_err:
+    // Standard error: every buffered stdout byte is written before the
+    // first byte goes to fd 2 (a stdout failure marks stdout broken, as
+    // always), then the stderr bytes; a failure drops them silently.
+    adrp x0, Lrt_print_os@PAGE
+    add x0, x0, Lrt_print_os@PAGEOFF
+    bl Lrt_print_flush              // stdout first (never raises)
+    ldr x2, [x19, #OS_FILL]
+    str xzr, [x19, #OS_FILL]        // stderr buffer empty afterwards
+    mov w0, #2
+    ldr x1, [x19, #OS_BUF]
+    bl _bsk_rt_write_all            // result ignored (LANGUAGE.md 15.3)
 Lrt_print_flush_done:
     ldr w0, [x19, #OS_FAILED]
     ldr x19, [sp, #16]
@@ -259,9 +294,10 @@ Lrt_print_emit_char:
     ret
 
 // ---------------------------------------------------------------------
-// Lrt_print_take -- take the pending file selection (DESIGN.md 6.8):
-//   read _bsk_rt_fsel and reset it to "none"; none or file 0 selects
-//   standard output; file k >= 1 must be in write mode
+// Lrt_print_take -- take the pending file selection (DESIGN.md 6.8,
+//   6.10): read _bsk_rt_fsel and reset it to "none"; none or file 0
+//   selects standard output; -1 selects standard error's record (no
+//   mode check: always writable); file k >= 1 must be in write mode
 //   (_bsk_rt_file_wcheck: ILLEGAL FILE COMMAND) and selects file k's
 //   record.
 //   Inputs  : none
@@ -277,10 +313,12 @@ Lrt_print_take:
     adrp x0, Lrt_print_os@PAGE
     add x0, x0, Lrt_print_os@PAGEOFF    // stdout's record
     adrp x9, _bsk_rt_fsel@PAGE
-    ldr w10, [x9, _bsk_rt_fsel@PAGEOFF] // 0 none, else k + 1
+    ldr w10, [x9, _bsk_rt_fsel@PAGEOFF] // 0 none, else k + 2
     cbz w10, 1f
     str wzr, [x9, _bsk_rt_fsel@PAGEOFF] // taken: back to "none"
-    subs w10, w10, #1                   // k
+    cmp w10, #1
+    b.eq 2f                             // -1: standard error
+    subs w10, w10, #2                   // k
     b.eq 1f                             // file 0: standard output
     stp x29, x30, [sp, #-32]!
     mov x29, sp
@@ -295,6 +333,29 @@ Lrt_print_take:
     ldr x19, [sp, #16]
     ldp x29, x30, [sp], #32
 1:
+    ret
+2:
+    adrp x0, Lrt_print_eos@PAGE
+    add x0, x0, Lrt_print_eos@PAGEOFF   // standard error's record
+    ret
+
+// ---------------------------------------------------------------------
+// Lrt_print_fin -- end of a print entry point (DESIGN.md 6.10): if the
+//   record is standard error's, the bytes this call put into its buffer
+//   are written now (stdout flushed first; nothing at all happens when
+//   the call wrote no byte). Any other record: nothing.
+//   Inputs  : x0 = output state record used by the call
+//   Outputs : none
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: none
+//   Frame   : none (leaf, or a tail call to Lrt_print_flush)
+// ---------------------------------------------------------------------
+    .p2align 2
+Lrt_print_fin:
+    adrp x9, Lrt_print_eos@PAGE
+    add x9, x9, Lrt_print_eos@PAGEOFF
+    cmp x0, x9
+    b.eq Lrt_print_flush            // standard error: write it (tail call)
     ret
 
 // ---------------------------------------------------------------------
@@ -334,23 +395,28 @@ Lrt_print_bytes_done:
 //   Outputs : none
 //   Errors  : ILLEGAL FILE COMMAND, CAN'T WRITE FILE (a selected file)
 //   Clobbers: x0-x17, d0-d7, d16-d31
-//   Callee-saved used: x19 = pointer, x20 = length
-//   Frame   : 32 bytes (frame record + x19, x20)
+//   Callee-saved used: x19 = pointer, x20 = length, x21 = output state
+//   Frame   : 48 bytes (frame record + x19..x21, padded)
 // ---------------------------------------------------------------------
     .globl _bsk_print_str
     .p2align 2
 _bsk_print_str:
-    stp x29, x30, [sp, #-32]!
+    stp x29, x30, [sp, #-48]!
     mov x29, sp
     stp x19, x20, [sp, #16]
+    str x21, [sp, #32]
     mov x19, x0
     mov x20, x1
     bl Lrt_print_take               // x0 = output state
+    mov x21, x0
     mov x1, x19
     mov x2, x20
     bl Lrt_print_bytes
+    mov x0, x21
+    bl Lrt_print_fin                // standard error: written now
+    ldr x21, [sp, #32]
     ldp x19, x20, [sp, #16]
-    ldp x29, x30, [sp], #32
+    ldp x29, x30, [sp], #48
     ret
 
 // ---------------------------------------------------------------------
@@ -416,6 +482,8 @@ Lrt_print_num_loop:
     bl Lrt_print_emit
     b Lrt_print_num_loop
 Lrt_print_num_done:
+    mov x0, x21
+    bl Lrt_print_fin                // standard error: written now
     add sp, sp, #RT_NUMBUF
     ldr d8, [sp, #40]
     ldr x21, [sp, #32]
@@ -430,15 +498,17 @@ Lrt_print_num_done:
 //   Outputs : none
 //   Errors  : ILLEGAL FILE COMMAND, CAN'T WRITE FILE (a selected file)
 //   Clobbers: x0-x17, d0-d7, d16-d31
-//   Callee-saved used: none
-//   Frame   : 16 bytes (frame record)
+//   Callee-saved used: x19 = output state
+//   Frame   : 32 bytes (frame record + x19)
 // ---------------------------------------------------------------------
     .globl _bsk_print_comma
     .p2align 2
 _bsk_print_comma:
-    stp x29, x30, [sp, #-16]!
+    stp x29, x30, [sp, #-32]!
     mov x29, sp
+    str x19, [sp, #16]
     bl Lrt_print_take               // x0 = output state
+    mov x19, x0
     ldr x10, [x0, #OS_COL]
     mov x11, #PRINT_ZONE_WIDTH
     udiv x10, x10, x11              // current zone index
@@ -449,12 +519,16 @@ _bsk_print_comma:
     b.lo 1f                         // still on this line
     bl Lrt_print_newline
 1:
-    ldp x29, x30, [sp], #16
+    mov x0, x19
+    bl Lrt_print_fin                // standard error: the LF, if any
+    ldr x19, [sp, #16]
+    ldp x29, x30, [sp], #32
     ret
 
 // ---------------------------------------------------------------------
 // _bsk_print_semi -- PRINT ';' after a number: next multiple of 3
 //   strictly to the right; no newline is forced.
+//   It writes no byte, so a selected standard error needs no write.
 //   Inputs  : none
 //   Outputs : none
 //   Errors  : ILLEGAL FILE COMMAND (a selected file)
@@ -481,6 +555,7 @@ _bsk_print_semi:
 // _bsk_print_tab -- PRINT TAB(x) (LANGUAGE.md 8, DESIGN.md 6.7).
 //   Purpose : m = fmod(trunc(x), 75) (both exact), m += 75 if m < 0;
 //             if col < m then col = m (lazy; TAB never starts a line).
+//             It writes no byte (standard error: nothing to write).
 //   Inputs  : d0 = x (finite)
 //   Outputs : none
 //   Errors  : ILLEGAL FILE COMMAND (a selected file)
@@ -526,17 +601,22 @@ _bsk_print_tab:
 //   Outputs : none
 //   Errors  : ILLEGAL FILE COMMAND, CAN'T WRITE FILE (a selected file)
 //   Clobbers: x0-x17, d0-d7, d16-d31
-//   Callee-saved used: none
-//   Frame   : 16 bytes (frame record)
+//   Callee-saved used: x19 = output state
+//   Frame   : 32 bytes (frame record + x19)
 // ---------------------------------------------------------------------
     .globl _bsk_print_nl
     .p2align 2
 _bsk_print_nl:
-    stp x29, x30, [sp, #-16]!
+    stp x29, x30, [sp, #-32]!
     mov x29, sp
+    str x19, [sp, #16]
     bl Lrt_print_take               // x0 = output state
+    mov x19, x0
     bl Lrt_print_newline
-    ldp x29, x30, [sp], #16
+    mov x0, x19
+    bl Lrt_print_fin                // standard error: written now
+    ldr x19, [sp, #16]
+    ldp x29, x30, [sp], #32
     ret
 
 // ---------------------------------------------------------------------
@@ -664,6 +744,40 @@ _bsk_rt_finish_output:
 1:
     mov x0, x19
     bl Lrt_print_flush              // w0 = 0 ok, 1 = output lost
+    ldr x19, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret
+
+// ---------------------------------------------------------------------
+// _bsk_rt_err_bol -- standard error's pending line (LANGUAGE.md 15.3,
+//   15.5 step 3; DESIGN.md 6.10): before a BASIC message (run-time
+//   error, OUT OF DATA, END OF INPUT, the INPUT and MAT INPUT
+//   diagnostics) and at every termination, a LF is written to fd 2 if
+//   standard error's col != 0, and col = out = 0. Like every stderr
+//   write, stdout's buffer is flushed before the LF and a failure is
+//   ignored. The record never holds a byte between two calls, so at
+//   col = 0 nothing is written anywhere.
+//   Inputs  : none
+//   Outputs : none
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: x19 = standard error's record
+//   Frame   : 32 bytes (frame record + x19)
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_err_bol
+    .p2align 2
+_bsk_rt_err_bol:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    str x19, [sp, #16]
+    adrp x19, Lrt_print_eos@PAGE
+    add x19, x19, Lrt_print_eos@PAGEOFF
+    ldr x10, [x19, #OS_COL]
+    cbz x10, 1f                     // at column 0: no pending line
+    mov x0, x19
+    bl Lrt_print_newline            // LF into the buffer, col = out = 0
+1:
+    mov x0, x19
+    bl Lrt_print_flush              // stdout first, then fd 2 (if any)
     ldr x19, [sp, #16]
     ldp x29, x30, [sp], #32
     ret
@@ -801,7 +915,10 @@ _bsk_rt_out_failed:
 //   _bsk_rt_buf       RT_OUTBUF_SIZE bytes of stdout buffer
 //   Lrt_print_noraise u32 1 while _bsk_rt_out_end finishes a file at
 //                     termination (a failed write is only reported)
-//   _bsk_rt_fsel      u32 pending file selection, 0 = none, k + 1
+//   _bsk_rt_fsel      u32 pending file selection, 0 = none, k + 2
+//   Lrt_print_eos     standard error's output record (Baysick
+//                     extensions): buffer Lrt_print_ebuf, fd 2
+//   Lrt_print_ebuf    RT_OUTBUF_SIZE bytes of standard-error buffer
 // ---------------------------------------------------------------------
     .section __DATA,__data
     .p2align 3
@@ -810,12 +927,39 @@ Lrt_print_os:
     .quad 0                         // OS_OUT
     .quad 0                         // OS_FILL
     .quad _bsk_rt_buf               // OS_BUF
+    .if (. - Lrt_print_os) != OS_BUF + 8
+        .error "stdout record: OS_COL..OS_BUF offsets disagree with the positional layout"
+    .endif
     .quad RT_OUTBUF_SIZE            // OS_CAP
+    .if (. - Lrt_print_os) != OS_FD
+        .error "stdout record: OS_FD is not the sixth field"
+    .endif
     .long 1                         // OS_FD: standard output
     .long 0                         // OS_FAILED: not broken
+    .if (. - Lrt_print_os) != OS_SIZE
+        .error "stdout record: size disagrees with OS_SIZE"
+    .endif
     .space OS_SIZE * (RT_PR_NOS - 1)    // files: zero = no buffer yet
+Lrt_print_eos:
+    .quad 0                         // OS_COL
+    .quad 0                         // OS_OUT
+    .quad 0                         // OS_FILL
+    .quad Lrt_print_ebuf            // OS_BUF
+    .if (. - Lrt_print_eos) != OS_BUF + 8
+        .error "stderr record: OS_COL..OS_BUF offsets disagree with the positional layout"
+    .endif
+    .quad RT_OUTBUF_SIZE            // OS_CAP
+    .if (. - Lrt_print_eos) != OS_FD
+        .error "stderr record: OS_FD is not the sixth field"
+    .endif
+    .long 2                         // OS_FD: standard error
+    .long 0                         // OS_FAILED: never set (failures ignored)
+    .if (. - Lrt_print_eos) != OS_SIZE
+        .error "stderr record: size disagrees with OS_SIZE"
+    .endif
 
 .zerofill __DATA,__bss,_bsk_rt_buf,RT_OUTBUF_SIZE,4
+.zerofill __DATA,__bss,Lrt_print_ebuf,RT_OUTBUF_SIZE,4
 .zerofill __DATA,__bss,Lrt_print_noraise,4,2
     .private_extern _bsk_rt_fsel
 .zerofill __DATA,__bss,_bsk_rt_fsel,4,2

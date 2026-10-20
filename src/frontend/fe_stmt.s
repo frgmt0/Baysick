@@ -8,14 +8,16 @@
 //   _fe_target(w0=allow FN, x1=descriptor)   a LET/READ/INPUT target
 //   _fe_store(x0=descriptor, w1=value temp)  store into a numeric target
 //   _fe_starget_ref(x0=descriptor) -> w0 sref  a LET string target, at its store
-//   _fe_sstore(x0=descriptor, w1=opcode)     `sread`/`insv` into a string target
+//   _fe_sstore(x0=descriptor, w1=opcode)     `sread`/`insv`/`linput` into a
+//                                            string target
 //   _fe_jump_target() -> w0 label or -1      a line-number operand
 //
 // Every statement must consume its whole text; leftover text is
 // INCORRECT FORMAT. Errors leave through _fe_err (fe_compile.s). This file
 // has LET, PRINT, END, READ, DATA, GOTO, IF, FOR, NEXT, GOSUB, RETURN,
 // DIM, REM, STOP; DEF/FNEND are in fe_def.s, MAT in fe_mat.s, INPUT,
-// RESTORE, ON, RANDOMIZE in fe_input.s, CHANGE in fe_str.s.
+// RESTORE, ON, RANDOMIZE in fe_input.s, CHANGE in fe_str.s, LINPUT and the
+// status of END e / STOP e in fe_ext.s (Baysick extensions).
 //
 // FOR stack entry (_fe_forstack, FE_FOR_ENTRY = 16 bytes, see
 // fe_compile.s): +0 u32 loop variable slot, +4 u32 FOR index k,
@@ -52,13 +54,7 @@
 .equ FE_BITS_ONE,       0x3FF0000000000000  // IEEE-754 bits of 1.0
 .equ FE_CTX_ML,         2           // _fe_ctx_kind of a multi-line body (fe_def.s)
 
-// target descriptor kinds (numeric kinds = number of subscripts)
-.equ FE_TGT_SCALAR,     0
-.equ FE_TGT_LIST,       1
-.equ FE_TGT_TABLE,      2
-.equ FE_TGT_FN,         3           // LET FNx = ... inside FNx's body
-.equ FE_TGT_STRING,     4           // A$ (+8 = sref) or A$(i) (+8 = subscript)
-.equ FE_TGT_SIZE,       16
+.include "fe_targets.inc"
 .equ FE_LET_MAX,        128         // targets per LET (a 255-byte line has < 128)
 
 // raw names returned by Lfe_stmt_name
@@ -514,18 +510,18 @@ _fe_starget_ref:
     ret
 
 // ---------------------------------------------------------------------
-// _fe_sstore -- emit `sread` or `insv` into a string target (IR.md 3.2,
-//   4.3): a string variable: the plain form `op tS` (A = its `svar`
-//   temp); a list element L$(i): the element form `op L$, ti` (A =
-//   IR_NONE, B = the subscript temp, X = the letter), whose runtime call
+// _fe_sstore -- emit `sread`, `insv` or `linput` into a string target
+//   (IR.md 3.2, 3.5, 4.3): a string variable: the plain form `op tS`
+//   (A = its `svar` temp); a list element L$(i): the element form
+//   `op L$, ti` (A = IR_NONE, B = the subscript temp, X = the letter), whose runtime call
 //   takes the value first and checks the subscript at the store
 //   (LANGUAGE.md 7.1, 7.4, 7.15).
 //   A string table element T$(i, j) (Fifth Edition) takes the value
 //   into a new temp cell first: `tC = scell %sK`, `op tC`, `te = sald2
-//   T$, ti, tj`, `sset te, tC` (IR.md 4.3). Inside INPUT # the op is
-//   preceded by `fsel` (_fe_fsel).
+//   T$, ti, tj`, `sset te, tC` (IR.md 4.3). Inside INPUT # and LINPUT #
+//   the op is preceded by `fsel` (_fe_fsel).
 //   in:  x0 = string target descriptor (kind FE_TGT_STRING),
-//        w1 = OP_SREAD or OP_INSV
+//        w1 = OP_SREAD, OP_INSV or (Baysick extension) OP_LINPUT
 //   out: none
 //   clobbers: x0-x17
 //   callee-saved: x19 = descriptor, w20 = opcode, w21 = temp cell
@@ -1262,10 +1258,12 @@ Lfe_stmt_print_end:
 
 // ---------------------------------------------------------------------
 // Lfe_stmt_end -- END: must be the last line; a multi-line DEF still open
-//   there -> UNFINISHED DEF at that DEF's line (LANGUAGE.md 7.3); nothing
-//   may follow.
+//   there -> UNFINISHED DEF at that DEF's line (LANGUAGE.md 7.3). An optional
+//   status expression may follow (END e, LANGUAGE.md 15.4): _fe_exit_status
+//   compiles it (a string -> MISMATCHED STRING OPERATION) and requires the
+//   end of the text (else INCORRECT FORMAT).
 //   in: scanner after "END"   out: none
-//   clobbers: x0-x17
+//   clobbers: x0-x17, d0-d7 (_fe_expr)
 //   callee-saved: none used
 //   frame: 16 bytes
 // ---------------------------------------------------------------------
@@ -1317,7 +1315,11 @@ Lfe_stmt_end:
     mov w0, #ERR_UNFINISHED_SUB
     bl _fe_fail
 4:
-    bl _fe_expect_eol
+    // END e (LANGUAGE.md 15.4): the checks above came first; e; `exit te`
+    bl _fe_at_eol
+    cbnz w0, 5f
+    bl _fe_exit_status
+5:
     adrp x9, _fe_has_end@PAGE
     mov w10, #1
     str w10, [x9, _fe_has_end@PAGEOFF]
@@ -1326,11 +1328,12 @@ Lfe_stmt_end:
     ret
 
 // ---------------------------------------------------------------------
-// Lfe_stmt_stop -- STOP (nothing may follow).
+// Lfe_stmt_stop -- STOP, with an optional status expression (STOP e,
+//   LANGUAGE.md 15.4, compiled by _fe_exit_status; nothing else may follow).
 // Lfe_stmt_return -- RETURN (nothing may follow; not in a multi-line body).
 // Lfe_stmt_rem -- REM: everything after it is ignored.
 //   in: scanner after the keyword   out: none
-//   clobbers: x0-x17
+//   clobbers: x0-x17, d0-d7 (STOP: _fe_expr)
 //   callee-saved: none used
 //   frame: 16 bytes (REM: none)
 // ---------------------------------------------------------------------
@@ -1338,8 +1341,14 @@ Lfe_stmt_end:
 Lfe_stmt_stop:
     stp x29, x30, [sp, #-16]!
     mov x29, sp
-    bl _fe_expect_eol
+    // STOP e (LANGUAGE.md 15.4): e; `exit te` (exit never returns)
+    bl _fe_at_eol
+    cbz w0, 1f
     FE_EMIT0 OP_STOP
+    b 2f
+1:
+    bl _fe_exit_status
+2:
     ldp x29, x30, [sp], #16
     ret
 
@@ -2223,6 +2232,7 @@ Lfe_stmt_keywords:
     FE_KW "CALL", KW_CALL
     FE_KW "SUBEND", KW_SUBEND           // before SUB, its prefix (LANGUAGE.md 3.1)
     FE_KW "SUB", KW_SUB
+    FE_KW "LINPUT", KW_LINPUT           // Baysick extension, tested last (LANGUAGE.md 3.1)
     .byte 0, 0
     .space (FE_KW_ENTRY - 2)
 // one entry per keyword plus RANDOM (DESIGN.md 2.4)
@@ -2261,6 +2271,7 @@ Lfe_stmt_handlers:
     .quad _fe_callstmt                  // fe_sub.s
     .quad _fe_subend                    // fe_sub.s
     .quad _fe_sub                       // fe_sub.s
+    .quad _fe_linput                    // fe_ext.s (Baysick extension)
 Lfe_stmt_handlers_end:
 .if ((Lfe_stmt_handlers_end - Lfe_stmt_handlers) != (KW_COUNT * 8))
     .error "fe_stmt.s: the statement handler table does not have KW_COUNT entries"

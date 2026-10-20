@@ -12,9 +12,10 @@
 #   bsk_rt_in_attach   file k's reader starts on an fd opened for reading
 #   bsk_rt_in_detach   empty file k's reader (RESTORE #, SCRATCH #)
 #   bsk_rt_in_ateof    IF END #k: is the reader at its end?
+#   bsk_rt_in_linput   LINPUT: the next unread line of the selected reader
 # Uses (private): bsk_rt_flush bsk_rt_print_prompt bsk_rt_print_linedone
-# bsk_rt_write_all (rt_print.s), bsk_rt_str_assign (rt_str.s),
-# bsk_rt_fsel and bsk_rt_file_ropen (rt_files.s); bsk_saref1
+# bsk_rt_write_all bsk_rt_err_newline (rt_print.s), bsk_rt_str_assign
+# (rt_str.s), bsk_rt_fsel and bsk_rt_file_ropen (rt_files.s); bsk_saref1
 # (rt_array.s).
 #
 # Readers. Standard input (reader 0) and each file k (reader k, 1 ..
@@ -56,7 +57,10 @@
 # without '&'): the value is the field without its leading blanks.
 #
 # The three diagnostics (BSK_EMIT_INPUT_MSGS, errors.inc) are written
-# with: flush stdout, then write(2, msg, len) (failures ignored).
+# with: flush stdout, end standard error's pending line
+# (bsk_rt_err_newline), then write(2, msg, len) (failures ignored).
+# A selection of standard error (FILE_NUM_STDERR) is INVALID FILE
+# NUMBER for every input entry point and for LINPUT (DESIGN.md 6.10).
 # =====================================================================
 .include "baysick.inc"
 
@@ -572,8 +576,8 @@ bsk_rt_numtext:
     ret
 
 # ---------------------------------------------------------------------
-# .Lrt_in_diag -- write an INPUT diagnostic: flush stdout, then
-#   write(2, msg, len); failures are ignored.
+# .Lrt_in_diag -- write an INPUT diagnostic: flush stdout, end standard
+#   error's pending line, then write(2, msg, len); failures are ignored.
 #   Inputs  : %rdi = message (with its LF), %rsi = length
 #   Outputs : none
 #   Clobbers: all caller-saved registers
@@ -590,6 +594,7 @@ bsk_rt_numtext:
     movq %rdi, %rbx
     movq %rsi, %r12
     call bsk_rt_flush               # stdout first: keep the order
+    call bsk_rt_err_newline         # never glued to a partial stderr line
     movl $2, %edi
     movq %rbx, %rsi
     movq %r12, %rdx
@@ -609,15 +614,18 @@ bsk_rt_numtext:
 # ---------------------------------------------------------------------
 # .Lrt_in_select -- the reader and rules of an input entry point.
 #   Purpose : read the pending file selection (bsk_rt_fsel: 0 = none,
-#             k + 1 = file k) and reset it to none, first of all (DESIGN.md
-#             6.8). None: reader 0 with the INPUT dialogue (fmode 0).
+#             k + 1 = file k, FILE_NUM_STDERR = standard error) and reset
+#             it to none, first of all (DESIGN.md 6.8). Standard error ->
+#             INVALID FILE NUMBER (DESIGN.md 6.10). None: reader 0 with
+#             the INPUT dialogue (fmode 0).
 #             File 0: reader 0 with the INPUT # rules (fmode 1). File
 #             k >= 1: bsk_rt_file_ropen (read mode, else ILLEGAL FILE
 #             COMMAND; opened if necessary, CAN'T OPEN FILE), then reader
 #             k with the INPUT # rules. Sets .Lrt_in_rd, .Lrt_in_fmode.
 #   Inputs  : none
 #   Outputs : none
-#   Errors  : ILLEGAL FILE COMMAND, CAN'T OPEN FILE, OUT OF ROOM
+#   Errors  : INVALID FILE NUMBER, ILLEGAL FILE COMMAND, CAN'T OPEN FILE,
+#             OUT OF ROOM
 #   Clobbers: all caller-saved registers
 #   Callee-saved used: %rbx = k, %rbp = frame pointer
 #   Frame   : 24 bytes (%rbp, %rbx + 8 bytes alignment pad)
@@ -630,6 +638,8 @@ bsk_rt_numtext:
     subq $8, %rsp                   # %rsp = 0 (mod 16)
     movl bsk_rt_fsel(%rip), %ebx    # pending selection
     movl $0, bsk_rt_fsel(%rip)      # reset on entry
+    cmpl $FILE_NUM_STDERR, %ebx
+    je .Lrt_in_stderr               # standard error is not an input
     xorl %eax, %eax
     testl %ebx, %ebx
     setnz %al                       # a selection: the INPUT # rules
@@ -650,6 +660,48 @@ bsk_rt_numtext:
     popq %rbx
     popq %rbp
     ret
+.Lrt_in_stderr:
+    movl $ERR_INVALID_FILE_NUMBER, %edi # INPUT #-1, LINPUT #-1
+    jmp bsk_err
+
+# ---------------------------------------------------------------------
+# bsk_rt_in_linput -- the line request of LINPUT (LANGUAGE.md 15.2,
+#   DESIGN.md 6.10; called by bsk_linput / bsk_linput_el, rt_ext.s).
+#   Purpose : the selection as for every input entry point
+#             (.Lrt_in_select: none -> standard input with the INPUT
+#             dialogue's line request, prompt on a terminal, END OF
+#             INPUT; file 0 or k -> the INPUT # line request, END OF
+#             FILE; standard error -> INVALID FILE NUMBER); then the
+#             reader's next unread line (.Lrt_in_readline: a partly
+#             scanned current line is simply replaced, so its rest is
+#             discarded; INPUT LINE TOO LONG). The whole line is the
+#             value, and the reader has no field left afterwards
+#             (RD_MORE = 0): the next line request reads the following
+#             line, exactly as after bsk_input_end.
+#   Inputs  : none
+#   Outputs : %rax = the line's bytes (the reader's line buffer, valid
+#             until its next line request), %rdx = its length
+#   Errors  : those of .Lrt_in_select and .Lrt_in_readline
+#   Clobbers: all caller-saved registers
+#   Callee-saved used: %rbp = frame pointer
+#   Frame   : 8 bytes (saved %rbp)
+# ---------------------------------------------------------------------
+    .globl bsk_rt_in_linput
+    .hidden bsk_rt_in_linput
+    .type bsk_rt_in_linput, @function
+    .p2align 4
+bsk_rt_in_linput:
+    pushq %rbp
+    movq %rsp, %rbp                 # %rsp = 0 (mod 16)
+    call .Lrt_in_select             # reader and rules; resets the selection
+    call .Lrt_in_readline           # the next unread line
+    movq .Lrt_in_rd(%rip), %rcx
+    movl $0, RD_MORE(%rcx)          # the whole line is consumed
+    movq RD_LINE(%rcx), %rax        # verbatim: no field scan
+    movq RD_LEN(%rcx), %rdx
+    popq %rbp
+    ret
+    .size bsk_rt_in_linput, . - bsk_rt_in_linput
 
 # ---------------------------------------------------------------------
 # bsk_input_begin -- INPUT / INPUT #: read the statement's first line.

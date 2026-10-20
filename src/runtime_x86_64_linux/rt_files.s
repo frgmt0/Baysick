@@ -8,7 +8,8 @@
 #   bsk_fsel bsk_feof bsk_scratch bsk_frestore
 # Defines (private to the runtime, .globl + .hidden):
 #   bsk_rt_fsel            u32 pending file selection: 0 = none, k + 1 =
-#                          file k (read and reset by every print and
+#                          file k >= 0, FILE_NUM_STDERR (-1) = standard
+#                          error (read and reset by every print and
 #                          input entry point, rt_print.s / rt_input.s)
 #   bsk_rt_file_wcheck     print to file k: must be in write mode
 #   bsk_rt_file_ropen      input from file k: read mode, open if needed
@@ -65,15 +66,51 @@
 # ---------------------------------------------------------------------
     .p2align 4
 .Lrt_files_number:
+    movsd .Lrt_files_minus1(%rip), %xmm1    # lower bound: k >= 0
+    jmp .Lrt_files_range
+
+# ---------------------------------------------------------------------
+# .Lrt_files_fselnum -- the file number of a PRINT # / INPUT # /
+#   LINPUT # designator (LANGUAGE.md 7.21, 15.3): as .Lrt_files_number,
+#   but FILE_NUM_STDERR (-1, standard error) is also a number:
+#   FILE_NUM_STDERR <= k <= bsk_files_count, i.e. exactly
+#   FILE_NUM_STDERR - 1 < x < N + 1, else INVALID FILE NUMBER.
+#   Private convention (leaf):
+#   Inputs  : %xmm0 = x
+#   Outputs : %eax = k (-1 .. N)
+#   Clobbers: %rax %rcx %xmm1
+# ---------------------------------------------------------------------
+    .p2align 4
+.Lrt_files_fselnum:
+    movl $(FILE_NUM_STDERR - 1), %eax
+    cvtsi2sdl %eax, %xmm1           # -2.0: lower bound k >= -1
+    # fall through to .Lrt_files_range
+
+# ---------------------------------------------------------------------
+# .Lrt_files_range -- common tail of .Lrt_files_number and
+#   .Lrt_files_fselnum: k = trunc(x) must satisfy L <= k <= N, N =
+#   bsk_files_count, else INVALID FILE NUMBER. Compared as doubles before
+#   any conversion, so huge, infinite or NaN values can never wrap:
+#   L <= trunc(x) <= N is exactly L - 1 < x < N + 1.
+#   Private convention (leaf; reached by jmp or fall-through, returns to
+#   the caller of its entry; the error path is noreturn):
+#   Inputs  : %xmm0 = x, %xmm1 = L - 1 as a double (exclusive lower
+#             bound of x for the lowest legal k = L)
+#   Outputs : %eax = k (L .. N)
+#   Errors  : INVALID FILE NUMBER (via bsk_err, does not return)
+#   Clobbers: %rax %rcx %xmm1 (%edi on the error path)
+#   Callee-saved used: none
+#   Frame   : none (leaf; the error path is a tail jump)
+# ---------------------------------------------------------------------
+.Lrt_files_range:
+    ucomisd %xmm1, %xmm0
+    jbe .Lrt_files_invalid          # x <= L - 1, or NaN
     movq bsk_files_count(%rip), %rax  # N
     addq $1, %rax
     cvtsi2sdq %rax, %xmm1           # N + 1 (exact: N <= LIM_FILES)
     ucomisd %xmm0, %xmm1
-    jbe .Lrt_files_invalid          # x >= N + 1, or NaN
-    movsd .Lrt_files_minus1(%rip), %xmm1
-    ucomisd %xmm1, %xmm0
-    jbe .Lrt_files_invalid          # x <= -1 (NaN handled above)
-    cvttsd2si %xmm0, %eax           # -1 < x < N + 1: k = trunc(x)
+    jbe .Lrt_files_invalid          # x >= N + 1
+    cvttsd2si %xmm0, %eax           # L - 1 < x < N + 1: k = trunc(x)
     ret
 .Lrt_files_invalid:
     movl $ERR_INVALID_FILE_NUMBER, %edi
@@ -122,9 +159,13 @@
 
 # ---------------------------------------------------------------------
 # bsk_fsel -- select the file of the next print or input entry point
-#   (PRINT #, INPUT #; DESIGN.md 6.8).
+#   (PRINT #, INPUT #, LINPUT #; DESIGN.md 6.8, 6.10).
+#   Purpose : FILE_NUM_STDERR <= k = trunc(x) <= bsk_files_count, else
+#             INVALID FILE NUMBER; k = FILE_NUM_STDERR (standard error)
+#             is accepted here and rejected by every input entry point.
 #   Inputs  : %xmm0 = the designator value
-#   Outputs : none (bsk_rt_fsel := k + 1)
+#   Outputs : none (bsk_rt_fsel := k + 1 for k >= 0, FILE_NUM_STDERR
+#             for standard error)
 #   Errors  : INVALID FILE NUMBER
 #   Clobbers: %rax %rcx %xmm1
 #   Callee-saved used: %rbp = frame pointer
@@ -136,9 +177,12 @@
 bsk_fsel:
     pushq %rbp
     movq %rsp, %rbp
-    call .Lrt_files_number          # %eax = k
-    addl $1, %eax
-    movl %eax, bsk_rt_fsel(%rip)    # pending: file k
+    call .Lrt_files_fselnum         # %eax = k (-1 .. N)
+    cmpl $FILE_NUM_STDERR, %eax
+    je 1f                           # standard error: stored as itself
+    addl $1, %eax                   # file k >= 0: k + 1
+1:
+    movl %eax, bsk_rt_fsel(%rip)    # pending selection
     popq %rbp
     ret
     .size bsk_fsel, . - bsk_fsel
@@ -498,7 +542,8 @@ bsk_rt_files_finish:
 
 # ---------------------------------------------------------------------
 # State (zero-initialised):
-#   bsk_rt_fsel           u32 pending selection (0 none, k + 1 file k)
+#   bsk_rt_fsel           u32 pending selection (0 none, k + 1 file k,
+#                         FILE_NUM_STDERR standard error)
 #   .Lrt_files_state      LIM_FILES u32: FS_* of file k at index k - 1
 #   .Lrt_files_fd         LIM_FILES u32: its fd while open
 #   .Lrt_files_done       u32 1 once the files were finished

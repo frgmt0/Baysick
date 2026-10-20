@@ -127,13 +127,8 @@ ASSERT (ERR_TABLE_SIZE == ERR_EXT_END_RUNTIME),            "ERR_TABLE_SIZE (Bays
 ASSERT (FILE_NUM_STDERR == -1),                            "standard error is designator -1"
 ASSERT (LIM_EXIT_STATUS == 255),                           "exit statuses 0..255"
 ASSERT (EXIT_RUN_ERROR == 1),                              "a run-time error exits 1"
-.if BSK_EXT_CONTRACT
 ASSERT (OP_COUNT == (OP_EXIT + 1)),                        "OP_COUNT"
 ASSERT (KW_COUNT == (KW_LINPUT + 1)),                      "KW_COUNT"
-.else
-ASSERT (OP_COUNT == (OP_SUBRET + 1)),                      "OP_COUNT (Sixth Edition staging)"
-ASSERT (KW_COUNT == (KW_SUB + 1)),                         "KW_COUNT (Sixth Edition staging)"
-.endif
 ASSERT (TK_COUNT == (TK_AMP + 1)),                         "TK_COUNT"
 ASSERT (BI_COUNT == (BI_POS + 1)),                         "BI_COUNT"
 ASSERT ((IRM_SUBPKINDS + LIM_SUB_PARAMS) == IRM_SIZE),     "IRM layout (Sixth Edition)"

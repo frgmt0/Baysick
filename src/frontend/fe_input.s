@@ -15,7 +15,7 @@
 .include "baysick.inc"
 
 .equ FE_PEEK_EOL,       0x100       // _fe_peek result beyond the line end
-.equ FE_TGT_STRING,     4           // target descriptor kind (fe_stmt.s)
+.include "fe_targets.inc"
 .equ FE_ON_MAX,         128         // line numbers per ON (a 255-byte line has < 128)
 
 // FE_NONE: set the optional _fe_emit / _fe_emit_new operands to "unused".

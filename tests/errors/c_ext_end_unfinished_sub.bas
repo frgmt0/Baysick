@@ -1,0 +1,3 @@
+10 PRINT 1
+20 SUB "P"
+30 END A$

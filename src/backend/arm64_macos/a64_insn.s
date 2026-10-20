@@ -855,6 +855,42 @@ Lbk_in_op_sref1:
     bl Lbk_in_ed_emit_call
     b Lbk_in_next
 
+// LINPUT (Baysick extension): the plain form (A = sref): x0 = A, bl _bsk_linput;
+// the element form (A = IR_NONE): x0 = &Lsdesc_<X>, d0 = B, bl _bsk_linput_el
+// (the line is read first, the subscript checked at the store).
+Lbk_in_op_linput:
+    ldr w9, [x21, #IRI_A]
+    cmn w9, #1                      // IR_NONE: element form
+    b.ne 1f
+    mov w0, #0
+    mov x1, #IRI_X
+    bl Lbk_in_sdesc_reg
+    ldr w0, [x21, #IRI_B]
+    mov x1, #0
+    bl Lbk_in_load
+    adrp x2, Lbk_in_rt_linput_el@PAGE
+    add x2, x2, Lbk_in_rt_linput_el@PAGEOFF
+    b 2f
+1:
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_in_load_x
+    adrp x2, Lbk_in_rt_linput@PAGE
+    add x2, x2, Lbk_in_rt_linput@PAGEOFF
+2:
+    FMT Lbk_in_bl_fmt
+    b Lbk_in_next
+
+// EXIT (Baysick extension): d0 = A, bl _bsk_exit (never returns)
+Lbk_in_op_exit:
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_in_load
+    adrp x2, Lbk_in_rt_exit@PAGE
+    add x2, x2, Lbk_in_rt_exit@PAGEOFF
+    FMT Lbk_in_bl_fmt
+    b Lbk_in_next
+
 // PRTAB: d0 = A
 Lbk_in_op_prtab:
     ldr w0, [x21, #IRI_A]
@@ -1518,6 +1554,8 @@ Lbk_in_table:
     .long Lbk_in_op_subarg - Lbk_in_table // OP_SUBARG 108
     .long Lbk_in_op_callsub - Lbk_in_table // OP_CALLSUB 109
     .long Lbk_in_op_subret - Lbk_in_table // OP_SUBRET 110
+    .long Lbk_in_op_linput - Lbk_in_table // OP_LINPUT 111
+    .long Lbk_in_op_exit - Lbk_in_table // OP_EXIT 112
 Lbk_in_table_end:
 .if (Lbk_in_table_end - Lbk_in_table) != 4 * OP_COUNT
     .error "a64_insn.s dispatch table does not cover OP_COUNT opcodes"
@@ -1528,8 +1566,8 @@ Lbk_in_table_end:
 .if (OP_FRESTORE != OP_SCELL + 13) || (OP_SCAT != OP_FRESTORE + 1)
     .error "a64_insn.s Fifth Edition tables assume opcodes 85..98 in contract order"
 .endif
-.if (OP_SUBRET != OP_SCAT + 11) || (OP_COUNT != OP_SUBRET + 1)
-    .error "a64_insn.s Sixth Edition tables assume opcodes 99..110 in contract order"
+.if (OP_SUBRET != OP_SCAT + 11) || (OP_COUNT != OP_EXIT + 1) || (OP_LINPUT != OP_SUBRET + 1) || (OP_EXIT != OP_LINPUT + 1)
+    .error "a64_insn.s Sixth Edition and extension tables assume opcodes 99..112 in contract order"
 .endif
 .if (OP_STFV != OP_SLIT + 29) || (OP_SCELL != OP_STFV + 1)
     .error "a64_insn.s Third/Fourth Edition tables assume opcodes 55..84 in contract order"
@@ -3197,6 +3235,9 @@ Lbk_in_rt_input_begin: .asciz "_bsk_input_begin"
 Lbk_in_rt_input_num: .asciz "_bsk_input_num"
 Lbk_in_rt_input_str: .asciz "_bsk_input_str"
 Lbk_in_rt_input_str_el: .asciz "_bsk_input_str_el"
+Lbk_in_rt_linput:   .asciz "_bsk_linput"
+Lbk_in_rt_linput_el: .asciz "_bsk_linput_el"
+Lbk_in_rt_exit:     .asciz "_bsk_exit"
 Lbk_in_rt_input_end: .asciz "_bsk_input_end"
 Lbk_in_rt_mat_input: .asciz "_bsk_mat_input"
 Lbk_in_rt_smat_input: .asciz "_bsk_smat_input"

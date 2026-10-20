@@ -3,6 +3,8 @@
 # termination and the current-line variable shared with compiled code.
 #
 # Defines: main, bsk_end, bsk_curline   (docs/DESIGN.md sections 6, 6.4)
+# Defines (private to the runtime, .globl + .hidden): bsk_rt_terminate,
+# the normal termination shared by bsk_end and bsk_exit (DESIGN.md 6.10)
 #
 # main first selects the matrix kernels (bsk_kern_init, rt_kinit.s).
 # All other runtime state is initialised statically in the file that
@@ -109,42 +111,70 @@ main:
     .size main, . - main
 
 # ---------------------------------------------------------------------
-# bsk_end -- END / STOP: normal termination.
-#   Purpose : finish the files in write mode (bsk_rt_files_finish:
-#             pending newline, flush; DESIGN.md 6.8); if writing one of
-#             them failed, end as the run-time error CAN'T WRITE FILE
-#             (bsk_curline is still the END / STOP line). Otherwise write
-#             stdout's pending-line newline (if col != 0), flush the
-#             stdout buffer, exit with status EXIT_RUN_OK, or
-#             EXIT_RUN_ERROR if writing stdout failed (LANGUAGE.md 10).
+# bsk_end -- END / STOP: normal termination with exit status 0
+#   (LANGUAGE.md 10, 15.5): bsk_rt_terminate with status EXIT_RUN_OK
+#   (DESIGN.md 6.10: _bsk_end is _bsk_exit with status 0).
 #   Inputs  : none
 #   Outputs : never returns
 #   Clobbers: everything
-#   Callee-saved used: %rbp = frame pointer
-#   Frame   : 8 bytes (saved %rbp), then %rsp is rounded down to a
-#             multiple of 16 so the stack is aligned however we came here
+#   Callee-saved used: none
+#   Frame   : none (tail jump; bsk_rt_terminate realigns the stack)
 # ---------------------------------------------------------------------
     .globl bsk_end
     .type bsk_end, @function
     .p2align 4
 bsk_end:
+    movl $EXIT_RUN_OK, %edi         # END and STOP without a status: 0
+    jmp bsk_rt_terminate
+    .size bsk_end, . - bsk_end
+
+# ---------------------------------------------------------------------
+# bsk_rt_terminate -- the one normal-termination routine of END, STOP,
+#   END e and STOP e (bsk_end, bsk_exit in rt_ext.s; LANGUAGE.md 10,
+#   15.4, 15.5; DESIGN.md 6.10).
+#   Purpose : finish the files in write mode (bsk_rt_files_finish:
+#             pending newline, flush; DESIGN.md 6.8); if writing one of
+#             them failed, end as the run-time error CAN'T WRITE FILE
+#             (bsk_curline is still the END / STOP line). Otherwise write
+#             stdout's pending-line newline (if col != 0) and flush the
+#             stdout buffer; then end standard error's pending line
+#             (bsk_rt_err_newline); exit with the given status, or with
+#             EXIT_RUN_ERROR if a write to stdout failed at any time, the
+#             termination flush included (LANGUAGE.md 10, 15.4).
+#   Inputs  : %edi = exit status (0 .. LIM_EXIT_STATUS)
+#   Outputs : never returns
+#   Clobbers: everything
+#   Callee-saved used (not restored: the function never returns):
+#             %rbx = the requested status, %r12 = 1 if stdout broke,
+#             %rbp = frame pointer
+#   Frame   : 8 bytes (saved %rbp), then %rsp is rounded down to a
+#             multiple of 16 so the stack is aligned however we came here
+# ---------------------------------------------------------------------
+    .globl bsk_rt_terminate
+    .hidden bsk_rt_terminate
+    .type bsk_rt_terminate, @function
+    .p2align 4
+bsk_rt_terminate:
     pushq %rbp
     movq %rsp, %rbp
     andq $-16, %rsp                 # noreturn: force 16-byte alignment
-    call bsk_rt_files_finish        # every file in write mode, in order
+    movl %edi, %ebx                 # the status asked for
+    call bsk_rt_files_finish        # step 1: every file in write mode
     testl %eax, %eax
     jz 1f
     movl $ERR_CANT_WRITE_FILE, %edi # a file's last output was lost
-    call bsk_err                    # noreturn
+    call bsk_err                    # noreturn: steps 1-5 as an error
 1:
-    call bsk_rt_finish_output       # newline if mid-line, then flush
-    movl $EXIT_RUN_OK, %edi         # END and STOP exit 0 ...
+    call bsk_rt_finish_output       # step 2: newline if mid-line, flush
+    movl %eax, %r12d                # 1 if stdout broke (ever)
+    call bsk_rt_err_newline         # step 3: standard error's line
+    movl %ebx, %edi                 # step 5: the status ...
     movl $EXIT_RUN_ERROR, %ecx
-    testl %eax, %eax                # %eax = 1 if stdout broke
+    testl %r12d, %r12d
     cmovnel %ecx, %edi              # ... or 1 if output was lost
     call exit@PLT                   # libc exit(3); does not return
     ud2
-    .size bsk_end, . - bsk_end
+    .size bsk_rt_terminate, . - bsk_rt_terminate
 
 # ---------------------------------------------------------------------
 # Data shared with compiled code.

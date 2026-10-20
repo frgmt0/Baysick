@@ -33,6 +33,11 @@
 #   NAME.out   optional  (phase=run only) exact expected stdout; absent = empty
 #   NAME.in    optional  (phase=run only) the program's standard input
 #                        (absent = /dev/null)
+#   streams=merged|no-stdout  optional 3rd .meta line (phase=run only, docs/DESIGN.md 8.6):
+#                        merged: stderr goes to the same open file as stdout (>out 2>&1), so
+#                          NAME.out holds both in write order and NAME.err must be empty;
+#                        no-stdout: stdout is closed (>&-), writes to fd 1 fail with EBADF,
+#                          NAME.out must be absent or empty. Any other value: exit 2.
 #
 # tests/ir/NAME.bas         golden IR test
 #   NAME.ir    REQUIRED  exact expected stdout of `baysick --emit-ir NAME.bas`
@@ -231,7 +236,19 @@ for bas in "$ROOT"/tests/errors/*.bas; do
             continue
         fi
         if ! newwork "$base"; then fail "$name" "cannot prepare the work directory"; rm -rf "$WORK"; continue; fi
-        run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$exe" >"$TMP/r.out" 2>"$TMP/r.err"
+        streams=$(meta_get "$base.meta" streams)
+        case "$streams" in
+        "" | merged | no-stdout) ;;
+        *) echo "run.sh: errors/$(basename "$base"): bad streams '$streams' in $(basename "$base").meta" >&2; exit 2 ;;
+        esac
+        # section 8.6: truncate the capture the mode leaves unwritten (r.out/r.err are reused)
+        case "$streams" in
+        merged)    : >"$TMP/r.err"
+                   run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$exe" >"$TMP/r.out" 2>&1 ;;
+        no-stdout) : >"$TMP/r.out"
+                   run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$exe" >&- 2>"$TMP/r.err" ;;
+        *)         run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$exe" >"$TMP/r.out" 2>"$TMP/r.err" ;;
+        esac
         st=$?
         expout=$TMP/empty
         [ -f "$base.out" ] && expout=$base.out

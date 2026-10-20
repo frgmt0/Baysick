@@ -10,11 +10,13 @@
 //   _bsk_mat_input _bsk_smat_input
 // Defines (private to the runtime, .private_extern):
 //   _bsk_rt_parsenum   the numeric-field check and conversion (VAL)
+//   _bsk_rt_in_linput  Baysick extensions: the next line of LINPUT (rt_ext.s)
 //   Fifth Edition (rt_files.s):
 //   _bsk_rt_rd_setup   file k's reader: buffers (once), fd, emptied
 //   _bsk_rt_rd_reset   file k's reader emptied (RESTORE #, SCRATCH #)
 //   _bsk_rt_rd_atend   IF END #k: does reader k hold or get a byte?
-// Uses: _bsk_rt_print_prompt/_home/_flush, _bsk_rt_write_all (rt_print.s),
+// Uses: _bsk_rt_print_prompt/_home/_flush, _bsk_rt_err_bol,
+// _bsk_rt_write_all (rt_print.s),
 // _bsk_rt_fsel (rt_print.s), _bsk_rt_file_ropen (rt_files.s),
 // _bsk_rt_str_setbytes (rt_str.s), _bsk_saref1 (rt_array.s), _bsk_rt_num
 // (rt_ed4.s), _bsk_err.
@@ -68,7 +70,9 @@
 // _bsk_rt_fsel (reads it and resets it to none) on entry. None: the
 // INPUT dialogue on standard input. File k: the INPUT # rules on reader
 // k (k >= 1 must be in read mode and is opened if needed,
-// _bsk_rt_file_ropen; k = 0 is standard input).
+// _bsk_rt_file_ropen; k = 0 is standard input). Standard error (-1,
+// Baysick extensions) is INVALID FILE NUMBER for every input entry point
+// and for LINPUT (_bsk_rt_in_linput, used by rt_ext.s).
 // =====================================================================
 .include "baysick.inc"
 
@@ -568,8 +572,9 @@ Lrt_in_parsestr_bad:
     ret
 
 // ---------------------------------------------------------------------
-// Lrt_in_diag -- write one INPUT diagnostic: flush stdout, then
-//   write(2, msg, len); failures are ignored (LANGUAGE.md 7.15).
+// Lrt_in_diag -- write one INPUT diagnostic: flush stdout, end standard
+//   error's pending PRINT #-1 line (_bsk_rt_err_bol, LANGUAGE.md 15.3),
+//   then write(2, msg, len); failures are ignored (LANGUAGE.md 7.15).
 //   Inputs  : x0 = message (with its LF), x1 = length
 //   Outputs : none
 //   Clobbers: x0-x17, d0-d7, d16-d31
@@ -584,6 +589,7 @@ Lrt_in_diag:
     mov x19, x0
     mov x20, x1
     bl _bsk_rt_print_flush          // stdout first: keep the order
+    bl _bsk_rt_err_bol              // a message starts a stderr line
     mov w0, #2
     mov x1, x19
     mov x2, x20
@@ -643,14 +649,16 @@ Lrt_in_nextfield:
     ret
 
 // ---------------------------------------------------------------------
-// Lrt_in_take -- take the pending file selection (DESIGN.md 6.8): read
-//   _bsk_rt_fsel and reset it to none. None: the dialogue on standard
-//   input's reader. File k: the INPUT # rules on reader k; for k >= 1
-//   the file must be in read mode and is opened if needed
-//   (_bsk_rt_file_ropen); k = 0 is the dialogue.
+// Lrt_in_take -- take the pending file selection (DESIGN.md 6.8, 6.10):
+//   read _bsk_rt_fsel and reset it to none. None: the dialogue on
+//   standard input's reader. -1 (standard error, an output stream):
+//   INVALID FILE NUMBER. File k: the INPUT # rules on reader k; for
+//   k >= 1 the file must be in read mode and is opened if needed
+//   (_bsk_rt_file_ropen); k = 0 is standard input's reader.
 //   Inputs  : none
 //   Outputs : x0 = reader record, w1 = mode
-//   Errors  : ILLEGAL FILE COMMAND, CAN'T OPEN FILE, OUT OF ROOM
+//   Errors  : INVALID FILE NUMBER, ILLEGAL FILE COMMAND, CAN'T OPEN
+//             FILE, OUT OF ROOM
 //   Clobbers: x0-x17, d0-d7, d16-d31
 //   Callee-saved used: x19 = k
 //   Frame   : 32 bytes (frame record + x19)
@@ -663,10 +671,12 @@ Lrt_in_take:
     mov w1, #RT_IN_DIALOGUE
     mov w19, #0                     // reader 0: standard input
     adrp x9, _bsk_rt_fsel@PAGE
-    ldr w10, [x9, _bsk_rt_fsel@PAGEOFF] // 0 none, else k + 1
+    ldr w10, [x9, _bsk_rt_fsel@PAGEOFF] // 0 none, else k + 2
     cbz w10, 1f
     str wzr, [x9, _bsk_rt_fsel@PAGEOFF] // taken: back to "none"
-    sub w19, w10, #1                    // k
+    cmp w10, #1
+    b.eq Lrt_in_take_stderr             // -1: not readable
+    sub w19, w10, #2                    // k
     cbz w19, 2f                         // #0: standard input, file rules
     mov w0, w19
     bl _bsk_rt_file_ropen               // read mode, open if needed
@@ -677,6 +687,48 @@ Lrt_in_take:
     add x0, x0, Lrt_in_rd@PAGEOFF
     mov x9, #RD_SIZE
     madd x0, x19, x9, x0                // &reader[k]
+    ldr x19, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret
+Lrt_in_take_stderr:
+    mov w0, #ERR_INVALID_FILE_NUMBER    // INPUT #-1, LINPUT #-1
+    bl _bsk_err                         // noreturn
+
+// ---------------------------------------------------------------------
+// _bsk_rt_in_linput -- the line of LINPUT / LINPUT # (LANGUAGE.md 15.2,
+//   DESIGN.md 6.10): take the pending selection (Lrt_in_take: none =
+//   the INPUT dialogue's line request on standard input, with the
+//   prompt on a terminal and END OF INPUT; -1 = INVALID FILE NUMBER;
+//   k = 0 or k >= 1 = the INPUT # line request, END OF FILE), then read
+//   the reader's next unread line. A partly scanned current line (an
+//   INPUT in progress that called a function from a target subscript)
+//   is thereby discarded: the line buffer is overwritten and afterwards
+//   the reader has no field left, so the next field request reads the
+//   following line, exactly as after _bsk_input_end.
+//   Inputs  : none
+//   Outputs : x0 = the line's bytes (in the reader's line buffer, valid
+//             until the reader's next line request), x1 = its length
+//             (after the CR removal; at most LIM_INPUT_LINE)
+//   Errors  : INVALID FILE NUMBER, ILLEGAL FILE COMMAND, CAN'T OPEN
+//             FILE, OUT OF ROOM (Lrt_in_take); END OF INPUT / END OF
+//             FILE, INPUT LINE TOO LONG (Lrt_in_getline)
+//   Clobbers: x0-x17, d0-d7, d16-d31
+//   Callee-saved used: x19 = reader
+//   Frame   : 32 bytes (frame record + x19)
+// ---------------------------------------------------------------------
+    .private_extern _bsk_rt_in_linput
+    .p2align 2
+_bsk_rt_in_linput:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    str x19, [sp, #16]
+    bl Lrt_in_take                  // x0 reader, w1 mode
+    mov x19, x0
+    str wzr, [x19, #RD_FLEFT]       // the rest of a partly read line is gone
+    bl Lrt_in_getline               // the next unread line (x0, w1 kept)
+    str wzr, [x19, #RD_FLEFT]       // consumed whole: no field left
+    ldr x0, [x19, #RD_LINE]
+    ldr x1, [x19, #RD_LLEN]
     ldr x19, [sp, #16]
     ldp x29, x30, [sp], #32
     ret

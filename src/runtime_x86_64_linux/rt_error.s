@@ -1,7 +1,8 @@
 # =====================================================================
 # src/runtime_x86_64_linux/rt_error.s -- run-time error reporting.
 #
-# Defines: bsk_err (docs/DESIGN.md sections 6.2, 6.4; LANGUAGE.md 10)
+# Defines: bsk_err (docs/DESIGN.md sections 6.2, 6.4, 6.10; LANGUAGE.md 10,
+# 15.5)
 #
 # The message text comes only from include/errors.inc via
 # BSK_EMIT_ERRMSG_TABLE, so it can never diverge from the compiler's.
@@ -23,16 +24,20 @@
 # bsk_err -- report a run-time error and terminate.
 #   Purpose : finish the files in write mode not yet finished
 #             (bsk_rt_files_finish, DESIGN.md 6.8), pending-line
-#             newline + flush of stdout, then write
-#             "<MESSAGE> IN <bsk_curline>" + LF to fd 2 and exit.
+#             newline + flush of stdout, standard error's pending-line
+#             newline (bsk_rt_err_newline), then write
+#             "<MESSAGE> IN <bsk_curline>" + LF to fd 2 and exit
+#             (LANGUAGE.md 15.5).
 #             Exit status EXIT_RUN_OK (0) for ERR_OUT_OF_DATA and
 #             ERR_END_OF_INPUT, else EXIT_RUN_ERROR (1); also 1 for
 #             those two if writing stdout or a file failed (LANGUAGE.md
 #             section 10).
 #   Inputs  : %edi = ERR_* code; must be a run-time code
-#             (exactly ERR_FIRST_RUNTIME..ERR_END_RUNTIME-1, 32..56).
-#             Any other code (a caller bug, or a compile-time code such
-#             as 57..61) prints nothing and exits with status 1
+#             (exactly ERR_FIRST_RUNTIME..ERR_END_RUNTIME-1, 32..56, or
+#             a Baysick extension code ERR_EXT_FIRST_RUNTIME ..
+#             ERR_EXT_END_RUNTIME-1, 62). Any other code (a caller bug,
+#             or a compile-time code such as 57..61) prints nothing and
+#             exits with status 1
 #             (DESIGN.md 6.2, 6.9).
 #   Outputs : never returns
 #   Clobbers: everything
@@ -62,13 +67,19 @@ bsk_err:
     movl %eax, %r14d                # 1 if a file's output was lost
     call bsk_rt_finish_output       # %eax = 1 if stdout broke
     orl %eax, %r14d                 # output lost anywhere: status 1
+    call bsk_rt_err_newline         # no message glued to a stderr line
 
     # Look up the message; a code that is not a run-time error prints
     # nothing.
     cmpl $ERR_FIRST_RUNTIME, %ebx
     jb .Lrt_err_exit
     cmpl $ERR_END_RUNTIME, %ebx
-    jae .Lrt_err_exit               # 57.. are compile-time codes
+    jb 1f                           # 32..56: an edition's run-time code
+    cmpl $ERR_EXT_FIRST_RUNTIME, %ebx
+    jb .Lrt_err_exit                # 57..61 are compile-time codes
+    cmpl $ERR_EXT_END_RUNTIME, %ebx
+    jae .Lrt_err_exit               # beyond the extensions' run-time codes
+1:
     leaq .Lrt_errmsg(%rip), %rax
     movq (%rax,%rbx,8), %rsi        # message pointer or 0
     testq %rsi, %rsi

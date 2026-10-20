@@ -638,6 +638,8 @@ Lirv_p2_loop:
     cmp w9, #OP_SREAD
     b.eq 60f
     cmp w9, #OP_INSV
+    b.eq 60f
+    cmp w9, #OP_LINPUT
     b.ne 61f
 60:
     IRV_ADR x10, Lirv_spec_el_s
@@ -1607,6 +1609,9 @@ Lirv_spec:
     SPEC Lirv_T_A, Lirv_X_NONE|Lirv_XF_AANY, Lirv_I_ANY, Lirv_P_STMT   // subarg
     SPEC Lirv_T_A|Lirv_T_AOPT, Lirv_X_UNIT|Lirv_XF_AANY, Lirv_I_ZERO, Lirv_P_STMT  // callsub
     SPEC 0, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_SUB                       // subret
+    // Baysick extension opcodes (IR.md 3.5)
+    SPEC Lirv_T_A|Lirv_S_A, Lirv_X_NONE, Lirv_I_ZERO|Lirv_I_ADEST, Lirv_P_STMT  // linput
+    SPEC Lirv_T_A, Lirv_X_NONE, Lirv_I_ZERO, Lirv_P_STMT               // exit
 Lirv_spec_end:
 // element forms (A = IR_NONE, IR.md 3.2): B = subscript (a number)
 Lirv_spec_el_s:
@@ -1618,7 +1623,7 @@ Lirv_spec_el_c:
     .p2align 3
 Lirv_fsel_ops:
     .quad (1 << OP_PRNUM) | (1 << OP_PRSTR) | (1 << OP_PRCOMMA) | (1 << OP_PRSEMI) | (1 << OP_PRNL) | (1 << OP_PRSV) | (1 << OP_PRTAB) | (1 << OP_INBEG)
-    .quad (1 << (OP_INNUM - 64)) | (1 << (OP_INSV - 64)) | (1 << (OP_INEND - 64))
+    .quad (1 << (OP_INNUM - 64)) | (1 << (OP_INSV - 64)) | (1 << (OP_INEND - 64)) | (1 << (OP_LINPUT - 64))
 // the temp kind a CALL argument needs per SUBP_* (SUBP_STR: checked apart)
 Lirv_subp_kinds:
     .byte Lirv_K_NREF, 0, Lirv_K_AREF, Lirv_K_SAREF

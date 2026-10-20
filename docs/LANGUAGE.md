@@ -21,7 +21,7 @@ Edition** (1971: the string functions `SEG$` and `POS`, the concatenation operat
 "The Sixth Edition" below; **implemented**, DESIGN.md §2.5). Beyond the editions, Baysick specifies
 three **Baysick extensions** that belong to no edition — a verbatim line input `LINPUT`, output
 to standard error with `PRINT #-1`, and a chosen exit status with `END e` / `STOP e` (§15; "The
-Baysick extensions" below; specified, being implemented, DESIGN.md §2.6). Sections marked
+Baysick extensions" below; **implemented**, DESIGN.md §2.6). Sections marked
 **Baysick decision:** are places where the historical behaviour is unknown, impractical on a
 modern machine, or deliberately extended; each states the choice and why. §14 lists every place
 where a later edition *changed* the meaning of a program an earlier edition already accepted,
@@ -2809,7 +2809,12 @@ function called by a subscript may print or change files before the line is read
 X(2)`) → `MISMATCHED STRING OPERATION`; anything after the target, a second target included
 (`LINPUT A$, B$`) → `INCORRECT FORMAT`; `#` and its designator as for INPUT # (§7.25): a missing
 `,` after the designator (`LINPUT #1`, `LINPUT #1 A$`) → `INCORRECT FORMAT`, `LINPUT #` at the end
-of the line → `ILLEGAL FORMULA`, a string designator → `MISMATCHED STRING OPERATION`.
+of the line → `ILLEGAL FORMULA`, a string designator → `MISMATCHED STRING OPERATION`. A
+function's value variable is never a LINPUT target, not even inside that function's multi-line
+body (only LET assigns it, §7.10, §7.10.1): `LINPUT FNA$` → `ILLEGAL VARIABLE`, as for INPUT and
+READ; `LINPUT FNA` reads as the numeric variable `F` followed by the text `NA`, so the numeric
+target is reported first → `MISMATCHED STRING OPERATION` (in INPUT the same text is
+`INCORRECT FORMAT`, the target `F` being legal there).
 
 **Baysick decisions:** (a) the name `LINPUT` — [W] attributes it to a later Dartmouth BASIC
 (unverified); it is one word, so no compaction rule can split it, and no keyword is a prefix of

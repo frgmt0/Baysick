@@ -759,7 +759,30 @@ Lbk_x64_in_op_insv:
     add x2, x2, Lbk_x64_in_rt_input_str@PAGEOFF
     b Lbk_x64_in_sunary
 
-// common tail of the element form of sread / insv: x2 = runtime symbol;
+Lbk_x64_in_op_linput:
+    // Baysick extension, plain form: %rdi = A; call bsk_linput. Element
+    // form (A = IR_NONE): %rdi = &.Lsdesc_<X> (or the SUB unit's addressing,
+    // Lbk_x64_in_sdesc_addr), %xmm0 = B; call bsk_linput_el
+    ldr w9, [x21, #IRI_A]
+    cmn w9, #1
+    b.ne 1f
+    adrp x2, Lbk_x64_in_rt_linput_el@PAGE
+    add x2, x2, Lbk_x64_in_rt_linput_el@PAGEOFF
+    b Lbk_x64_in_selem
+1:
+    adrp x2, Lbk_x64_in_rt_linput@PAGE
+    add x2, x2, Lbk_x64_in_rt_linput@PAGEOFF
+    b Lbk_x64_in_sunary
+
+Lbk_x64_in_op_exit:
+    // Baysick extension: %xmm0 = A (the status); call bsk_exit (no return)
+    ldr w0, [x21, #IRI_A]
+    mov x1, #0
+    bl Lbk_x64_in_load
+    CALLRT Lbk_x64_in_rt_exit
+    b Lbk_x64_in_next
+
+// common tail of the element form of sread / insv / linput: x2 = runtime symbol;
 // %rdi = &.Lsdesc_<X>, %xmm0 = B (the subscript); call
 Lbk_x64_in_selem:
     str x2, [sp, #-16]!
@@ -771,7 +794,7 @@ Lbk_x64_in_selem:
     FMT Lbk_x64_in_call_fmt
     b Lbk_x64_in_next
 
-// common tail of prsv / sread / insv: x2 = runtime symbol; %rdi = A; call
+// common tail of prsv / sread / insv / linput: x2 = runtime symbol; %rdi = A; call
 Lbk_x64_in_sunary:
     str x2, [sp, #-16]!
     ldr w0, [x21, #IRI_A]
@@ -1476,6 +1499,8 @@ Lbk_x64_in_table:
     .long Lbk_x64_in_op_subarg - Lbk_x64_in_table       // OP_SUBARG    108
     .long Lbk_x64_in_op_callsub - Lbk_x64_in_table      // OP_CALLSUB   109
     .long Lbk_x64_in_op_subret - Lbk_x64_in_table       // OP_SUBRET    110
+    .long Lbk_x64_in_op_linput - Lbk_x64_in_table       // OP_LINPUT    111
+    .long Lbk_x64_in_op_exit - Lbk_x64_in_table         // OP_EXIT      112
 Lbk_x64_in_table_end:
 .if (Lbk_x64_in_table_end - Lbk_x64_in_table) != 4 * OP_COUNT
     .error "x64_insn.s dispatch table does not cover OP_COUNT opcodes"
@@ -2354,6 +2379,9 @@ Lbk_x64_in_rt_input_begin: .asciz "bsk_input_begin"
 Lbk_x64_in_rt_input_num: .asciz "bsk_input_num"
 Lbk_x64_in_rt_input_str: .asciz "bsk_input_str"
 Lbk_x64_in_rt_input_str_el: .asciz "bsk_input_str_el"
+Lbk_x64_in_rt_linput: .asciz "bsk_linput"
+Lbk_x64_in_rt_linput_el: .asciz "bsk_linput_el"
+Lbk_x64_in_rt_exit: .asciz "bsk_exit"
 Lbk_x64_in_rt_input_end: .asciz "bsk_input_end"
 Lbk_x64_in_rt_mat_input: .asciz "bsk_mat_input"
 Lbk_x64_in_rt_smat_input: .asciz "bsk_smat_input"

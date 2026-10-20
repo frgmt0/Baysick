@@ -8,7 +8,10 @@ statements, the Third and Fourth Editions' strings, `INPUT`, `ON … GO TO`, `TA
 multi-line `DEF`, `MAT INPUT`, …, the Fifth Edition's sequential files, `LEN ASC STR$ VAL`,
 string `DEF` functions and string tables, and the Sixth Edition's `SEG$`, `POS`, `&` and
 `CALL`/`SUB`/`SUBEND` subprograms — as a native compiler written in modern **arm64
-assembly** for macOS, much as the original compiler was hand-written in GE-225 assembly.
+assembly** for macOS, much as the original compiler was hand-written in GE-225 assembly. Three
+small **Baysick extensions** that no edition has (`LINPUT`, `PRINT #-1` to standard error,
+`END e` / `STOP e` with an exit status) make it usable as the implementation language of a
+compiler.
 
 ```
 10 FOR X = 7 TO 100 STEP 7
@@ -41,15 +44,16 @@ by CPU feature, and are benchmarked against Apple Accelerate and OpenBLAS (`docs
 
 ## Status
 
-Two targets:
+Version **0.6.0** (`baysick --version`: `baysick 0.6.0 (Dartmouth BASIC, Sixth Edition 1971,
+with Baysick extensions)`). Two targets:
 
-* **`arm64-macos`** (default) — complete: `make test` passes the whole corpus.
+* **`arm64-macos`** (default) — complete: `make test` passes the whole corpus (463 tests).
 * **`x86_64-linux`** — cross target: the compiler, still running on the Mac, emits GNU `as`
   x86_64 assembly; it is assembled and linked on an x86_64 Linux machine against an x86_64
   runtime (also hand-written assembly). Specified in `docs/DESIGN.md` §5.4, §6.4 and §8; the
   backend (`src/backend/x86_64_linux/`) and runtime (`src/runtime_x86_64_linux/`) are
   implemented and cross-tested with `make cross` against all program and run-phase error tests
-  (module split: `docs/DESIGN.md` §2).
+  (267 tests; module split: `docs/DESIGN.md` §2).
 
 Third and Fourth Edition: implemented on both targets. Specified in `docs/LANGUAGE.md` (§3–§14,
 with page references to the 1968 manual), `docs/IR.md` and `docs/DESIGN.md` (§2.2–§2.3,
@@ -70,9 +74,9 @@ recursion. Specified in `docs/LANGUAGE.md` ("The Sixth Edition", §4.6, §6.2, �
 §3.4 and `docs/DESIGN.md` (§2.2, §2.5, §5.3–§5.4, §6.9). Its tests are `tests/programs/ed6_*`,
 `manual6_*`, `tests/errors/c_ed6_*`, `r_ed6_*` and `tests/ir/ed6_*`.
 
-Baysick extensions (no edition has them): specified, being implemented — `LINPUT [#k,] A$` reads
+Baysick extensions (no edition has them): implemented on both targets — `LINPUT [#k,] A$` reads
 a line verbatim (end of input tested with `IF END #`), `PRINT #-1` writes standard error, and
-`END e` / `STOP e` end the program with exit status e. Specified in `docs/LANGUAGE.md` §15,
+`END e` / `STOP e` end the program with exit status e (0–255). Specified in `docs/LANGUAGE.md` §15,
 `docs/IR.md` §3.5 and `docs/DESIGN.md` (§2.2, §2.6, §6.10, §8.6). Its tests are
 `tests/programs/ext_*`, `tests/errors/c_ext_*`, `r_ext_*` and `tests/ir/ext_*`.
 
@@ -121,7 +125,10 @@ Tests live in `tests/programs` (`NAME.bas`, expected `NAME.out`, optional `NAME.
 `tests/errors` (`NAME.meta` with phase and exit status, `NAME.err`, optional `NAME.out`) and
 `tests/ir` (`NAME.ir`, the expected `--emit-ir` dump). A program or error test may have a
 `NAME.in` file, which becomes the program's standard input (otherwise `/dev/null`), on both
-targets.
+targets, and `NAME.files/` (fixtures copied into its fresh working directory) and `NAME.expect/`
+(files that must exist afterwards) directories. A run-phase `.meta` may add `streams=merged`
+(standard error on the same file as standard output) or `streams=no-stdout` (standard output
+closed); see `docs/DESIGN.md` §8.5–§8.6.
 
 ### x86_64-linux
 
@@ -153,5 +160,7 @@ CI runs `make test` on macOS, packs the bundle, and runs it on an `ubuntu-latest
   C/Rust-like syntax). MAT is the stepping stone: the matrix runtime, the IR matrix operations and
   the SIMD kernels with CPU-feature dispatch exist on both targets. `docs/SEA_BOOTSTRAP.md`
   analyses what a compiler written in BASIC needs: the Fourth Edition's strings and INPUT are
-  not enough on their own; the Fifth Edition (files, string functions) and the Sixth Edition
-  (`SEG$`, `POS`, `&`, subprograms), both implemented, cover the rows it marks.
+  not enough on their own; the Fifth Edition (files, string functions), the Sixth Edition
+  (`SEG$`, `POS`, `&`, subprograms) and the Baysick extensions (verbatim line input, standard
+  error, exit status), all implemented, cover the rows it marks; the rest is left out on
+  purpose. The next step is the Sea language design (`sea/`).

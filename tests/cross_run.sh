@@ -209,7 +209,19 @@ for n in $(case_names errors); do
     want=$(meta_get "$base.meta" exit)
     build "$name" "$base" || continue
     if ! newwork "$base"; then fail "$name" "cannot prepare the work directory"; rm -rf "$WORK"; continue; fi
-    run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$TMP/prog" >"$TMP/r.out" 2>"$TMP/r.err"
+    streams=$(meta_get "$base.meta" streams)
+    case "$streams" in
+    "" | merged | no-stdout) ;;
+    *) echo "cross_run.sh: errors/$n: bad streams '$streams' in $n.meta" >&2; exit 2 ;;
+    esac
+    # section 8.6: truncate the capture the mode leaves unwritten (r.out/r.err are reused)
+    case "$streams" in
+    merged)    : >"$TMP/r.err"
+               run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$TMP/prog" >"$TMP/r.out" 2>&1 ;;
+    no-stdout) : >"$TMP/r.out"
+               run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$TMP/prog" >&- 2>"$TMP/r.err" ;;
+    *)         run_limited "$TIMEOUT" "$(stdin_for "$base")" "$WORK" "$TMP/prog" >"$TMP/r.out" 2>"$TMP/r.err" ;;
+    esac
     st=$?
     expout=$TMP/empty
     [ -f "$base.out" ] && expout=$base.out

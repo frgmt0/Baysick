@@ -659,6 +659,11 @@ Lird_insn:
     IRD_ADR x22, Lird_f_insv_el
     b 8f
 2:
+    cmp w9, #OP_LINPUT
+    b.ne 3f
+    IRD_ADR x22, Lird_f_linput_el
+    b 8f
+3:
     cmp w9, #OP_CHGN2S
     b.ne 8f
     IRD_ADR x22, Lird_f_chgn2s_el
@@ -1210,6 +1215,9 @@ Lird_f_inbeg:     .asciz "inbeg"
 Lird_f_innum:     .asciz "%D = innum"
 Lird_f_insv:      .asciz "insv %A"
 Lird_f_insv_el:   .asciz "insv %R$, %B"
+Lird_f_linput:     .asciz "linput %A"
+Lird_f_linput_el:  .asciz "linput %R$, %B"
+Lird_f_exit:       .asciz "exit %A"
 Lird_f_inend:     .asciz "inend"
 Lird_f_matinput:  .asciz "matinput %R"
 Lird_f_smatinput: .asciz "smatinput %R$"
@@ -1298,6 +1306,8 @@ Lird_formats:
     .quad Lird_f_scat, Lird_f_sseg, Lird_f_pos, Lird_f_vaddr
     .quad Lird_f_aaddr1, Lird_f_aaddr2, Lird_f_taddr, Lird_f_aref
     .quad Lird_f_saref, Lird_f_subarg, Lird_f_callsub, Lird_f_subret
+    // Baysick extension opcodes (IR.md 3.5)
+    .quad Lird_f_linput, Lird_f_exit
 Lird_formats_end:
 
 // the template table must have exactly one entry per opcode
