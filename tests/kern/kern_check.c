@@ -21,6 +21,11 @@
  * (class R determinism) that results on inexact data are bit-identical across views with other
  * MV_LD and alignment, across repeated calls and across C's previous contents.
  *
+ * Interleaved blocks: C, A and B are disjoint blocks of one row-major buffer with one common
+ * MV_LD (their address ranges interleave, no element is shared; "overlap" means sharing an
+ * element, DESIGN.md 6.6.1), as Sea's blocked LU passes them; every element outside C must be
+ * bit-identical afterwards, and C must equal the exact product (run_interleaved).
+ *
  * Shapes cover every micro-tile edge and blocking boundary of the three variants (neon: MR x NR
  * = 8 x 6, KC 256, MC 128, NC 2046, unpacked path for m*n*k <= 32768; sse2: 4 x 6, KC 256,
  * MC 48, NC 2046; avx2: 6 x 8, KC 256, MC 72, NC 2048), non-square shapes, row and column
@@ -573,6 +578,92 @@ static void run_determinism(const char *label, uint64_t m, uint64_t n, uint64_t 
     }
 }
 
+/* ---- Interleaved blocks of one array (DESIGN.md 6.6.1: "overlap" means sharing an element) -- */
+/* C, A and B are disjoint blocks of ONE row-major buffer W (row stride = the common MV_LD), as
+ * the trailing update of a blocked LU passes them. Arrangement 0 ("lu"): W has k+m rows and k+n
+ * columns, C = W[k.., k..] (m x n, bottom right), A = W[k.., 0..k) (m x k, left of C, same rows),
+ * B = W[0..k, k..] (k x n, above C, same columns); the top-left k x k block and the padding stay
+ * sentinel. Arrangement 1 ("mirror"): W has m+k rows and n+k columns, C = W[0.., 0..] (top
+ * left), A = W[0..m, n..) (right of C), B = W[m.., 0..n) (below C). The address ranges of the
+ * three views interleave (every row of C lies between a row of A and the next), but no element
+ * is shared. W is filled with the sentinel, then A and B with small integers in [-3, 3] and C
+ * with integers in [-50, 50] (gemm: garbage). Expected: the exact integer value of every C
+ * element, computed from the definition (C - sum_p A(i,p) B(p,j), or sum_p A(i,p) B(p,j)); every
+ * partial sum is an integer far below 2^53, so it is exact in any order and with FMA. Every
+ * other element of W (A, B, the unused corner, the row padding that lies between the rows of
+ * C inside W, the guards) must be bit-identical afterwards. */
+static void run_interleaved(const char *label, uint64_t m, uint64_t n, uint64_t k, int arr,
+                            unsigned seed) {
+    char lab[96];
+    snprintf(lab, sizeof lab, "%s/%s", label, arr ? "interleaved-mirror" : "interleaved-lu");
+    for (int entry = 0; entry < E_COUNT; entry++) {
+        layout l = layout_for(seed + (unsigned)entry);
+        uint64_t rows = m + k, cols = n + k, ld = cols + l.pad[2];
+        mat W;
+        mat_new(&W, rows, cols, ld, l.off[2]);
+        uint64_t cr = arr ? 0 : k, cc = arr ? 0 : k;   /* C's top-left corner in W */
+        uint64_t ar = arr ? 0 : k, ac = arr ? n : 0;   /* A's */
+        uint64_t br = arr ? m : 0, bc = arr ? 0 : k;   /* B's */
+        mview C = {at(&W, cr, cc), m, n, ld};
+        mview A = {at(&W, ar, ac), m, k, ld};
+        mview B = {at(&W, br, bc), k, n, ld};
+        g_rng = 4242u + seed * 7919u + (unsigned)entry;
+        for (uint64_t i = 0; i < m; i++)
+            for (uint64_t p = 0; p < k; p++) *at(&W, ar + i, ac + p) = rnd_int(-3, 3);
+        for (uint64_t p = 0; p < k; p++)
+            for (uint64_t j = 0; j < n; j++) *at(&W, br + p, bc + j) = rnd_int(-3, 3);
+        static const uint64_t garbage[4] = {0x7ff0000000000000ull, 0x7ff800000000beefull,
+                                            0xfff0000000000000ull, 0xd2e0000000000000ull};
+        double *c0 = xmalloc(m * n * sizeof(double));
+        double *want = xmalloc(m * n * sizeof(double));
+        for (uint64_t i = 0; i < m; i++)
+            for (uint64_t j = 0; j < n; j++) {
+                c0[i * n + j] = rnd_int(-50, 50);
+                int64_t s = 0;
+                for (uint64_t p = 0; p < k; p++)
+                    s += (int64_t)*at(&W, ar + i, ac + p) * (int64_t)*at(&W, br + p, bc + j);
+                want[i * n + j] = (double)(entry == E_GEMM_SUB ? (int64_t)c0[i * n + j] - s : s);
+            }
+        for (int vi = 0; vi < g_nvariants; vi++) {
+            run_ctx r = {lab, g_variants[vi], entry, m, n, k, 0};
+            use_variant(g_variants[vi]);
+            for (uint64_t i = 0; i < m; i++)
+                for (uint64_t j = 0; j < n; j++)
+                    *at(&W, cr + i, cc + j) =
+                        entry == E_GEMM_SUB ? c0[i * n + j] : double_of(garbage[(i + j) % 4]);
+            double *snap = xmalloc(W.total * sizeof(double));
+            memcpy(snap, W.base, W.total * sizeof(double));
+            int64_t st = entry == E_GEMM ? bsk_kern_gemm(&C, &A, &B) : bsk_kern_gemm_sub(&C, &A, &B);
+            if (st != KS_OK) failf(&r, "status %lld, expected KS_OK", (long long)st);
+            for (size_t idx = 0; idx < W.total; idx++) {
+                size_t rel = idx - W.start;
+                int inC = 0;
+                if (idx >= W.start) {
+                    uint64_t wr = rel / ld, wc = rel % ld;
+                    inC = wr >= cr && wr < cr + m && wc >= cc && wc < cc + n;
+                }
+                if (inC) {
+                    uint64_t i = (rel / ld) - cr, j = (rel % ld) - cc;
+                    if (W.base[idx] != want[i * n + j])
+                        failf(&r, "C element (%llu,%llu) = %.17g, expected %.17g",
+                              (unsigned long long)i, (unsigned long long)j, W.base[idx],
+                              want[i * n + j]);
+                } else if (bits_of(W.base[idx]) != bits_of(snap[idx])) {
+                    long long d = (long long)idx - (long long)W.start;
+                    failf(&r, "memory outside C's view changed at element offset %lld of the "
+                              "shared buffer (row stride %llu)", d, (unsigned long long)ld);
+                }
+            }
+            free(snap);
+            fail_tail(&r);
+            g_checks++;
+        }
+        free(c0);
+        free(want);
+        mat_free(&W);
+    }
+}
+
 /* ---- The case list ---------------------------------------------------------------------- */
 typedef struct {
     const char *label;
@@ -598,6 +689,15 @@ static const shape exact_shapes[] = {
 static const shape ieee_shapes[] = {
     {"1x1x1", 1, 1, 1},    {"2x3x2", 2, 3, 2},       {"tiny", 5, 7, 9},   {"edges", 9, 7, 600},
     {"edges2", 13, 11, 300}, {"mc-sse2", 49, 13, 520}, {"mc-all", 130, 50, 7}, {"nc+1", 3, 2049, 7},
+};
+
+/* Shapes for the interleaved-block case: unpacked (neon) and packed paths, edge tiles in both
+ * directions, a KC boundary, an MC boundary, an NC boundary, vectors. */
+static const shape overlap_shapes[] = {
+    {"1x1x1", 1, 1, 1},       {"tiny", 5, 7, 3},        {"tile", 8, 6, 4},
+    {"edges", 13, 11, 9},     {"packed", 37, 41, 64},   {"kc+1", 49, 13, 257},
+    {"mc-all", 130, 50, 7},   {"lu-panel", 100, 100, 32}, {"row", 1, 40, 17},
+    {"col", 40, 1, 17},       {"nc+1", 3, 2049, 7},
 };
 
 static const shape det_shapes[] = {
@@ -627,6 +727,12 @@ int main(void) {
     for (size_t t = 0; t < COUNT(exact_shapes); t++)
         run_case(exact_shapes[t].label, exact_shapes[t].m, exact_shapes[t].n, exact_shapes[t].k,
                  SC_EXACT, seed++);
+
+    /* interleaved blocks of one array (both arrangements) */
+    for (size_t t = 0; t < COUNT(overlap_shapes); t++)
+        for (int arr = 0; arr < 2; arr++)
+            run_interleaved(overlap_shapes[t].label, overlap_shapes[t].m, overlap_shapes[t].n,
+                            overlap_shapes[t].k, arr, seed++);
 
     /* IEEE propagation */
     for (size_t t = 0; t < COUNT(ieee_shapes); t++)

@@ -1868,14 +1868,24 @@ result (§6.6.4).
 
 | Kernel (exported trampoline) | Arguments | Result | Shapes / overlap |
 |-----------------------------|-----------|--------|------------------|
-| `_bsk_kern_gemm` | x0 C, x1 A, x2 B | x0 `KS_*` | A `m×k`, B `k×n`, C `m×n`, `C := A·B` (C's previous contents are ignored, even if not finite); C must not overlap A or B |
-| `_bsk_kern_gemm_sub` | x0 C, x1 A, x2 B | x0 `KS_*` | A `m×k`, B `k×n`, C `m×n`, `C := C − A·B` (C is input and output); C must not overlap A or B. Not called by the MAT layer: it serves the trailing updates of Sea's blocked LU and Cholesky (`sea/docs/DESIGN.md` §15.3, §18.2) and is tested by `tests/kern` (§8.7). |
+| `_bsk_kern_gemm` | x0 C, x1 A, x2 B | x0 `KS_*` | A `m×k`, B `k×n`, C `m×n`, `C := A·B` (C's previous contents are ignored, even if not finite); C must not overlap A or B (overlap: below) |
+| `_bsk_kern_gemm_sub` | x0 C, x1 A, x2 B | x0 `KS_*` | A `m×k`, B `k×n`, C `m×n`, `C := C − A·B` (C is input and output); C must not overlap A or B (overlap: below). Not called by the MAT layer: it serves the trailing updates of Sea's blocked LU and Cholesky (`sea/docs/DESIGN.md` §15.3, §18.2) and is tested by `tests/kern` (§8.7). |
 | `_bsk_kern_add` `_bsk_kern_sub` | x0 C, x1 A, x2 B | x0 `KS_*` | all `m×n`; C may be A or B exactly (same `MV_DATA`, `MV_LD`), no other overlap |
 | `_bsk_kern_scale` | x0 C, x1 A, d0 k | x0 `KS_*` | `m×n`; C may be A exactly |
 | `_bsk_kern_trn` | x0 C, x1 A | — | A `m×n`, C `n×m`; no overlap |
 | `_bsk_kern_copy` | x0 C, x1 A | — | `m×n`; no overlap |
 | `_bsk_kern_fill` | x0 C, d0 v | — | every element of C := v |
 | `_bsk_kern_inv` | x0 X, x1 A | x0 `KS_*` | A, X `n×n`, `n ≤ RT_KERN_INV_MAXN`; no overlap; LANGUAGE.md §7.14.6 exactly (incl. `KS_SINGULAR`, and `KS_NONFINITE` for a non-finite pivot or result); also stores the determinant of §7.14.6 (DET) into the runtime-private double `_bsk_rt_kinv_det` (ELF `bsk_rt_kinv_det`, defined in `rt_kinit.s`, so link isolation holds) — after a `KS_OK` or `KS_NONFINITE` return it holds the pinned product of the pivots (class E: bit-identical across variants) |
+
+**Overlap** means sharing an element: two views overlap exactly when some element (a position in
+memory that both address as one of their `MV_ROWS × MV_COLS` stored elements) belongs to both.
+Views whose address ranges interleave but that share no element do not overlap and are allowed
+(for gemm and gemm_sub, which are tested on them; the other entries only read and write stored
+elements too): for example C, A and B as disjoint blocks of one array, with the same `MV_LD`
+(Sea's blocked LU and Cholesky pass them so). The row padding of a view (`MV_LD − MV_COLS`) is
+not part of it, so another view may occupy it; since no kernel writes or reads outside the stored
+elements of a view (above; §6.6.4 for gemm and gemm_sub), such views never disturb one another.
+This is tested for gemm and gemm_sub by the interleaved-block case of §8.7.
 
 `KS_NONFINITE` is returned when any stored result element is ±infinity or NaN (fused into the
 kernel or as a separate vectorised pass); `KS_OK` otherwise. For gemm and gemm_sub that includes
@@ -2765,6 +2775,15 @@ selected with `_bsk_kern_use`, and for both `_bsk_kern_gemm` and `_bsk_kern_gemm
   outside C's view has changed, A's and B's regions are bit-identical to before (their sentinels
   also prove that padding never reaches a result), and GEMM's C view held garbage (±∞, NaN, a
   large finite value) before the call, which must not matter.
+* **Interleaved blocks** (§6.6.1, "overlap" means sharing an element): C, A and B are disjoint
+  blocks of one row-major buffer with one common `MV_LD`, in two arrangements (C bottom right with
+  A to its left and B above it, as the LU trailing update passes them; and the mirror, C top left
+  with A to its right and B below it), on the shapes 1×1×1, 5×7×3, 8×6×4, 13×11×9, 37×41×64,
+  49×13×257, 130×50×7, 100×100×32, 1×40×17, 40×1×17 and 3×2049×7 (m×n×k). A and B hold integers
+  in [−3, 3], C₀ integers in [−50, 50] (gemm: garbage), so every product and partial sum is an
+  exact integer and the expected C is the exact value from the definition, in any order and with
+  FMA. Every element of the buffer outside C (A, B, the unused corner, the row padding between
+  the rows of C, the guards) must be bit-identical afterwards, and the status `KS_OK`.
 * **Class R determinism**: on random inexact data, three runs per variant and entry — the first
   layout, a second layout with other `MV_LD` and alignment (and, for GEMM, other previous
   contents of C), the first layout again — must give bit-identical results and `KS_OK`.
